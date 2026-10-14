@@ -211,15 +211,20 @@ def cmd_profile(args, cfg):
     now = time.time()
     st = _open(create=True)
     try:
-        prof = profile.load(st)
         if args.rebuild:
-            prof.S, prof.W, prof.T = [0.0] * 168, [0.0] * 168, [0.0] * 168
-            prof.processed_until, prof.learned_hours = None, 0
             st.begin()
-            n = profile.learn(st, prof, now, cfg, prof.weights(now, cfg)[0])
-            profile.save(st, prof)
-            st.commit()
+            try:
+                prof = profile.load(st)
+                prof.S, prof.W, prof.T = [0.0] * 168, [0.0] * 168, [0.0] * 168
+                prof.processed_until, prof.learned_hours = None, 0
+                n = profile.learn(st, prof, now, cfg, prof.weights(now, cfg)[0])
+                profile.save(st, prof)
+                st.commit()
+            except Exception:
+                st.rollback()
+                raise
             print("Rebuilt from stored samples: %d hours learned." % n)
+        prof = profile.load(st)
         w, awake, info = prof.weights(now, cfg)
         if args.json:
             print(json.dumps({"weights": w, "awake": awake, "info": info, "prior_meta": prof.prior_meta}, indent=2))

@@ -82,6 +82,21 @@ class Weekly(TempHome):
         self.assertAlmostEqual(v["lookback_actual"], 15.0)
         self.assertAlmostEqual(v["intensity"], 15 / (100 * 24 / 168), places=6)
 
+    def test_bogus_shifted_window_is_not_taken_as_the_previous_week(self):
+        R1 = int(MON + 7 * D)
+        for h in range(0, 167, 2):  # week 1 at 0.5 %/h, one bogus later reset in the middle
+            self.feed(MON + h * H, week=(0.5 * h, R1), sid="a")
+            if h == 100:
+                self.feed(MON + h * H + 60, week=(50, R1 + 1200), sid="b")
+        R2 = R1 + int(7 * D)
+        now = R1 + 6 * H
+        for h in range(0, 7):
+            self.feed(R1 + h * H, week=(0.5 * h, R2), sid="a")
+        v = self.view(now)
+        # Lookback 24 h: 18 h of week 1 at 0.5 plus 6 h of week 2 at 0.5 = 12 points.
+        self.assertAlmostEqual(v["lookback_actual"], 12.0, delta=1.01)
+        self.assertGreater(v["intensity"], 0.7)
+
     def test_parallel_sessions_running_max(self):
         R = int(MON + 7 * D)
         now = MON + 3 * D

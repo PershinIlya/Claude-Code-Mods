@@ -110,8 +110,10 @@ def five_hour(store, now, cfg, reading=None):
         # Not enough recent readings: the average since the last reading
         # before now (what changed since we last looked), else since the
         # window opened (it opened at 0).
-        prev, prev_ts = store.state_at(inst["id"], now - 60)
-        if prev_ts is not None and now - prev_ts >= min_span:
+        # The latest reading at least min_span old: a reading taken a minute
+        # ago must not hide the flat one from before an idle gap.
+        prev, prev_ts = store.state_at(inst["id"], now - min_span)
+        if prev_ts is not None:
             rate, source = max(0.0, used - prev) / ((now - prev_ts) / 3600.0), "since_last"
     if rate is None:
         elapsed = now - max(inst["start_ts"], reset - config.DURATION[FIVE_HOUR])

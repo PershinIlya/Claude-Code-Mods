@@ -205,6 +205,16 @@ class Record(TempHome):
         self.assertEqual(acts[FIVE_HOUR], "rejected:expired")
         self.assertEqual(len(self.windows(FIVE_HOUR)), 1)
 
+    def test_wobbled_reset_of_an_expired_window_is_not_a_new_window(self):
+        self.feed(MON + H, five=(70, self.R5), sid="a")
+        self.feed(MON + 2 * H, five=(40, self.R5 + 38), sid="b")  # b's reading wobbled 38 s later
+        acts = self.feed(self.R5 + 10, five=(40, self.R5 + 38), sid="b")  # b re-renders after the reset
+        self.assertEqual(acts[FIVE_HOUR], "stale")
+        acts = self.feed(self.R5 + 20, five=(41, self.R5 + 38), sid="c")  # a fresh one too
+        self.assertEqual(acts[FIVE_HOUR], "expired")
+        self.assertEqual(len(self.windows(FIVE_HOUR)), 1)
+        self.assertEqual(self.windows(FIVE_HOUR)[0]["max_used"], 70)
+
     def test_heartbeats_do_not_move_last_seen(self):
         t = MON + H
         self.feed(t, five=(10, self.R5))
