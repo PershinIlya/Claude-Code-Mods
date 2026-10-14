@@ -1,0 +1,9 @@
+{
+  "name": "ctempo",
+  "version": "0.1.0",
+  "description": "Claude usage pace (5-hour and weekly) above the prompt, drawn from the ctempo CLI",
+  "author": { "name": "ctempo" },
+  "license": "MIT",
+  "keywords": ["mods", "usage", "rate-limits", "statusline"],
+  "types": "./types/index.d.ts"
+}
