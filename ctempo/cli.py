@@ -47,6 +47,7 @@ def build_parser():
             s.add_argument("--python", default=None, help="absolute interpreter path to pin")
             s.add_argument("--replace", action="store_true", help="replace an existing statusLine instead of composing")
             s.add_argument("--bin-dir", default=None, help="also write a `ctempo` launcher here, e.g. ~/.local/bin")
+            s.add_argument("--no-bootstrap", action="store_true", help="skip building the profile prior from transcripts")
 
     s = sub.add_parser("doctor", help="check interpreter, database, settings, mod, sample age")
     s.add_argument("--settings", default=None)

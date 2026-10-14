@@ -229,11 +229,12 @@ def cmd_profile(args, cfg):
         for d, r in enumerate(rows):
             cells = "".join(SHADES[min(4, int(x / top * 4.999))] for x in r)
             print("  %s %s  %4.1f%%" % (profile.DAYS[d], cells, sum(r) / 168 * 100))
-        print("  (each cell = 1 hour; day totals at the right; uniform would be 14.3%% a day)")
+        print("  (each cell = 1 hour; day totals at the right; uniform would be 14.3% a day)")
         print("Awake hours per week: %d of 168" % info["awake_hours"])
         if prof.prior_meta:
             m = prof.prior_meta
-            print("Prior: transcripts, %s days, %s messages, %s active hours" % (m.get("days"), m.get("messages"), m.get("active_hours")))
+            print("Prior: transcripts, %s days, %s messages, %s active hours, trusted %.0f%% (full at 14 days)" % (
+                m.get("days"), m.get("messages"), m.get("active_hours"), 100 * (m.get("trust") or 0)))
         else:
             print("Prior: none (run `ctempo bootstrap`)")
         print("Learned from usage %%: %d hours folded in, typical week %s" % (
@@ -402,7 +403,8 @@ def cmd_bootstrap(args, cfg):
     if prior is None:
         print("No usable messages in the period: the profile prior was not changed.")
         return 1
-    print("Period: %s days, %s active hours." % (meta["days"], meta["active_hours"]))
+    print("Period: %s days, %s active hours; prior trusted %.0f%% (full at 14 days, the rest is uniform)." % (
+        meta["days"], meta["active_hours"], 100 * meta["trust"]))
     if args.dry_run:
         print("DRY RUN: profile not saved.")
     else:
@@ -489,6 +491,11 @@ def cmd_doctor(args, cfg):
                     add(lvl, "samples from %s: %d" % (src, n), "last %s ago" % dur(age))
             else:
                 add("warn", "no samples recorded yet", "they appear after the first API response of a session")
+            for src in ("statusline", "mod"):
+                lr = st.meta_get("last_render:" + src)
+                if lr:
+                    add("ok", "last %s line (%s ago): %s" % (src, dur(now - lr["ts"]), lr["line"]),
+                        "rate_limits received: %s" % json.dumps(lr.get("rate_limits"), separators=(",", ":")))
             kinds = st.kinds()
             if kinds:
                 add("ok", "rate-limit kinds seen", ", ".join("%s (%s, %d)" % (k, s, c) for k, s, _, _, c in kinds))

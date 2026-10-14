@@ -19,6 +19,7 @@ import time
 from . import config, profile
 
 W_INPUT, W_CACHE_CREATE, W_CACHE_READ, W_OUTPUT = 1.0, 1.25, 0.1, 5.0
+FULL_TRUST_DAYS = 14.0
 
 
 def _ts(s):
@@ -132,12 +133,18 @@ def build_prior(events, since, now, half_life_days):
     mean = [n / d if d > 0 else 0.0 for n, d in zip(num, den)]
     if sum(mean) <= 0:
         return None, {}
-    prior = profile.normalize(profile.smooth(mean))
+    shape = profile.normalize(profile.smooth(mean))
+    # A few days of transcripts do not describe a week: blend toward uniform
+    # until two weeks are covered (one hour of data must not become a spike).
+    days = (end - start) / 86400.0
+    mix = min(1.0, days / FULL_TRUST_DAYS)
+    prior = [mix * x + (1 - mix) / profile.BINS for x in shape]
     meta = {
         "built_at": now,
         "period_start": start,
         "period_end": end,
-        "days": round((end - start) / 86400.0, 1),
+        "days": round(days, 1),
+        "trust": round(mix, 3),
         "active_hours": active,
         "messages": len(events),
     }

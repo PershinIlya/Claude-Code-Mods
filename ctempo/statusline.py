@@ -50,8 +50,11 @@ def parse_args(argv):
     return opts
 
 
-def compute(raw, cfg, opts, now):
-    """Record the payload and compute both views. Returns (v5, vw, readings)."""
+def compute(raw, cfg, opts, now, line_of=None):
+    """Record the payload and compute both views. Returns (v5, vw, readings).
+
+    `line_of(v5, vw)` renders the plain line so it can be kept for `doctor`
+    while the database is open."""
     import sqlite3
 
     from . import ingest, pace, profile, weekly
@@ -76,9 +79,35 @@ def compute(raw, cfg, opts, now):
             maybe_learn(st, prof, now, cfg)
         v5 = pace.five_hour(st, now, cfg, readings.get(config.FIVE_HOUR))
         vw = weekly.weekly(st, now, cfg, readings.get(config.SEVEN_DAY), prof)
+        if opts["record"] and line_of is not None:
+            rl = payload.get("rate_limits") if isinstance(payload, dict) else None
+            note_render(st, now, opts["source"], line_of(v5, vw), rl)
     finally:
         st.close()
     return v5, vw, readings
+
+
+def note_render(st, now, source, line, rate_limits):
+    """Keep the last line and the raw rate_limits per source (numbers and
+    window names only) for `ctempo doctor`; at most once a minute unless the
+    line changed."""
+    import sqlite3
+
+    key = "last_render:" + source
+    prev = st.meta_get(key) or {}
+    if prev.get("line") == line and now - (prev.get("ts") or 0) < 60:
+        return
+    keep = None
+    if isinstance(rate_limits, dict):
+        keep = {
+            str(k)[:32]: {f: v for f, v in w.items() if isinstance(v, (int, float, str)) and len(str(v)) < 40}
+            for k, w in list(rate_limits.items())[:8]
+            if isinstance(w, dict)
+        }
+    try:
+        st.meta_set(key, {"ts": now, "line": line, "rate_limits": keep})
+    except sqlite3.OperationalError:
+        pass
 
 
 def maybe_learn(st, prof, now, cfg):
@@ -215,10 +244,13 @@ def main(argv):
         now = opts["now"] or time.time()
         readings = {}
         try:
-            v5, vw, readings = compute(raw, cfg, opts, now)
-            segs = render.segments(v5, vw, cfg)
-            if not v5.get("present") and not vw.get("present"):
-                segs = [("ctempo: waiting for usage data", "dim")]
+            def segs_of(v5, vw):
+                if not v5.get("present") and not vw.get("present"):
+                    return [("ctempo: waiting for usage data", "dim")]
+                return render.segments(v5, vw, cfg)
+
+            v5, vw, readings = compute(raw, cfg, opts, now, lambda a, b: render.plain(segs_of(a, b)))
+            segs = segs_of(v5, vw)
         except Exception as e:  # database trouble: degrade to the bare line
             log_error(e)
             if not readings:

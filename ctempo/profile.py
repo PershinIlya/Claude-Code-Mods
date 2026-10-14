@@ -154,6 +154,10 @@ class Profile:
             prior, src = normalize(override_shape(ov)), "override+observed"
         elif self.prior:
             prior, src = normalize(self.prior), "transcripts+observed"
+            # A prior built from a few days is mostly uniform: weigh it so.
+            trust = float(self.prior_meta.get("trust", 1.0))
+            ku = float(pc.get("prior_strength_uniform", 0.25))
+            k = ku + trust * (k - ku)
         else:
             # A flat prior knows nothing: let a few observations outweigh it.
             prior, src = uniform(), "uniform+observed"

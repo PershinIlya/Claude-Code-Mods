@@ -313,6 +313,8 @@ def install(args, out=print):
     if bin_dir:
         out("Launcher: %s/ctempo -> %s -I -S %s" % (bin_dir, python, entry))
     out("Runtime info for the mod: %s" % config.runtime_path())
+    if not args.no_bootstrap:
+        out("Profile: bootstrap the prior from ~/.claude/projects transcripts (timestamps and token counts only)")
     if not args.apply:
         out("")
         out("DRY RUN: nothing was written. Re-run with --apply to install.")
@@ -369,6 +371,22 @@ def install(args, out=print):
         else:
             out("  claude not on PATH: mod not installed")
     save_state(state)
+    if not args.no_bootstrap:
+        try:
+            from . import transcripts
+            from .store import Store
+
+            st = Store()
+            try:
+                prior, meta, stats = transcripts.bootstrap(st, config.load())
+            finally:
+                st.close()
+            if prior is not None:
+                out("Profile prior from transcripts: %d messages over %s days (no content kept)." % (stats["messages"], meta["days"]))
+            else:
+                out("No transcripts in the last %s days: the profile starts uniform." % config.load()["profile"]["bootstrap_days"])
+        except Exception as e:  # bootstrap is a bonus; never fail the install on it
+            out("Bootstrap skipped: %s (run `ctempo bootstrap` later)" % e)
     out("Done. Restart Claude Code or run /reload-plugins to load the mod; the statusLine applies at once.")
     return rc
 
