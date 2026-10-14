@@ -43,8 +43,9 @@ def spend_since(store, inst, t0, now, used):
     if t0 < inst["start_ts"] and a <= inst["start_ts"]:
         prev = store.db.execute(
             "SELECT id, start_ts, max_used FROM windows WHERE window=? AND id!=? "
-            "AND ABS(reset_ts - ?) <= 3600 ORDER BY id DESC LIMIT 1",
-            (SEVEN_DAY, inst["id"], inst["start_ts"]),
+            "AND ABS(reset_ts - ?) <= 3600 AND IFNULL(close_reason, '') != 'shift' "
+            "ORDER BY ABS(reset_ts - ?), id DESC LIMIT 1",
+            (SEVEN_DAY, inst["id"], inst["start_ts"], inst["start_ts"]),
         ).fetchone()
         if prev is not None:
             a2 = max(t0, prev[1])

@@ -20,6 +20,7 @@ from . import config, profile
 
 W_INPUT, W_CACHE_CREATE, W_CACHE_READ, W_OUTPUT = 1.0, 1.25, 0.1, 5.0
 FULL_TRUST_DAYS = 14.0
+MIN_ACTIVE_DAYS = 4.0
 
 
 def _ts(s):
@@ -136,14 +137,29 @@ def build_prior(events, since, now, half_life_days):
     shape = profile.normalize(profile.smooth(mean))
     # A few days of transcripts do not describe a week: blend toward uniform
     # until two weeks are covered (one hour of data must not become a spike).
+    # Coverage, not span: the span starts where 5% of the cost is behind
+    # (a stray old message does not count), and it takes several distinct
+    # active days.
     days = (end - start) / 86400.0
-    mix = min(1.0, days / FULL_TRUST_DAYS)
+    ordered = sorted(events)
+    total = sum(w for _, w in ordered)
+    cum, trimmed_start = 0.0, start
+    for t, wgt in ordered:
+        cum += wgt
+        if cum >= 0.05 * total:
+            trimmed_start = max(start, profile.hour_start(t))
+            break
+    covered = (end - trimmed_start) / 86400.0
+    active_days = len({time.strftime("%Y-%m-%d", time.localtime(t)) for t, _ in ordered})
+    mix = max(0.0, min(1.0, covered / FULL_TRUST_DAYS, active_days / MIN_ACTIVE_DAYS))
     prior = [mix * x + (1 - mix) / profile.BINS for x in shape]
     meta = {
         "built_at": now,
         "period_start": start,
         "period_end": end,
         "days": round(days, 1),
+        "covered_days": round(covered, 1),
+        "active_days": active_days,
         "trust": round(mix, 3),
         "active_hours": active,
         "messages": len(events),
@@ -160,11 +176,11 @@ def bootstrap(store, cfg, now=None, days=None, root=None, dry_run=False):
     prior, meta = build_prior(events, since, now, float(cfg["profile"]["half_life_days"]))
     meta.update({"files": stats["files"], "root": root})
     if prior is not None and not dry_run:
-        prof = profile.load(store)
-        prof.prior = prior
-        prof.prior_meta = meta
         store.begin()
         try:
+            prof = profile.load(store)  # read inside the write lock: no lost update
+            prof.prior = prior
+            prof.prior_meta = meta
             profile.save(store, prof)
             store.meta_set("bootstrap", meta)
             store.commit()

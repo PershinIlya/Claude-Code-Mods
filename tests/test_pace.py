@@ -105,7 +105,9 @@ class FiveHour(TempHome):
         r = int(self.t + 30 * M)  # window opened 4.5 h ago
         for i in range(0, 61, 5):  # 90 points in its first hour
             self.feed(r - 5 * H + i * M, five=(min(90, 1.5 * i), r))
-        self.feed(self.t, five=(90, r))  # first reading after 3.5 idle hours
+        self.feed(self.t - 120, five=(90, r))  # first reading after 3.5 idle hours
+        self.feed(self.t - 60, five=(90, r), sid="s2")
+        self.feed(self.t, five=(90, r), sid="s3")  # readings minutes apart must not hide the gap
         v = self.view()
         self.assertEqual(v["rate_source"], "since_last")
         self.assertEqual(v["rate"], 0.0)

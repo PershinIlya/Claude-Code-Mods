@@ -163,6 +163,16 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
     inst = store.open_instance(w)
     drop_pts = float(cfg["reset"]["drop_points"])
     if inst is None:
+        if not fresh:
+            return "stale"  # its window was already judged and closed
+        # resets_at wobbles: a reading of a window that just expired can carry
+        # a reset a few seconds later than the one stored. Not a new window.
+        old = store.db.execute(
+            "SELECT id FROM windows WHERE window=? AND close_reason='expired' AND ABS(reset_ts - ?) <= ? LIMIT 1",
+            (w, reset, RESET_JITTER),
+        ).fetchone()
+        if old is not None:
+            return "expired"
         inst = store.new_instance(w, reset - DURATION[w], reset, now, used)
         store.add_sample(now, w, used, reset, source, session_id, FRESH if fresh else HEARTBEAT, inst["id"])
         return "new_window"

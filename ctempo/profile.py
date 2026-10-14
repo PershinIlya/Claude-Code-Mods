@@ -311,13 +311,25 @@ def learn(store, prof, now, cfg, w_current=None):
     prev, run_max, starts = None, None, {}
     for ts, used, wid in rows:
         if prev is None:
-            prev, run_max = (ts, used, wid), used
+            # Seed with the window's running max, not the anchor's own value:
+            # a slightly lower reading from a parallel session would
+            # otherwise count the difference again.
+            m = store.db.execute(
+                "SELECT MAX(used_pct) FROM samples WHERE window_id=? AND flag=? AND ts<=?", (wid, FRESH, ts)
+            ).fetchone()[0]
+            prev, run_max = (ts, used, wid), max(used, m if m is not None else used)
             continue
         if wid != prev[2]:
             if wid not in starts:
                 inst = store.instance(wid)
                 starts[wid] = inst["start_ts"] if inst else ts
-            a, delta, run_max = max(prev[0], starts[wid]), used, used
+            if starts[wid] < prev[0]:
+                # A window that began before the previous reading (a moved
+                # or bogus reset, or the real window reopened): continuation.
+                a, delta = prev[0], max(0.0, used - run_max)
+                run_max = max(run_max, used)
+            else:
+                a, delta, run_max = starts[wid], used, used
         else:
             a, delta = prev[0], max(0.0, used - run_max)
             run_max = max(run_max, used)

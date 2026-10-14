@@ -114,6 +114,14 @@ class ShortHistory(unittest.TestCase):
         self.assertAlmostEqual(sum(prior), 1.0)
         self.assertLess(max(prior) / min(prior), 2.0)
 
+    def test_a_stray_old_message_does_not_buy_trust(self):
+        now = MON + 3 * D
+        events = [(MON - 30 * D, 50.0)]  # one small message a month ago
+        events += [(MON + d * D + h * H + k * 600, 100.0) for d in (0, 1) for h in range(9, 18) for k in range(6)]
+        prior, meta = transcripts.build_prior(events, now - 45 * D, now, 14)
+        self.assertLessEqual(meta["trust"], 0.5)  # two active days of four
+        self.assertEqual(meta["active_days"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

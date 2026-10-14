@@ -127,5 +127,68 @@ class Learn(TempHome):
         self.assertEqual(profile.learn(self.st, prof, end, self.cfg, w), 0)
 
 
+class LearnEdges(TempHome):
+    def learned(self, now):
+        prof = profile.load(self.st)
+        profile.learn(self.st, prof, now, self.cfg, profile.uniform())
+        return prof
+
+    def test_moved_reset_is_a_continuation_not_new_spend(self):
+        R = int(MON + 7 * D)
+        t = MON + 2 * D + 9 * H  # Wednesday 09:00, 1 point an hour from 50%
+        for k in range(13):
+            self.feed(t + k * 900, week=(50 + k * 0.25, R))
+        R2 = R + 1800  # resets_at moves 30 minutes later (more than the jitter)
+        for k in range(13, 25):
+            self.feed(t + k * 900, week=(50 + k * 0.25, R2))
+        prof = self.learned(t + 8 * H)
+        b = profile.bin_of(t + 3 * H)  # the hour of the move
+        self.assertAlmostEqual(prof.S[b] / prof.W[b], 1.0, places=6)
+
+    def test_learning_keeps_a_prior_committed_after_the_profile_was_read(self):
+        from ctempo import statusline
+        from ctempo.store import Store
+
+        self.feed(MON + H, week=(5, int(MON + 7 * D)))
+        stale = profile.load(self.st)  # what a render read before learning
+        other = Store(os.path.join(self.dir, "tempo.db"))  # bootstrap, in another process
+        fresh = profile.load(other)
+        fresh.prior = profile.uniform()
+        fresh.prior_meta = {"trust": 1.0, "messages": 3}
+        other.begin()
+        profile.save(other, fresh)
+        other.commit()
+        other.close()
+        kept = statusline.maybe_learn(self.st, stale, MON + 3 * H, self.cfg)
+        self.assertIsNotNone(kept.prior)
+        self.assertIsNotNone(profile.load(self.st).prior)
+
+    def test_batch_and_incremental_learning_agree_with_parallel_dips(self):
+        from ctempo import ingest
+        from ctempo.store import Store
+
+        R = int(MON + 7 * D)
+        rows = []
+        for k in range(32):  # a: +0.5 at :05 :20 :35 :50; b lags 0.5 at :58
+            t = MON + 9 * H + 5 * 60 + k * 900
+            rows.append((t, 10 + k * 0.5, "a"))
+            if k % 4 == 3:
+                rows.append((t + 8 * 60, 10 + k * 0.5 - 0.5, "b"))
+        end = MON + 18 * H
+        for t, used, sid in rows:
+            self.feed(t, week=(used, R), sid=sid)
+        batch = self.learned(end)
+        st = Store(os.path.join(self.dir, "incremental.db"))
+        inc = profile.Profile()
+        for t, used, sid in rows:  # learn after every reading, as the statusline would
+            r, rej, k = ingest.parse_payload({"rate_limits": {"seven_day": {"used_percentage": used, "resets_at": R}}}, t)
+            ingest.record(st, r, t, "test", sid, self.cfg, rej, k)
+            profile.learn(st, inc, t, self.cfg, profile.uniform())
+        st.close()
+        self.assertEqual(batch.processed_until, inc.processed_until)
+        self.assertAlmostEqual(sum(batch.S), sum(inc.S), places=6)
+        self.assertAlmostEqual(sum(batch.W), sum(inc.W), places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

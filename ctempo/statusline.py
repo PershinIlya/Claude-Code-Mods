@@ -81,7 +81,7 @@ def compute(raw, cfg, opts, now, line_of=None):
         shown = {} if recorded else readings
         prof = profile.load(st)
         if opts["record"]:
-            maybe_learn(st, prof, now, cfg)
+            prof = maybe_learn(st, prof, now, cfg)
         v5 = pace.five_hour(st, now, cfg, shown.get(config.FIVE_HOUR))
         vw = weekly.weekly(st, now, cfg, shown.get(config.SEVEN_DAY), prof)
         if opts["record"] and line_of is not None:
@@ -90,6 +90,55 @@ def compute(raw, cfg, opts, now, line_of=None):
     finally:
         st.close()
     return v5, vw, readings
+
+
+def note_render(st, now, source, line, rate_limits):
+    """Keep the last line and the raw rate_limits per source (numbers and
+    window names only) for `ctempo doctor`; at most once a minute unless the
+    line changed."""
+    import sqlite3
+
+    key = "last_render:" + source
+    prev = st.meta_get(key) or {}
+    if prev.get("line") == line and now - (prev.get("ts") or 0) < 60:
+        return
+    keep = None
+    if isinstance(rate_limits, dict):
+        keep = {
+            str(k)[:32]: {f: v for f, v in w.items() if isinstance(v, (int, float, str)) and len(str(v)) < 40}
+            for k, w in list(rate_limits.items())[:8]
+            if isinstance(w, dict)
+        }
+    try:
+        st.meta_set(key, {"ts": now, "line": line, "rate_limits": keep})
+    except sqlite3.OperationalError:
+        pass
+
+
+def maybe_learn(st, prof, now, cfg):
+    """Fold newly completed hours into the profile, at most every 10 minutes.
+
+    The profile is re-read inside the write transaction, so a bootstrap or a
+    rebuild committed meanwhile is not overwritten. Returns the profile."""
+    import sqlite3
+
+    from . import profile
+
+    checked = st.meta_get("profile_checked_at", 0) or 0
+    if now - checked < 600:
+        return prof
+    try:
+        st.begin()
+        prof = profile.load(st)
+        w, _, _ = prof.weights(now, cfg)
+        profile.learn(st, prof, now, cfg, w)
+        profile.save(st, prof)
+        st.meta_set("profile_checked_at", now)
+        st.commit()
+    except sqlite3.OperationalError as e:
+        st.rollback()
+        log_error(e, "learn")
+    return prof
 
 
 def note_render(st, now, source, line, rate_limits):
