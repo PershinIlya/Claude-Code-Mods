@@ -382,7 +382,7 @@ class Install(unittest.TestCase):
             with mock.patch.object(install, "run_claude", lambda c, env=None: (127, "", "claude not found on PATH")):
                 rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
             self.assertEqual(rc, 1)
-            self.assertIn("still installed", out)
+            self.assertIn("may still be installed", out)
             self.assertTrue(install.load_state().get("mod"))
             self.assertTrue(os.path.exists(os.path.join(self.home, "runtime.json")))
             with mock.patch.object(install, "run_claude", ok):
@@ -534,13 +534,15 @@ class Install(unittest.TestCase):
 
     def _steps(self, proj, *steps):
         """Run i(nstall) / u(ninstall) with the mod on the U(ser) file, the P(roject)
-        file or * (no --settings); "-nomod" adds --no-mod, "-fail" makes claude exit 127."""
+        file or * (no --settings); "-nomod" adds --no-mod, "-fail" makes claude exit 127,
+        "-nobin" takes claude off PATH."""
         rcs = []
         for s in steps:
             fn = install.install if s[0] == "i" else install.uninstall
             target = {"U": self.path, "P": proj, "*": None}[s[1]]
-            cli = claude_missing if s.endswith("-fail") else plugin_cli(self.path)
-            with mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), mock.patch.object(install, "run_claude", cli):
+            cli = claude_missing if s.endswith(("-fail", "-nobin")) else plugin_cli(self.path)
+            exe = None if s.endswith("-nobin") else "/bin/claude"
+            with mock.patch.object(install, "claude_bin", lambda: exe), mock.patch.object(install, "run_claude", cli):
                 rc, out = self.run_cmd(fn, args(target, apply=True, no_mod=s.endswith("-nomod")))
             rcs.append(rc)
         return rcs
@@ -621,7 +623,7 @@ class Install(unittest.TestCase):
                     cli(c)  # the user, by hand
                 rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
                 self.assertEqual(rc, 1, out)
-                self.assertIn("still installed", out)
+                self.assertIn("may still be installed", out)
                 self.assertTrue(os.path.exists(runtime))
             with mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), mock.patch.object(install, "run_claude", recording):
                 rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
@@ -690,6 +692,177 @@ class Install(unittest.TestCase):
         state = install.load_state()
         self.assertEqual(state.get("records"), {})
         self.assertNotIn("mod", state)
+
+    # -- fifth review ----------------------------------------------------------------
+    def test_command_put_in_compose_with_no_statusline_before_is_restored(self):
+        # Review 5 (D-install#0): with no statusLine (or no file) before ctempo, a command
+        # the user put in --compose is the original too, also after a repin or --replace
+        # (which must record it first). The refreshInterval 60 ctempo added goes with it.
+        newer = "npx -y ccstatusline@latest"
+        for before in (SETTINGS, None):
+            for then in (None, {}, {"replace": True}):
+                with self.subTest(before=before is not None, then=then):
+                    self._reset()
+                    if before is None:
+                        if os.path.exists(self.path):
+                            os.remove(self.path)
+                    else:
+                        self.write(before)
+                    self.run_cmd(install.install, args(self.path, apply=True))
+                    obj = json.loads(self.read())
+                    obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
+                    obj["statusLine"]["padding"] = 0
+                    with open(self.path, "w", encoding="utf-8") as f:
+                        f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                    if then is not None:
+                        rc, out = self.run_cmd(install.install, args(self.path, apply=True, **then))
+                        self.assertIn("REPLACE" if then else "already runs ctempo", out)
+                    if then:  # "kept in the backup and in install.json"
+                        rec = install.load_state()["records"][self.path]
+                        self.assertEqual(rec["original_statusLine"], {"type": "command", "command": newer, "padding": 0})
+                    rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                    self.assertEqual(rc, 0, out)
+                    after = json.loads(self.read())
+                    self.assertEqual(after.pop("statusLine"), {"type": "command", "command": newer, "padding": 0})
+                    self.assertEqual(after, before or {})
+
+    def test_uninstall_completes_with_claude_missing_once_the_user_file_lists_no_mod(self):
+        # Review 5 (D-install#1): claude is missing at uninstall. Once the user file lists
+        # neither the plugin nor its marketplace (the user ran the reverse commands by hand
+        # as the warning says, or the install commands timed out), there is nothing to
+        # undo whatever the mod record says, and uninstall completes byte for byte. The
+        # warning never claims the mod is installed when nothing shows it is.
+        proj = self._proj()
+        runtime = os.path.join(self.home, "runtime.json")
+        cli = plugin_cli(self.path)
+
+        def timed_out(cmd, env=None):
+            return 124, "", "claude %s timed out after 120 s" % " ".join(cmd[:3])
+
+        for target in (self.path, proj):
+            for how in ("claude", "by hand", "timed out"):
+                with self.subTest(target=os.path.basename(target), install=how):
+                    self._reset()
+                    with self._user_file(IRREGULAR):
+                        with mock.patch.object(install, "claude_bin", lambda: None if how == "by hand" else "/bin/claude"), \
+                                mock.patch.object(install, "run_claude", timed_out if how == "timed out" else cli):
+                            self.run_cmd(install.install, args(target, apply=True, no_mod=False))
+                            if how == "by hand":
+                                for c in install.mod_commands(install.repo_root()):
+                                    cli(c)  # the user, by hand
+                            if how == "timed out":  # claude still there, still hanging: retry later
+                                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                                self.assertEqual(rc, 1, out)
+                                self.assertNotIn("mod is still installed", out)
+                                self.assertIn("may still be installed", out)
+                        with mock.patch.object(install, "claude_bin", lambda: None), \
+                                mock.patch.object(install, "run_claude", claude_missing):
+                            if how != "timed out":
+                                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                                self.assertEqual(rc, 1, out)  # the user file still lists the mod
+                                self.assertIn("may still be installed", out)
+                                for c in install.unmod_commands():
+                                    cli(c)  # the user, by hand
+                            rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                    self.assertEqual(rc, 0, out)
+                    self.assertIn("Uninstalled.", out)
+                    self.assertEqual(self.read(), IRREGULAR)
+                    self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+                    state = install.load_state()
+                    self.assertEqual(state.get("records"), {})
+                    self.assertNotIn("mod", state)
+                    self.assertFalse(os.path.exists(runtime))
+
+    def test_user_file_edited_before_installing_into_it_comes_back_as_edited(self):
+        # Review 5 (D-install#2): the mod went in first (for the project file, or for the
+        # user file with --no-mod uninstalled since), then the user edited the user file,
+        # then ctempo was installed into it. The file right before that install is its
+        # baseline (the one before the mod only a fallback), so it comes back byte for byte.
+        proj = self._proj()
+        for first, last in ((("iP",), ("iU", "uU")), (("iP",), ("iU-nomod", "uU-nomod")),
+                            (("iU", "uU-nomod"), ("iU", "uU-nomod")),
+                            (("iP-nobin",), ("iU-nobin", "uU-nobin", "uP-nobin"))):
+            with self.subTest(steps=first + ("edit",) + last):
+                self._reset()
+                with self._user_file(IRREGULAR):
+                    self._steps(proj, *first)
+                    edited = self._user_text().replace("{\n", '{\n  "sandbox": {"enabled": true},\n', 1)
+                    with open(self.path, "w", encoding="utf-8") as f:
+                        f.write(edited)
+                    rcs = self._steps(proj, *last)
+                self.assertEqual(rcs, [0] * len(last))
+                self.assertEqual(self._user_text(), edited)
+
+    def test_uninstall_leaves_a_user_file_the_mod_never_touched_alone(self):
+        # Review 5 (D-install#3): claude was not on PATH at install and the printed commands
+        # never ran, so the plugin CLI never wrote to the user file. Uninstall must not
+        # rewrite it (here reformatted, or created since), with claude still missing or
+        # back on PATH and reporting nothing to remove.
+        proj = self._proj()
+
+        def not_installed(cmd, env=None):  # the plugin CLI with nothing to remove
+            if cmd[:2] == ["plugin", "uninstall"]:
+                return 1, "", 'Plugin "%s" not found in installed plugins' % install.PLUGIN_ID
+            return 1, "", "Marketplace '%s' not found" % install.MARKETPLACE
+
+        reformatted = json.dumps(json.loads(IRREGULAR), indent=4, ensure_ascii=False)  # same JSON
+        for before, now in ((IRREGULAR, reformatted), (None, "{}")):
+            for exe, cli in ((None, claude_missing), ("/bin/claude", not_installed)):
+                with self.subTest(before=before is not None, claude=exe):
+                    self._reset()
+                    with self._user_file(before):
+                        with mock.patch.object(install, "claude_bin", lambda: None), \
+                                mock.patch.object(install, "run_claude", claude_missing):
+                            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+                        with open(self.path, "w", encoding="utf-8") as f:
+                            f.write(now)
+                        with mock.patch.object(install, "claude_bin", lambda: exe), mock.patch.object(install, "run_claude", cli):
+                            rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                    self.assertEqual(rc, 0, out)
+                    self.assertEqual(self._user_text(), now)
+                    self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+                    state = install.load_state()
+                    self.assertEqual(state.get("records"), {})
+                    self.assertNotIn("mod", state)
+
+    def test_plugin_commands_first_run_at_a_later_install_take_a_fresh_snapshot(self):
+        # Review 5 (D-install#3): a manual install whose commands never ran, a hand edit of
+        # the user file, then an install with claude on PATH that runs them for the first
+        # time. The user file comes back as it was right before they ran.
+        proj = self._proj()
+        with self._user_file(IRREGULAR):
+            self._steps(proj, "iP-nobin")
+            edited = IRREGULAR.replace("{\n", '{\n  "sandbox": {"enabled": true},\n', 1)
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(edited)
+            rcs = self._steps(proj, "iP", "uP")
+        self.assertEqual(rcs, [0, 0])
+        self.assertEqual(self.read(), edited)
+        self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+        state = install.load_state()
+        self.assertEqual(state.get("records"), {})
+        self.assertNotIn("mod", state)
+
+    def test_blank_backup_means_no_statusline_when_the_record_is_lost(self):
+        # Review 5 (D-install#4): with install.json gone, the newest backup is the blank file
+        # from before the last install, so there was no statusLine then. An older backup's
+        # statusLine must not come back, at uninstall or through a reinstall's record.
+        for reinstall in (False, True):
+            with self.subTest(reinstall=reinstall):
+                self._reset()
+                self.write(dict(SETTINGS, statusLine={"type": "command", "command": "~/old-line.sh"}))
+                self.run_cmd(install.install, args(self.path, apply=True))
+                self.run_cmd(install.uninstall, args(self.path, apply=True))
+                with open(self.path, "w") as f:
+                    f.write("")
+                self.run_cmd(install.install, args(self.path, apply=True))
+                self.assertEqual(len([n for n in os.listdir(self.dir) if ".ctempo-backup-" in n]), 2)
+                shutil.rmtree(self.home)  # install.json gone
+                if reinstall:
+                    self.run_cmd(install.install, args(self.path, apply=True))
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(json.loads(self.read()), {})
 
     def test_probe_and_command_quoting(self):
         ok, ver, sq, ms, note = install.probe(sys.executable)
