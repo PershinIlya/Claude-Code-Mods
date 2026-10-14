@@ -309,6 +309,113 @@ class Install(unittest.TestCase):
             self.assertEqual(f.read(), raw)
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
 
+    # -- second review ---------------------------------------------------------------
+    def test_v1_record_with_relative_path_is_recovered(self):
+        s = dict(SETTINGS, statusLine={"type": "command", "command": "echo mine"})
+        before = self.write(s)
+        backup = os.path.realpath(self.path) + ".ctempo-backup-20261014-090000"
+        with open(backup, "w") as f:
+            f.write(before)
+        obj = dict(SETTINGS, statusLine={"type": "command", "command": install.our_command(sys.executable, install.entry_path()),
+                                         "refreshInterval": 60})
+        with open(self.path, "w") as f:
+            f.write(json.dumps(obj, indent=2))
+        os.makedirs(self.home)
+        with open(install.state_path(), "w") as f:  # what version 1 wrote for `--settings settings.json`
+            json.dump({"installed": True, "settings_path": "settings.json", "had_file": True, "backup_path": backup,
+                       "original_sha256": install.sha(before), "had_statusLine": True,
+                       "original_statusLine": s["statusLine"], "had_keys": {k: False for k in install.PLUGIN_KEYS}}, f)
+        rc, out = self.run_cmd(install.uninstall, args(None, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), before)
+
+    def test_failed_plugin_uninstall_keeps_the_mod_for_a_retry(self):
+        before = self.write(SETTINGS)
+        self.env2 = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir})
+        self.env2.start()
+        try:
+            def ok(cmd, env=None):
+                obj = json.loads(self.read())
+                if cmd[:2] == ["plugin", "install"]:
+                    obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
+                elif cmd[:3] == ["plugin", "marketplace", "add"]:
+                    obj.setdefault("extraKnownMarketplaces", {})[install.MARKETPLACE] = {"source": {}}
+                elif cmd[:2] == ["plugin", "uninstall"]:
+                    obj["enabledPlugins"].pop(install.PLUGIN_ID, None)
+                elif cmd[:3] == ["plugin", "marketplace", "remove"]:
+                    obj["extraKnownMarketplaces"].pop(install.MARKETPLACE, None)
+                with open(self.path, "w") as f:
+                    f.write(json.dumps(obj, indent=2))
+                return 0, "ok", ""
+
+            with mock.patch.object(install, "run_claude", ok), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
+                self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
+            with mock.patch.object(install, "run_claude", lambda c, env=None: (127, "", "claude not found on PATH")):
+                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+            self.assertEqual(rc, 1)
+            self.assertIn("still installed", out)
+            self.assertTrue(install.load_state().get("mod"))
+            self.assertTrue(os.path.exists(os.path.join(self.home, "runtime.json")))
+            with mock.patch.object(install, "run_claude", ok):
+                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(self.read(), before)
+        finally:
+            self.env2.stop()
+
+    def test_plugin_keys_are_tidied_in_the_user_file_when_it_went_first(self):
+        user = self.path  # CLAUDE_CONFIG_DIR/settings.json: the file the plugin CLI edits
+        proj = os.path.join(self.dir, "proj-settings.json")
+        before_user = self.write(SETTINGS)
+        with open(proj, "w") as f:
+            f.write(json.dumps({"model": "sonnet"}, indent=2))
+
+        def fake(cmd, env=None):
+            obj = json.loads(install.read_text(user))
+            if cmd[:2] == ["plugin", "install"]:
+                obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
+            elif cmd[:3] == ["plugin", "marketplace", "add"]:
+                obj.setdefault("extraKnownMarketplaces", {})[install.MARKETPLACE] = {"source": {}}
+            elif cmd[:2] == ["plugin", "uninstall"]:
+                obj["enabledPlugins"].pop(install.PLUGIN_ID, None)
+            elif cmd[:3] == ["plugin", "marketplace", "remove"]:
+                obj["extraKnownMarketplaces"].pop(install.MARKETPLACE, None)
+            with open(user, "w") as f:
+                f.write(json.dumps(obj, indent=2))
+            return 0, "ok", ""
+
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir}), \
+                mock.patch.object(install, "run_claude", fake), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
+            self.run_cmd(install.install, args(user, apply=True, no_mod=False))
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+            self.run_cmd(install.uninstall, args(user, apply=True, no_mod=False))
+            self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
+        self.assertEqual(json.loads(install.read_text(user)), SETTINGS)
+        self.assertEqual(install.read_text(user), before_user)
+        self.assertEqual(json.loads(install.read_text(proj)), {"model": "sonnet"})
+
+    def test_symlink_alias_is_one_record(self):
+        real = os.path.join(self.dir, "dot-settings.json")
+        with open(real, "w") as f:
+            f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "echo X"}), indent=4))
+        with open(real) as f:
+            before = f.read()
+        os.symlink(real, self.path)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        self.run_cmd(install.install, args(real, apply=True))
+        self.assertEqual(len(install.installed_records(install.load_state())), 1)
+        rc, out = self.run_cmd(install.uninstall, args(None, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(install.read_text(real), before)
+
+    def test_reinstall_after_file_deleted_leaves_no_file(self):
+        self.write({"model": "opus"})
+        self.run_cmd(install.install, args(self.path, apply=True))
+        os.remove(self.path)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertFalse(os.path.exists(self.path))
+
     def test_probe_and_command_quoting(self):
         ok, ver, sq, ms, note = install.probe(sys.executable)
         self.assertTrue(ok, note)

@@ -336,11 +336,42 @@ def load_state():
     if "records" not in state:  # version 1: one record at the top level
         rec = {k: state[k] for k in ("settings_path", "had_file", "backup_path", "original_sha256", "had_statusLine",
                                      "original_statusLine", "had_keys", "installed", "written_statusLine") if k in state}
-        path = rec.get("settings_path")
+        path = _v1_key(rec)
         state = {k: v for k, v in state.items() if k not in rec}
-        state["records"] = {path: rec} if isinstance(path, str) and os.path.isabs(path) else {}
+        if path:
+            rec["settings_path"] = path
+        state["records"] = {path: rec} if path else {}
     state["version"] = STATE_VERSION
     return state
+
+
+BACKUP_SUFFIX = re.compile(r"\.ctempo-backup-\d{8}-\d{6}(-\d+)?$")
+
+
+def _v1_key(rec):
+    """Absolute path of a version-1 record. Version 1 stored --settings as
+    typed (maybe relative); its backup path was built from the real path."""
+    path = rec.get("settings_path")
+    if isinstance(path, str) and os.path.isabs(path):
+        return os.path.abspath(path)
+    backup = rec.get("backup_path")
+    if isinstance(backup, str) and BACKUP_SUFFIX.search(backup):
+        return BACKUP_SUFFIX.sub("", backup)
+    if isinstance(path, str) and path:
+        return os.path.abspath(path)
+    return None
+
+
+def find_record(state, spath):
+    """(key, record) for a settings file, matching symlink aliases too."""
+    records = state.setdefault("records", {})
+    if spath in records:
+        return spath, records[spath]
+    real = os.path.realpath(spath)
+    for key, rec in records.items():
+        if os.path.realpath(key) == real:
+            return key, rec
+    return spath, None
 
 
 def save_state(state):
@@ -352,7 +383,14 @@ def save_state(state):
 
 
 def installed_records(state):
-    return {p: r for p, r in state.get("records", {}).items() if r.get("installed")}
+    """Installed records, one per real file (aliases through symlinks count once)."""
+    out, seen = {}, set()
+    for p, r in state.get("records", {}).items():
+        real = os.path.realpath(p)
+        if r.get("installed") and real not in seen:
+            seen.add(real)
+            out[p] = r
+    return out
 
 
 def _original_from_backups(spath):
@@ -454,7 +492,9 @@ def install(args, out=print):
     # crash at any later point still leaves uninstall what it needs.
     state = load_state()
     records = state.setdefault("records", {})
-    rec = records.get(spath)
+    key, rec = find_record(state, spath)
+    if key != spath and rec is not None:  # the same file through another name: one record
+        records[spath] = records.pop(key)
     cur_ours = isinstance(current, dict) and is_ours(current.get("command"))
     if want is not None:
         backup = make_backup(spath) if raw is not None else None
@@ -463,10 +503,14 @@ def install(args, out=print):
             rec.update(_statusline_part(obj, spath))
             rec.update(backup_path=backup, original_sha256=sha(raw) if raw is not None else None)
         elif not cur_ours:
-            # The statusLine changed since the last install: that is now the
-            # original, and the backup just taken is the file to come back to.
+            # The statusLine changed since the last install (or the file was
+            # deleted): that is now the original, and the backup just taken
+            # is the file to come back to.
             rec.update(_statusline_part(obj, spath))
             rec.update(backup_path=backup, original_sha256=sha(raw) if raw is not None else None)
+            rec["had_file"] = raw is not None
+            if raw is None:
+                rec["had_keys"] = {k: False for k in PLUGIN_KEYS}
         rec.update(installed=True, written_statusLine=want)
         records[spath] = rec
         state.update(python=python, entry=entry)
@@ -501,13 +545,23 @@ def install(args, out=print):
                 rc = 1
         if use_mod:
             if claude_bin():
+                if not state.get("mod"):
+                    # The plugin CLI edits the user settings file: remember
+                    # which plugin keys it had, so uninstall can tidy up there.
+                    us = settings_path(None)
+                    try:
+                        uobj, uraw, _ = read_settings(us)
+                    except ValueError:
+                        uobj, uraw = {}, None
+                    state["mod"] = {"user_settings": us, "had_file": uraw is not None,
+                                    "had_keys": {k: (k in uobj) for k in PLUGIN_KEYS}}
                 for c in mod_commands(root):
                     code, so, se = run_claude(c)
                     msg = (so.strip() or se.strip()).splitlines()
                     out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
                     if code != 0 and "already" not in (so + se).lower():
                         rc = 1
-                state["mod"] = {"marketplace": MARKETPLACE, "plugin": PLUGIN_ID, "root": root}
+                state["mod"].update(marketplace=MARKETPLACE, plugin=PLUGIN_ID, root=root)
             else:
                 out("  claude not on PATH: mod not installed")
     finally:
@@ -533,6 +587,36 @@ def install(args, out=print):
     return rc
 
 
+def _done(code, so, se):
+    """A plugin command succeeded, or there was nothing left to remove."""
+    if code == 0:
+        return True
+    if code in (124, 127):  # claude timed out or could not run: nothing happened
+        return False
+    text = (so + se).lower()
+    return "not found in installed plugins" in text or ("marketplace" in text and "not found" in text) \
+        or "not installed" in text
+
+
+def _tidy_user_settings(mod, skip_real):
+    """Remove plugin keys the plugin CLI left empty in the user settings file."""
+    us = mod.get("user_settings")
+    if not us or os.path.realpath(us) == skip_real or not os.path.exists(os.path.realpath(us)):
+        return None
+    obj, raw, fmt = read_settings(us)
+    new = dict(obj)
+    for k, had in (mod.get("had_keys") or {}).items():
+        if not had and k in new and new[k] in ({}, []):
+            new.pop(k)
+    if new == obj:
+        return None
+    if mod.get("had_file") is False and not new:
+        os.remove(os.path.realpath(us))
+        return "Removed %s (it did not exist before the mod was installed)" % us
+    atomic_write(us, dumps(new, fmt))
+    return "Tidied %s" % us
+
+
 def uninstall(args, out=print):
     state = load_state()
     records = state.setdefault("records", {})
@@ -546,8 +630,18 @@ def uninstall(args, out=print):
                 out("  " + p)
             return 1
         spath = next(iter(live)) if live else settings_path(None)
-    rec = records.get(spath) or {}
-    if not os.path.exists(os.path.realpath(spath)):
+    key, rec = find_record(state, spath)
+    rec = dict(rec or {})
+    rec.setdefault("settings_path", spath)
+    real = os.path.realpath(spath)
+    mod = state.get("mod") or {}
+    if mod.get("had_keys") and os.path.realpath(mod.get("user_settings") or "") == real:
+        # This is the file the plugin CLI edits: its record of plugin keys counts.
+        hk = dict(rec.get("had_keys") or {})
+        for k, had in mod["had_keys"].items():
+            hk[k] = hk.get(k, had) and had
+        rec["had_keys"] = hk
+    if not os.path.exists(real):
         out("Settings: %s does not exist; nothing to restore there." % spath)
         obj, raw, fmt = None, None, None
     else:
@@ -557,8 +651,8 @@ def uninstall(args, out=print):
             out("error: %s" % e)
             return 1
         out("Settings: %s" % spath)
-    others = [p for p in installed_records(state) if p != spath]
-    cmds = unmod_commands() if (state.get("mod") and not args.no_mod and not others) else []
+    others = [p for p in installed_records(state) if os.path.realpath(p) != real]
+    cmds = unmod_commands() if (mod and not args.no_mod and not others) else []
     for c in cmds:
         out("  claude " + " ".join(c))
     cur = obj.get("statusLine") if obj else None
@@ -568,41 +662,57 @@ def uninstall(args, out=print):
     if not args.apply:
         if obj is not None and ours:
             new_obj, new_raw = restore(obj, raw, fmt, rec)
-            d = diff(raw, new_raw, spath) if new_raw is not None else "  (file would be removed: it did not exist before install)\n"
+            d = diff(raw, new_raw if isinstance(new_raw, str) else (new_raw or b"").decode("utf-8"), spath) \
+                if new_raw is not None else "  (file would be removed: it did not exist before install)\n"
             out(d if d else "  (no change)")
         if cmds:
             out("  (the plugin commands also remove enabledPlugins / extraKnownMarketplaces entries)")
         out("DRY RUN: nothing was written. Re-run with --apply to uninstall.")
         return 0
+    mod_ok = True
     for c in cmds:
         code, so, se = run_claude(c)
         msg = (so.strip() or se.strip()).splitlines()
         out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
+        mod_ok = mod_ok and _done(code, so, se)
     if obj is not None:
         obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten it
         cur = obj.get("statusLine")
         ours = isinstance(cur, dict) and is_ours(cur.get("command"))
-        if ours or cmds:
-            new_obj, new_raw = restore(obj, raw, fmt, rec)
+        if ours or (cmds and mod_ok):
+            new_obj, new_raw = restore(obj, raw, fmt, rec if (mod_ok or not cmds) else dict(rec, had_keys={}))
             if new_raw is None:
-                os.remove(os.path.realpath(spath))
+                os.remove(real)
                 out("Removed %s (it did not exist before install)" % spath)
-            elif new_raw != raw:
+            elif new_raw != raw and new_raw != (raw or "").encode("utf-8"):
                 atomic_write(spath, new_raw)
                 out("Restored %s" % spath)
-    records.pop(spath, None)
+    if cmds and mod_ok:
+        msg = _tidy_user_settings(mod, real)
+        if msg:
+            out(msg)
+    records.pop(key, None)
+    rc = 0
     if not installed_records(state):
-        lp = state.pop("launcher", None)
-        if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
-            os.remove(lp)
-            out("Removed launcher %s" % lp)
-        if os.path.exists(config.runtime_path()):
-            os.remove(config.runtime_path())
-        if cmds:
-            state.pop("mod", None)
+        if cmds and not mod_ok:
+            out("warning: the ctempo mod is still installed (the plugin commands failed). "
+                "Run `ctempo uninstall --apply` again with claude on PATH, or the commands above yourself.")
+            rc = 1  # keep state["mod"] and runtime.json so a rerun retries
+        else:
+            lp = state.pop("launcher", None)
+            if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
+                os.remove(lp)
+                out("Removed launcher %s" % lp)
+            if os.path.exists(config.runtime_path()):
+                os.remove(config.runtime_path())
+            if cmds and mod_ok:
+                state.pop("mod", None)
     save_state(state)
-    out("Uninstalled. Your data stays in %s (delete it yourself if you want)." % config.home())
-    return 0
+    if rc == 0:
+        out("Uninstalled. Your data stays in %s (delete it yourself if you want)." % config.home())
+    else:
+        out("Partly uninstalled.")
+    return rc
 
 
 def restore(obj, raw, fmt, rec):
@@ -616,9 +726,12 @@ def restore(obj, raw, fmt, rec):
             new["statusLine"] = orig
         elif rec.get("had_statusLine") is False:
             new.pop("statusLine", None)
-        else:  # no usable record: undo what the command itself says
+        else:  # no usable record: a pre-ctempo backup, else what the command says
             comp = compose_of(cur["command"])
-            if comp:
+            found = _original_from_backups(rec.get("settings_path") or "") if rec.get("settings_path") else None
+            if found is not None and found[0]:
+                new["statusLine"] = found[1]
+            elif comp:
                 new["statusLine"] = dict(cur, command=comp)
             else:
                 new.pop("statusLine", None)

@@ -1,11 +1,11 @@
 ### install --apply
 Interpreter candidates (python -I -S startup, best of 3):
-  * /usr/bin/python3                         Python 3.13, sqlite 3.45.1, 26 ms
+  * /usr/bin/python3                         Python 3.13, sqlite 3.45.1, 25 ms
 
-Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json
+Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json
   statusLine: compose: run your existing statusLine command and append ctempo's segment
---- /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json (now)
-+++ /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json (after)
+--- /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json (now)
++++ /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json (after)
 @@ -21,8 +21,9 @@
    },
    "statusLine": {
@@ -22,8 +22,8 @@ Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b866
 Mod (Desktop Code tab band), via the local marketplace in /home/user/Claude-Code-Mods:
   claude plugin marketplace add /home/user/Claude-Code-Mods
   claude plugin install ctempo@claude-tempo --scope user
-Runtime info for the mod: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/ct/runtime.json
-Wrote /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json (backup: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json.ctempo-backup-20261014-100730)
+Runtime info for the mod: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/ct/runtime.json
+Wrote /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json (backup: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json.ctempo-backup-20261014-103841)
   claude plugin marketplace add -> exit 0 Adding marketplace…√ Successfully added marketplace: claude-tempo (declared in user settings)
   claude plugin install ctempo@claude-tempo -> exit 0 Installing plugin "ctempo@claude-tempo"...√ Successfully installed plugin: ctempo@claude-tempo (scope: user)
 Done. Restart Claude Code or run /reload-plugins to load the mod; the statusLine applies at once.
@@ -74,13 +74,14 @@ Done. Restart Claude Code or run /reload-plugins to load the mod; the statusLine
 
 
 ### uninstall --apply
-Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json
+Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json
   claude plugin uninstall ctempo@claude-tempo --scope user
   claude plugin marketplace remove claude-tempo
   claude plugin uninstall ctempo@claude-tempo -> exit 0 √ Successfully uninstalled plugin: ctempo (scope: user)
   claude plugin marketplace remove -> exit 0 √ Successfully removed marketplace: claude-tempo
-Restored /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/.claude/settings.json
-Uninstalled. Your data stays in /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.Dr6L/ct (delete it yourself if you want).
+Restored /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/.claude/settings.json
+Uninstalled. Your data stays in /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.PPwC/ct (delete it yourself if you want).
+exit=0
 
 ### compare
 settings.json == backup: byte-identical
