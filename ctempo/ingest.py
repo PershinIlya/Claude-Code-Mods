@@ -24,7 +24,7 @@ import math
 
 from . import config
 from .config import DURATION, WINDOWS
-from .store import ANOMALY, FRESH, HEARTBEAT
+from .store import ANOMALY, FIRST, FRESH, HEARTBEAT
 
 RESET_JITTER = 300  # seconds; ccpool's resetJitter
 MAX_PCT = 105.0
@@ -174,7 +174,7 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
         if old is not None:
             return "expired"
         inst = store.new_instance(w, reset - DURATION[w], reset, now, used)
-        store.add_sample(now, w, used, reset, source, session_id, FRESH if fresh else HEARTBEAT, inst["id"])
+        store.add_sample(now, w, used, reset, source, session_id, FIRST if first_seen else FRESH, inst["id"])
         return "new_window"
 
     if reset > inst["reset_ts"] + RESET_JITTER:
@@ -185,7 +185,7 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
         # The window rolled over (or reset early): close and open the next one.
         store.close_instance(inst["id"], min(now, inst["reset_ts"]), "rollover")
         inst = store.new_instance(w, reset - DURATION[w], reset, now, used)
-        store.add_sample(now, w, used, reset, source, session_id, FRESH if fresh else HEARTBEAT, inst["id"])
+        store.add_sample(now, w, used, reset, source, session_id, FIRST if first_seen else FRESH, inst["id"])
         return "rollover"
 
     shifted = reset < inst["reset_ts"] - RESET_JITTER
@@ -212,7 +212,10 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
             and now - last[0] < cfg["write_min_interval_s"]
         )
         if not dup:
-            store.add_sample(now, w, used, reset, source, session_id, FRESH, inst["id"])
+            # A session's first word may be an old reading (every open session
+            # re-renders when the statusLine is installed): keep its level,
+            # but not as a timed point.
+            store.add_sample(now, w, used, reset, source, session_id, FIRST if first_seen else FRESH, inst["id"])
         # last_used follows the running max: a slightly lower fresh reading
         # from another session is eventual-consistency noise, not a refund.
         store.touch_instance(inst["id"], now, max(used, inst["max_used"]))
@@ -229,8 +232,8 @@ def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
     # The previous fresh-or-anomaly readings of this window, newest first.
     rows = store.db.execute(
         "SELECT id, ts, used_pct, resets_at, flag, window_id FROM samples "
-        "WHERE window=? AND flag IN (?, ?) ORDER BY ts DESC, id DESC LIMIT ?",
-        (w, FRESH, ANOMALY, need - 1),
+        "WHERE window=? AND flag IN (?, ?, ?) ORDER BY ts DESC, id DESC LIMIT ?",
+        (w, FRESH, FIRST, ANOMALY, need - 1),
     ).fetchall()
     run = []
     for r in rows:

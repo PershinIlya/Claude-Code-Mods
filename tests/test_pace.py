@@ -49,13 +49,14 @@ class FiveHour(TempHome):
         self.assertEqual(v["severity"], "dim")
 
     def test_burst_then_cap_time(self):
+        self.known("s1", "s2")
         self.feed(self.t - 20 * M, five=(40, self.R))
         self.feed(self.t - 10 * M, five=(40, self.R), sid="s2")
         self.st.add_sample(self.t - 5 * M, FIVE_HOUR, 70, self.R, "test", "idle", 1, 1)  # a heartbeat: no level info
         self.feed(self.t, five=(50, self.R))
         v = self.view()
-        # Fresh points (0, 40), (1/6 h, 40), (1/3 h, 50): x mean 1/6, y mean 130/3;
-        # Sxy = (1/6)(10/3) + (1/6)(20/3) = 10/6, Sxx = 2/36, slope = 30 %/h.
+        # Level path: 40 at -20 min (s2's 40 is no new level), 50 now: 10 points
+        # in 1/3 h = 30 %/h; three fresh readings in the window, so "lsq".
         self.assertAlmostEqual(v["rate"], 30.0, places=6)
         self.assertEqual(v["rate_source"], "lsq")
         self.assertAlmostEqual(v["multiplier"], 25.0 / 30.0)  # allowed (100 - 50) / 2 h
@@ -157,6 +158,70 @@ class FiveHour(TempHome):
         self.assertFalse(self.view()["present"])
         self.feed(self.t - 6 * H, five=(10, int(self.t - 2 * H)))
         self.assertFalse(self.view()["present"])
+
+    def test_steady_whole_percent_steps_keep_their_rate(self):
+        # Review #0: 9 %/h in whole percents is one new value every 6 min 40 s.
+        # 85% with 2 h left: allowed 7.5 %/h, so every render (one every 20 s)
+        # must say slow down and show the cap, also between steps.
+        self.known("s1")
+        t0 = self.t - 60 * M
+        for k in range(0, 181):
+            ts = t0 + 20 * k
+            self.feed(ts, five=(int(76 + 9 * (ts - t0) / H), self.R))
+            if ts >= self.t - 20 * M:
+                v = pace.five_hour(self.st, ts, self.cfg)
+                self.assertEqual(v["verdict"], "slow_down", ts - self.t)
+                self.assertIsNotNone(v["cap_ts"], ts - self.t)
+
+    def test_slow_steady_work_averages_out(self):
+        # 4 %/h in whole percents: a step every 15 min. Renders every 20 s over
+        # 2 h average within 10% of 4 %/h.
+        self.known("s1")
+        r = self.R  # the window opened 3 h ago
+        t0 = self.t - 2 * H
+        rates = []
+        for k in range(0, 361):
+            ts = t0 + 20 * k
+            self.feed(ts, five=(int(20 + 4 * (ts - t0) / H + 0.5), r))
+            if k >= 60:
+                rates.append(pace.five_hour(self.st, ts, self.cfg)["rate"])
+        self.assertAlmostEqual(sum(rates) / len(rates), 4.0, delta=0.4)
+
+    def test_a_late_start_is_not_diluted_by_the_ramp_from_0(self):
+        # Review #1: the window opened at 10:00, work began at 10:50 at 30 %/h.
+        self.known("s1")
+        start = self.t - 56 * M  # now is 10:56
+        r = int(start + 5 * H)
+        for i, lvl in enumerate((1, 2, 3, 4)):
+            self.feed(start + (50 + 2 * i) * M, five=(lvl, r))
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 30.0, delta=1.0)
+        self.assertEqual(v["rate_source"], "lsq")
+
+    def test_short_rate_window_still_gives_a_rate(self):
+        # Review #2: rate_window_min below rate_min_span_min used to give no rate.
+        self.cfg["rate_window_min"] = 4
+        self.known("s1")
+        for i in range(11):
+            self.feed(self.t - (10 - i) * M, five=(40 + i, self.R))
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 60.0, delta=1.0)
+
+    def test_stale_first_reading_at_install_is_no_burst(self):
+        # Review #3: at install every open session re-renders. An idle one shows
+        # its 3-hour-old 30, a busy one 60 a minute later: 30 points did not go
+        # in one minute.
+        tt = self.t
+        self.feed(tt - 2 * M, five=(30, self.R), sid="idle")
+        self.feed(tt - 1 * M, five=(60, self.R), sid="busy")
+        v = self.view()
+        self.assertLess(v["rate"], 25.0)
+        self.assertIsNone(v["cap_ts"])
+        self.t = tt + 4 * M
+        self.feed(self.t, five=(61, self.R), sid="busy")
+        v = self.view()
+        self.assertLess(v["rate"], 25.0)
+        self.assertIsNone(v["cap_ts"])
 
     def test_target_below_100(self):
         self.cfg["target_5h"] = 80

@@ -14,7 +14,7 @@
 from . import config, profile
 from .config import DURATION, FIVE_HOUR, SEVEN_DAY
 from .pace import current_used, verdict_for
-from .store import FRESH
+from .store import FIRST, FRESH
 
 MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend
 MIN_WINDOW_SHARE = 0.02
@@ -33,8 +33,8 @@ def spend_since(store, inst, t0, now, used):
         v0 = store.max_at(inst["id"], a)
         if v0 is None:
             row = store.db.execute(
-                "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag=? ORDER BY ts LIMIT 1",
-                (inst["id"], FRESH),
+                "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag IN (?, ?) ORDER BY ts LIMIT 1",
+                (inst["id"], FRESH, FIRST),
             ).fetchone()
             if row is None:
                 return 0.0, now
@@ -64,8 +64,8 @@ def exchange_rate(store, now, days=28):
     5h side has risen at least 50 points and the weekly side 3.
     """
     rows = store.db.execute(
-        "SELECT ts, window, used_pct, window_id FROM samples WHERE flag=? AND ts>? ORDER BY ts, id",
-        (FRESH, now - days * 86400),
+        "SELECT ts, window, used_pct, window_id FROM samples WHERE flag IN (?, ?) AND ts>? ORDER BY ts, id",
+        (FRESH, FIRST, now - days * 86400),
     ).fetchall()
     by_ts = {}
     for ts, w, used, wid in rows:

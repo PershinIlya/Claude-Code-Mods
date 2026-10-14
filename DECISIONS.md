@@ -68,10 +68,13 @@ session's fresh ones (ccpool saw 76% of rows sharing timestamps). A reading is
 FRESH when it differs from what the same session reported before; otherwise it
 is a HEARTBEAT: it proves time passed, never moves the series, never raises a
 window's max, never rolls a window over, does not update `last_seen`, and
-cannot trigger a reset. A session's very first reading counts as fresh,
-except that it cannot be an anomaly: when the statusLine is installed, every
-open session re-renders at once with whatever it last saw, and two idle ones
-would otherwise fake a drop reset (found in review). The line shows the
+cannot trigger a reset. A session's very first reading is stored as FIRST:
+when the statusLine is installed, every open session re-renders at once with
+whatever it last saw, so that reading is a real level but may be hours old.
+It counts for the window's max and for the weekly peak, cannot be an anomaly
+(two idle sessions would otherwise fake a drop reset), is not used for
+profile learning, and enters the 5h level path only as a lower bound (D-11).
+All three rules were found in review. The line shows the
 level as judged and stored; the raw reading is used only when the write
 failed (an idle session's stale pre-reset value once showed "maxed"). Analysis uses the running max of
 fresh readings per window instance (usage is monotone within a window).
@@ -113,20 +116,30 @@ window, closed by it, is reopened instead of being split in two.
 **D-11. Burn rate.** A heartbeat repeats a session's last API response and
 says nothing about the account's level (claude.ai keeps spending while a
 Claude Code session idles), so the rate uses fresh readings only. They form
-a *level path*: a running max, through 0 at the window start (every window
-opens empty), linear between readings (spend in an unobserved gap is spread
-over the gap instead of being squeezed into the moment we looked), and flat
-after the last reading (no news, no spend: a finished burst fades out over
-the next 20 minutes and idle reads exactly 0). The rate is the least-squares
-slope of that path over the trailing 20 minutes (brief), sampled at its
-edges and at every fresh reading inside. With at least 3 fresh readings
-spanning 5 minutes the fit is plain least squares; otherwise it leans on
-interpolation and the line marks it `~` (a single reading in a window gives
-the window average). Slopes below 0.05 %/h count as idle. ccpool fits only
+a *level path*: a point where each new level (running max) was first read
+(a repeat of the same whole percent says nothing about when the next one
+comes), through 0 at the window start (every window opens empty), linear
+between readings (spend in an unobserved gap is spread over the gap instead
+of being squeezed into the moment we looked). After the last step between
+two readings the path keeps that step's slope for one reading quantum (the
+smallest step seen, 0.1 to 1 point: steady work shows no new value between
+whole-percent steps, and a flat tail used to read it as slowing down), then
+goes flat (no news, no spend: a finished burst fades out and idle reads
+exactly 0). A session's FIRST reading (D-06) only says the level was at
+least that by then, so it becomes a point only where it lifts the path: a
+3-hour-old 30% re-rendered at install next to a fresh 60% is no 30-point
+burst. The rate is the least-squares slope of that path over the trailing 20
+minutes (brief), sampled at its edges and at every point inside, but never
+reaching back past the window's first real point once 5 minutes of data
+follow it (the 0-at-start ramp diluted a late start). With at least 3
+readings spanning 5 minutes (or the whole fit window, if that is shorter) the
+fit is plain least squares; otherwise it leans on interpolation and the line
+marks it `~` (a single reading in a window gives the window average). Slopes below 0.05 %/h count as idle. ccpool fits only
 raw samples and ends at the last one, so an old burst keeps a positive slope.
-This model came out of two review passes: anchoring on the last stored value
-let an idle session's stale heartbeat fake a 36 %/h burst, and an open
-session's heartbeats squeezed two hours of claude.ai use into minutes.
+This model came out of three review passes: anchoring on the last stored value
+let an idle session's stale heartbeat fake a 36 %/h burst, an open session's
+heartbeats squeezed two hours of claude.ai use into minutes, and the flat
+tail made steady 9 %/h work flicker between "slow down" and "speed up".
 
 **D-12. Allowed rate, multiplier, projection.** As in the brief: allowed =
 (target - used) / hours to reset; multiplier = allowed / current; projection
@@ -276,8 +289,12 @@ never creates a missing file. Records are matched by real path, so a
 symlinked settings file is one record; a version-1 record with a relative
 path is recovered from its backup's name. If the plugin commands fail during
 uninstall (claude missing or hanging), the mod record and `runtime.json` are
-kept and uninstall exits 1 so a rerun retries; the plugin keys the CLI
-leaves empty are tidied in the user settings file it edits. `uninstall`
+kept and uninstall exits 1 so a rerun retries. The plugin CLI edits the user
+settings file, so that file's record outlives its own uninstall while the
+mod stays (installed elsewhere, or its commands failed), and whoever removes
+the mod brings the file back from its backup; a user file that only the
+plugin CLI touched gets a backup of its own before the first plugin command.
+Every record of a file, under any name, goes when it is uninstalled. `uninstall`
 restores the original `statusLine` (or removes it), removes
 `enabledPlugins` / `extraKnownMarketplaces` if they did not exist before and
 the plugin CLI left them empty, and when the result equals the backup it
@@ -325,6 +342,8 @@ after 7 days.
 An adversarial review (6 reviewers, each finding checked by a skeptic who
 tried to refute it) confirmed 23 defects and rejected 11. A second pass over
 the fixes confirmed 10 more (mostly install edge cases, and the 5h model
-above) and rejected 1. All 33 are fixed, each with a regression test that
-was checked to fail on the code before its fix. Details in the commit
+above) and rejected 1; a third confirmed 7 (the 5h model's quantization,
+ramp and first readings; install retries and aliases) and rejected none.
+All 40 are fixed, each with a regression test that was checked to fail on
+the code before its fix. Details in the commit
 messages from "Fix review findings" on.
