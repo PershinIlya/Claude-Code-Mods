@@ -21,6 +21,29 @@ SETTINGS = {
 }
 
 
+# Hand-formatted: no serializer writes it back like this, so only a restore
+# from the backup's bytes gives it back.
+IRREGULAR = '{\n  "model": "opus",\n  "env": {"FOO": "b\u00e4r"},\n    "permissions": {"allow": ["Bash(git status)"], "deny": []}\n}\n\n'
+
+
+def plugin_cli(user):
+    """A fake `claude plugin` that edits the user settings file the way the real one does."""
+    def run(cmd, env=None):
+        obj = json.loads(install.read_text(user)) if os.path.exists(user) else {}
+        if cmd[:2] == ["plugin", "install"]:
+            obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
+        elif cmd[:3] == ["plugin", "marketplace", "add"]:
+            obj.setdefault("extraKnownMarketplaces", {})[install.MARKETPLACE] = {"source": {}}
+        elif cmd[:2] == ["plugin", "uninstall"]:
+            obj.get("enabledPlugins", {}).pop(install.PLUGIN_ID, None)
+        elif cmd[:3] == ["plugin", "marketplace", "remove"]:
+            obj.get("extraKnownMarketplaces", {}).pop(install.MARKETPLACE, None)
+        with open(user, "w") as f:
+            f.write(json.dumps(obj, indent=2))
+        return 0, "ok", ""
+    return run
+
+
 def args(settings, **kw):
     a = dict(apply=False, settings=settings, no_mod=True, python=sys.executable, replace=False, bin_dir=None,
              no_bootstrap=True)
@@ -395,6 +418,72 @@ class Install(unittest.TestCase):
         self.assertEqual(json.loads(install.read_text(user)), SETTINGS)
         self.assertEqual(install.read_text(user), before_user)
         self.assertEqual(json.loads(install.read_text(proj)), {"model": "sonnet"})
+
+    def _user_file(self, text):
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir})  # self.path is the user file
+
+    def test_retry_after_failed_plugin_uninstall_is_byte_identical(self):
+        # Review #4: the partial run must not drop the record the retry needs.
+        with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
+            with mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+                self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
+            with mock.patch.object(install, "run_claude", lambda c, env=None: (127, "", "claude not found")):
+                rc, _ = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+            self.assertEqual(rc, 1)
+            with mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), IRREGULAR)
+        self.assertEqual(install.load_state().get("records"), {})
+
+    def test_user_file_uninstalled_first_comes_back_byte_identical(self):
+        # Review #5: the user file goes first, the mod stays for a project file.
+        proj = os.path.join(self.dir, "proj-settings.json")
+        with open(proj, "w") as f:
+            f.write('{"model": "sonnet"}')
+        with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+            self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+            self.run_cmd(install.uninstall, args(self.path, apply=True, no_mod=False))
+            self.assertIn("enabledPlugins", json.loads(self.read()))  # the mod is still in use
+            rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), IRREGULAR)
+        self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+        self.assertEqual(install.load_state().get("records"), {})
+
+    def test_user_file_touched_only_by_the_plugin_cli_comes_back_byte_identical(self):
+        # Review #5: no statusLine there, so no record; the baseline is the
+        # snapshot taken before the plugin CLI first wrote to it.
+        proj = os.path.join(self.dir, "proj-settings.json")
+        with open(proj, "w") as f:
+            f.write('{"model": "sonnet"}')
+        with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+            self.assertIn("enabledPlugins", json.loads(self.read()))
+            rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), IRREGULAR)
+
+    def test_two_records_of_one_file_both_go(self):
+        # Review #6: a version-1 record and a later one under another name.
+        real = os.path.join(self.dir, "dot-settings.json")
+        with open(real, "w") as f:
+            f.write(IRREGULAR)
+        os.symlink(real, self.path)
+        self.run_cmd(install.install, args(real, apply=True))
+        st = install.load_state()
+        (k, rec), = st["records"].items()
+        st["records"][self.path] = dict(rec, settings_path=self.path)
+        install.save_state(st)
+        rc, out = self.run_cmd(install.uninstall, args(None, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(install.load_state().get("records"), {})
+        self.assertEqual(install.read_text(real), IRREGULAR)
 
     def test_symlink_alias_is_one_record(self):
         real = os.path.join(self.dir, "dot-settings.json")

@@ -59,6 +59,12 @@ class TempHome(unittest.TestCase):
         readings, rejects, kinds = ingest.parse_payload(payload(five, week, sid), now)
         return ingest.record(self.st, readings, now, source, sid, self.cfg, rejects, kinds)
 
+    def known(self, *sids):
+        """Mark sessions as already heard from, so their next reading is timed (not FIRST)."""
+        for sid in sids:
+            for w in (config.FIVE_HOUR, config.SEVEN_DAY):
+                self.st.reader_set(sid, w, -1.0, 0, 0)
+
     def rows(self, window):
         return self.st.db.execute(
             "SELECT ts, used_pct, resets_at, flag, window_id, session_id FROM samples WHERE window=? ORDER BY ts, id",

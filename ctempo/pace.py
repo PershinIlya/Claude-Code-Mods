@@ -5,7 +5,7 @@ All rates are in percentage points per hour. Times are epoch seconds.
 
 from . import config
 from .config import FIVE_HOUR
-from .store import FRESH
+from .store import FIRST, FRESH
 
 IDLE_RATE = 0.05  # %/h; below this a fitted slope counts as idle
 
@@ -43,18 +43,57 @@ def running_series(rows, start_value=None):
     return out
 
 
-def level_path(fresh, start_ts, used, now):
-    """[(ts, level, synthetic)]: running max of fresh readings, starting at
-    0 at the window start, ending at the current level."""
-    path = []
-    run = None
+def level_path(fresh, start_ts, used, now, first=()):
+    """[(ts, level, synthetic)] of the window's level, from fresh readings.
+
+    Timed points are the first time each new level (running max) was read;
+    a repeat of the same value says nothing about when the next one comes.
+    The path starts at 0 at the window start. A session's first reading
+    (`first`) may be old (every open session re-renders when the status line
+    is installed): it only says the level was at least that by then, so it
+    becomes a point only where it lifts the path. After the last step the
+    path keeps that step's slope for one reading quantum (readings are whole
+    percents, so "no new value yet" is what steady work looks like between
+    steps; only for a step between two readings), then goes flat: a finished
+    burst fades out and idle reads 0.
+    """
+    path, run, steps = [], None, []
     for ts, u in fresh:
-        run = u if run is None else max(run, u)
-        path.append((ts, run, False))
+        if run is None or u > run:
+            if run is not None:
+                steps.append(u - run)
+            run = u
+            path.append((ts, run, False))
     if not path or path[0][0] > start_ts + 1:
         path.insert(0, (start_ts, 0.0, True))
-    if path[-1][1] < used:  # the level is known now (no fresh row yet, or the write failed)
+    if path[-1][1] < used:  # the level is known now (a first reading, or the write failed)
         path.append((now, used, True))
+    for ts, u in first:
+        if start_ts < ts < now and u > level_at(path, ts) + 1e-9:
+            path = [p for p in path if p[0] < ts] + [(ts, u, False)] + [p for p in path if p[0] > ts and p[1] > u]
+    if path[-1][2]:
+        return path
+    if len(path) >= 2 and not path[-2][2]:  # a step between two readings, not the ramp from 0
+        (t0, y0, _), (t1, y1, _) = path[-2], path[-1]
+        quantum = min(1.0, max(0.1, min(steps))) if steps else 1.0
+        if t1 > t0 and y1 > y0 and now > t1:
+            slope = (y1 - y0) / (t1 - t0)
+            t_ext = t1 + quantum / slope
+            if t_ext < now:
+                path.append((t_ext, y1 + quantum, True))
+            else:
+                path.append((now, y1 + slope * (now - t1), True))
+    return path
+    if len(path) >= 2 and not path[-2][2]:  # a step between two readings, not the ramp from 0
+        (t0, y0, _), (t1, y1, _) = path[-2], path[-1]
+        quantum = min(1.0, max(0.1, min(steps))) if steps else 1.0
+        if t1 > t0 and y1 > y0 and now > t1:
+            slope = (y1 - y0) / (t1 - t0)
+            t_ext = t1 + quantum / slope
+            if t_ext < now:
+                path.append((t_ext, y1 + quantum, True))
+            else:
+                path.append((now, y1 + slope * (now - t1), True))
     return path
 
 
@@ -104,25 +143,30 @@ def five_hour(store, now, cfg, reading=None):
              target=tgt, window_id=inst["id"])
 
     # The level path: fresh readings only (a heartbeat repeats a session's
-    # last API response and says nothing about the account's level), as a
-    # running max, through 0 at the window start, linear between readings
-    # (spend in an unobserved gap is spread over it, not squeezed into the
-    # moment we looked) and flat after the last one (no news = no spend,
-    # so a finished burst fades out). The rate is the least-squares slope of
-    # that path over the trailing window.
+    # last API response and says nothing about the account's level), linear
+    # between readings (spend in an unobserved gap is spread over it, not
+    # squeezed into the moment we looked); see level_path for both ends. The
+    # rate is the least-squares slope of that path over the trailing window,
+    # which never reaches back past the window's first real reading once
+    # there is enough real data (the 0-at-start ramp would dilute it).
     win_s = float(cfg["rate_window_min"]) * 60.0
-    min_span = float(cfg["rate_min_span_min"]) * 60
-    path = level_path(store.fresh_levels(inst["id"]), inst["start_ts"], used, now)
+    min_span = min(float(cfg["rate_min_span_min"]) * 60, win_s)
+    fresh = store.fresh_levels(inst["id"])
+    first = store.fresh_levels(inst["id"], FIRST)
+    path = level_path(fresh, inst["start_ts"], used, now, first)
+    real_pts = [p for p in path if not p[2]]
     since = max(now - win_s, inst["start_ts"])
+    if real_pts and since < real_pts[0][0] and now - real_pts[0][0] >= min_span:
+        since = real_pts[0][0]
     rate, source, inside = None, None, []
     if now - since >= min_span:
         inside = [p for p in path if since < p[0] < now]
         points = [(since, level_at(path, since))] + [(t, y) for t, y, _ in inside] + [(now, level_at(path, now))]
         s = lsq_slope(points)
         if s is not None:
-            # A fit carried by a few readings and interpolation is marked ~.
-            real = [p for p in path if since <= p[0] <= now and not p[2]]
-            enough = len(real) >= int(cfg["rate_min_samples"]) and now - real[0][0] >= min_span if real else False
+            # A fit carried by fewer than rate_min_samples readings is marked ~.
+            real = sorted(ts for ts, _ in fresh + first if since <= ts <= now)
+            enough = len(real) >= int(cfg["rate_min_samples"]) and now - real[0] >= min_span
             rate, source = max(0.0, s), "lsq" if enough else "interpolated"
     v["rate"] = rate
     v["rate_source"] = source

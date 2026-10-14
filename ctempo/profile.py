@@ -21,7 +21,7 @@ import math
 import time
 
 from .config import SEVEN_DAY
-from .store import FRESH
+from .store import FIRST, FRESH
 
 BINS = 168
 HOUR = 3600.0
@@ -201,10 +201,10 @@ def typical_week(store, now, half_life_s, weeks=8):
     """Decay-weighted mean peak of recent closed weekly windows that were
     observed during their last day (an unobserved tail understates the peak)."""
     rows = store.db.execute(
-        "SELECT reset_ts, max_used, (SELECT MAX(ts) FROM samples s WHERE s.window_id=w.id AND s.flag=?) "
+        "SELECT reset_ts, max_used, (SELECT MAX(ts) FROM samples s WHERE s.window_id=w.id AND s.flag IN (?, ?)) "
         "FROM windows w WHERE window=? AND closed_at IS NOT NULL "
         "AND close_reason IN ('expired', 'rollover') AND reset_ts > ? AND reset_ts <= ?",
-        (FRESH, SEVEN_DAY, now - weeks * 7 * 86400, now),
+        (FRESH, FIRST, SEVEN_DAY, now - weeks * 7 * 86400, now),
     ).fetchall()
     num = den = 0.0
     for reset, peak, seen in rows:

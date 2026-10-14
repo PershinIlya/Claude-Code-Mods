@@ -2,7 +2,7 @@ import unittest
 
 from ctempo import ingest
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
-from ctempo.store import ANOMALY, FRESH, HEARTBEAT
+from ctempo.store import ANOMALY, FIRST, FRESH, HEARTBEAT
 
 from .helpers import MON, H, D, TempHome
 
@@ -61,7 +61,7 @@ class Record(TempHome):
         w = self.windows(FIVE_HOUR)
         self.assertEqual(len(w), 1)
         self.assertEqual(w[0]["start_ts"], self.R5 - 5 * H)
-        self.assertEqual(self.rows(FIVE_HOUR)[0][3], FRESH)
+        self.assertEqual(self.rows(FIVE_HOUR)[0][3], FIRST)  # a first-seen session: a level, untimed
 
     def test_dedupe_and_heartbeat_throttle(self):
         t = MON + H
@@ -70,7 +70,7 @@ class Record(TempHome):
         self.assertEqual(len(self.rows(FIVE_HOUR)), 1)
         self.feed(t + 70, five=(10, self.R5))  # 60 s later: one heartbeat row
         rows = self.rows(FIVE_HOUR)
-        self.assertEqual([r[3] for r in rows], [FRESH, HEARTBEAT])
+        self.assertEqual([r[3] for r in rows], [FIRST, HEARTBEAT])
 
     def test_two_sessions_same_value_stored_once(self):
         t = MON + H

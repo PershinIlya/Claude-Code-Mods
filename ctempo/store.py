@@ -17,6 +17,7 @@ SCHEMA_VERSION = 1
 FRESH = 0  # the reporting session's reading changed: new information
 HEARTBEAT = 1  # same reading as that session's previous one: time passed, no news
 ANOMALY = 2  # inconsistent with the open window (drop or earlier reset); pending
+FIRST = 3  # a session's first-ever reading: a level, but its timing may be stale
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(
@@ -271,10 +272,10 @@ class Store:
         q += " ORDER BY ts, id"
         return self.db.execute(q, args).fetchall()
 
-    def fresh_levels(self, wid):
-        """(ts, used) of an instance's fresh readings, in time order."""
+    def fresh_levels(self, wid, flag=FRESH):
+        """(ts, used) of an instance's fresh (or FIRST) readings, in time order."""
         return self.db.execute(
-            "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag=? ORDER BY ts, id", (wid, FRESH)
+            "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag=? ORDER BY ts, id", (wid, flag)
         ).fetchall()
 
     def max_at(self, wid, t):

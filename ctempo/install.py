@@ -555,6 +555,11 @@ def install(args, out=print):
                         uobj, uraw = {}, None
                     state["mod"] = {"user_settings": us, "had_file": uraw is not None,
                                     "had_keys": {k: (k in uobj) for k in PLUGIN_KEYS}}
+                    if uraw is not None and os.path.realpath(us) != os.path.realpath(spath):
+                        try:
+                            state["mod"].update(backup_path=make_backup(us), original_sha256=sha(uraw))
+                        except OSError:
+                            pass  # uninstall then tidies by keys instead of bytes
                 for c in mod_commands(root):
                     code, so, se = run_claude(c)
                     msg = (so.strip() or se.strip()).splitlines()
@@ -598,23 +603,41 @@ def _done(code, so, se):
         or "not installed" in text
 
 
-def _tidy_user_settings(mod, skip_real):
-    """Remove plugin keys the plugin CLI left empty in the user settings file."""
+def _tidy_user_settings(state, mod, skip_real):
+    """Undo what the plugin CLI left in the user settings file: back to its
+    backup's bytes when nothing else changed there, else drop empty keys."""
     us = mod.get("user_settings")
     if not us or os.path.realpath(us) == skip_real or not os.path.exists(os.path.realpath(us)):
         return None
-    obj, raw, fmt = read_settings(us)
-    new = dict(obj)
+    key, rec = find_record(state, us)
+    if rec is not None and rec.get("installed"):
+        return None  # ctempo's statusLine is still there: its own uninstall restores the file
+    # Its own record (a statusLine uninstalled earlier, kept for this), else
+    # the snapshot taken before the plugin CLI first wrote to it.
+    base = dict(rec) if rec is not None else {
+        "settings_path": us, "had_file": mod.get("had_file"),
+        "backup_path": mod.get("backup_path"), "original_sha256": mod.get("original_sha256")}
+    hk = dict(base.get("had_keys") or {})
     for k, had in (mod.get("had_keys") or {}).items():
-        if not had and k in new and new[k] in ({}, []):
-            new.pop(k)
-    if new == obj:
-        return None
-    if mod.get("had_file") is False and not new:
+        hk[k] = hk.get(k, had) and had
+    base["had_keys"] = hk
+    obj, raw, fmt = read_settings(us)
+    _, new_raw = restore(obj, raw, fmt, base)
+    _drop_records(state, os.path.realpath(us))
+    if new_raw is None:
         os.remove(os.path.realpath(us))
         return "Removed %s (it did not exist before the mod was installed)" % us
-    atomic_write(us, dumps(new, fmt))
+    if new_raw == raw or new_raw == (raw or "").encode("utf-8"):
+        return None
+    atomic_write(us, new_raw)
     return "Tidied %s" % us
+
+
+def _drop_records(state, real):
+    """Remove every record of a file, whatever name it was recorded under."""
+    records = state.setdefault("records", {})
+    for p in [p for p in records if os.path.realpath(p) == real]:
+        records.pop(p, None)
 
 
 def uninstall(args, out=print):
@@ -688,10 +711,15 @@ def uninstall(args, out=print):
                 atomic_write(spath, new_raw)
                 out("Restored %s" % spath)
     if cmds and mod_ok:
-        msg = _tidy_user_settings(mod, real)
+        msg = _tidy_user_settings(state, mod, real)
         if msg:
             out(msg)
-    records.pop(key, None)
+    _drop_records(state, real)
+    if mod and not (cmds and mod_ok) and os.path.realpath(mod.get("user_settings") or "") == real:
+        # The plugin keys in this file outlive this run (the mod stays for
+        # another settings file, or its commands failed): keep the record so
+        # whoever removes the mod can bring the file back byte for byte.
+        records[spath] = dict(rec, installed=False)
     rc = 0
     if not installed_records(state):
         if cmds and not mod_ok:

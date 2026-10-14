@@ -47,9 +47,11 @@ about to expire. `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdic
 
 - current rate = least-squares slope, over the trailing 20 minutes, of the
   level path drawn through fresh readings only (0 at the window start, linear
-  between readings, flat after the last): a burst that ended fades out, idle
-  is 0, and spend in a gap you did not observe (claude.ai while Claude Code
-  sat idle) is spread over the gap rather than shown as a sudden burst;
+  between readings, one whole-percent step past the last one at its slope,
+  then flat): steady work keeps its rate between steps, a burst that ended
+  fades out, idle is 0, and spend in a gap you did not observe (claude.ai
+  while Claude Code sat idle) is spread over the gap rather than shown as a
+  sudden burst;
 - allowed rate = (target − used) / hours to reset (target defaults to 100);
 - multiplier = allowed / current;
 - projection = used + rate × hours left, capped at 100, with the time it hits
@@ -186,7 +188,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 133 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 142 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 9 tests
 ```
 
@@ -196,7 +198,7 @@ epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
 throwaway settings files, including the byte-identical round trip (CRLF,
 mode, several settings files, a crash mid-install, a lost install record).
-Two adversarial review passes found 33 defects; each one has a regression
+Three adversarial review passes found 40 defects; each one has a regression
 test that fails on the code before its fix.
 
 ## Layout
