@@ -177,8 +177,10 @@ cache_read + 5 output` (API price ratios relative to fresh input); only the
 distribution over the week matters. Each bin's mean is over *every* hour of
 the period, zeros included (thevibeworks averages per active day, which runs
 high), then lightly smoothed along the hour axis. A short history is blended
-toward uniform: `prior = mix x shape + (1 - mix) x uniform`, `mix = min(1,
-days / 14)`, and the prior strength `k` moves from 0.25 to 1 with it. Found
+toward uniform: `prior = mix x shape + (1 - mix) x uniform`, with
+`mix = min(1, covered_days / 14, active_days / 4)`; `covered_days` starts
+where 5% of the cost is behind, so one stray old message does not buy trust
+(found in review). The prior strength `k` moves from 0.25 to 1 with `mix`. Found
 on live data: one hour of transcripts otherwise made a three-hour spike. It
 misses claude.ai and Desktop chat; the percent observations correct that over
 time. `install --apply` runs the bootstrap too (`--no-bootstrap` skips it).
@@ -212,7 +214,10 @@ level (plus = spending faster than your profile). `dry 12:40` / `dry~Wed
 slow down, bold red when it runs dry or is maxed, and green (an addition to
 the brief) when a window is in its tail with at least `min_free` points about
 to expire. `NO_COLOR` and `TERM=dumb` disable color; `display.symbols:
-"ascii"` swaps the glyphs. When the line would exceed 80 columns, optional
+"ascii"` swaps the glyphs. Output is written as UTF-8 bytes whatever the
+locale. Config values of the wrong type or out of range fall back to the
+default or are clamped at load (`config.RANGES`), so a typo never breaks
+the line. When the line would exceed 80 columns, optional
 parts are dropped in order: 5h reset time, weekly delta, weekly reset time,
 then projections. The statusline never prints a traceback: errors go to
 `~/.claude-tempo/errors.log` (64 KB, one rotation) and the line degrades to
@@ -238,7 +243,11 @@ drops them). It draws on the surfaces in `mod.surfaces` (default `["desktop"]`;
 VS Code and mobile draw no band per the docs) and passes the band on in the
 terminal, where the statusLine already shows the line; it keeps what other
 mods draw below its own row. Every `kind` it sees is logged by the CLI in the
-`kinds` table.
+`kinds` table. It treats an empty `CTEMPO_HOME` as unset (like the CLI),
+passes the home it resolved to the CLI, shows the CLI's stderr when it
+fails, and re-arms its timer to `mod.refresh_s` (clamped to 15..3600 s).
+Desktop does not inherit the shell environment: set `CTEMPO_HOME` in
+`settings.json` `env` if you move the home.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
@@ -250,8 +259,15 @@ probe table, a unified diff of `settings.json`, the plugin commands and the
 files it would write. `--apply` copies `settings.json` to
 `settings.json.ctempo-backup-YYYYmmdd-HHMMSS`, then writes atomically
 (tmp + rename, symlinked settings keep the link). Only `statusLine` changes;
-the file's indentation and trailing newline are detected and kept. What was
-there before is recorded in `~/.claude-tempo/install.json`. `uninstall`
+the file's indentation, line endings (CRLF too), trailing newline and mode are
+kept. What was there before is recorded in `~/.claude-tempo/install.json`, one
+record per absolute settings path, saved *before* the settings file is
+written (a crash later still leaves uninstall what it needs). A statusLine
+changed since the last install becomes the new original; ctempo's own
+command is never recorded or restored as the original (a pre-ctempo backup
+or `--compose` is used instead). Backups are created exclusively and never
+overwritten. `uninstall` asks which file when several are installed and
+never creates a missing file. `uninstall`
 restores the original `statusLine` (or removes it), removes
 `enabledPlugins` / `extraKnownMarketplaces` if they did not exist before and
 the plugin CLI left them empty, and when the result equals the backup it
@@ -293,3 +309,10 @@ after 7 days.
 - Mean reversion in the weekly projection (recent intensity decaying toward
   the typical week over the remaining days).
 - A `report` breakdown by project (from transcript token counts).
+
+## Review
+
+An adversarial review (6 reviewers, each finding checked by a skeptic who
+tried to refute it) confirmed 23 defects and rejected 11; all 23 are fixed
+with a regression test each, and every new test was checked to fail on the
+old code. Details in the commit messages from "Fix review findings".

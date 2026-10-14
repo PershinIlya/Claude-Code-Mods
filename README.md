@@ -149,10 +149,14 @@ leave out keeps its default):
 | `display.symbols` | `unicode` | `ascii` for `x ^ v ->` |
 | `display.max_width` | 80 | the line drops optional parts to fit |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
+| `mod.refresh_s` | 60 | how often the mod refreshes the band (15 to 3600) |
 | `compose.timeout_ms` | 1500 | how long your previous status line may take |
 | `retention_days` | 365 | history kept |
 
-`CTEMPO_HOME` moves everything (default `~/.claude-tempo`).
+`CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
+does not inherit your shell's environment, so if you move it, set it in
+`~/.claude/settings.json` under `env` too. Values of the wrong type or out of
+range fall back to the default or are clamped.
 
 ## Data and privacy
 
@@ -180,15 +184,18 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 87 tests, Python 3.8 to 3.13
-claude plugin validate mods/ctempo && claude plugin test mods/ctempo
+python3 -m unittest discover -s tests -t .     # 124 tests, Python 3.8 to 3.13
+claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 9 tests
 ```
 
 The suite feeds synthetic time series (steady burn, bursts, idle, a reset
 mid-series, two parallel sessions, missing windows, bogus `resets_at`, the
 epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
-throwaway settings files, including the byte-identical round trip.
+throwaway settings files, including the byte-identical round trip (CRLF,
+mode, several settings files, a crash mid-install, a lost install record).
+An adversarial review found 23 defects; each one has a regression test that
+fails on the code before its fix.
 
 ## Layout
 
