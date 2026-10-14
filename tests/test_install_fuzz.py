@@ -205,6 +205,15 @@ class World:
                 before = self.text("U")
                 by_hand(self.paths["U"], install.mod_commands(install.repo_root()) if s == "mod-by-hand"
                         else install.unmod_commands())
+                if s == "mod-by-hand" and self.unseen and self.text("U") != before \
+                        and not install.load_state()["mod"].get("manual"):
+                    # The plugin CLI wrote ctempo's entries into keys the user removed (deleted or
+                    # blanked the file) before ctempo looked, and the mod is not manual, so ctempo
+                    # takes the CLI's writes for its own. It next finds keys that hold only its
+                    # entries, as the user's own keys do after the user removed their other plugins
+                    # with the plugin CLI (D-18, review 8): it cannot tell the two apart and keeps
+                    # them as the user's, so they may stay empty.
+                    self.empty_keys.update(k for k in install.PLUGIN_KEYS if k not in self.user["U"])
                 if s == "unmod-by-hand" and self.text("U") != before:
                     self.hand_text = self.text("U")
                     if install.load_state()["mod"].get("manual"):
