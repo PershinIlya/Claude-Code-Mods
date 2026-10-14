@@ -10,6 +10,7 @@ from what install and the plugin CLI did, uninstall restores it byte for
 byte (line endings and mode included).
 """
 
+import calendar
 import difflib
 import hashlib
 import json
@@ -132,9 +133,10 @@ def atomic_write(path, data):
 
 
 def make_backup(path):
-    """Copy the file's bytes to a new, never-overwritten timestamped backup."""
+    """Copy the file's bytes to a new, never-overwritten timestamped backup. The
+    time is UTC (a Z marks it): local time can go back (a move west, the fall-back hour)."""
     real = os.path.realpath(path)
-    base = "%s.ctempo-backup-%s" % (real, time.strftime("%Y%m%d-%H%M%S"))
+    base = "%s.ctempo-backup-%s" % (real, time.strftime("%Y%m%d-%H%M%SZ", time.gmtime()))
     with open(real, "rb") as f:
         data = f.read()
     for i in range(1000):
@@ -353,7 +355,7 @@ def load_state():
     return state
 
 
-BACKUP_SUFFIX = re.compile(r"\.ctempo-backup-\d{8}-\d{6}(-\d+)?$")
+BACKUP_SUFFIX = re.compile(r"\.ctempo-backup-\d{8}-\d{6}Z?(-\d+)?$")
 
 
 def _v1_key(rec):
@@ -403,8 +405,15 @@ def installed_records(state):
 
 def _backup_order(name):
     """Sort key of a backup name: its time, then its sequence number ("-10" after "-9")."""
-    m = re.search(r"-(\d{8})-(\d{6})(?:-(\d+))?$", name)
-    return (m.group(1), m.group(2), int(m.group(3) or 0)) if m else ("", "", 0)
+    m = re.search(r"-(\d{8})-(\d{6})(Z?)(?:-(\d+))?$", name)
+    if not m:
+        return (float("-inf"), 0)
+    try:  # names ending in Z are UTC; older ones are local time
+        tt = time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+        t = calendar.timegm(tt) if m.group(3) else time.mktime(tt)
+    except (ValueError, OverflowError):
+        t = float("-inf")
+    return (t, int(m.group(4) or 0))
 
 
 def _original_from_backups(spath):
@@ -520,8 +529,12 @@ def install(args, out=print):
         if not claude_bin():
             out("  (claude is not on PATH: run these yourself later)")
     bin_dir = os.path.abspath(os.path.expanduser(args.bin_dir)) if args.bin_dir else None
-    if bin_dir:
-        out("Launcher: %s/ctempo -> %s -I -S %s" % (bin_dir, python, entry))
+    # Without --bin-dir, the launcher an earlier install wrote follows the new pin
+    # (one the user deleted since is not written again).
+    old_lp = load_state().get("launcher")
+    lp = os.path.join(bin_dir, "ctempo") if bin_dir else (old_lp if old_lp and os.path.exists(old_lp) else None)
+    if lp:
+        out("Launcher: %s -> %s -I -S %s" % (lp, python, entry))
     out("Runtime info for the mod: %s" % config.runtime_path())
     if not args.no_bootstrap:
         out("Profile: bootstrap the prior from ~/.claude/projects transcripts (timestamps and token counts only)")
@@ -584,21 +597,28 @@ def install(args, out=print):
         with open(config.runtime_path(), "w", encoding="utf-8") as f:
             json.dump(runtime_info(python, entry), f, indent=2)
         config.write_defaults()
-        if bin_dir:
-            lp = os.path.join(bin_dir, "ctempo")
+        if lp:
             try:
-                os.makedirs(bin_dir, exist_ok=True)
+                if bin_dir:
+                    os.makedirs(bin_dir, exist_ok=True)
                 if not os.path.exists(lp) or LAUNCHER_MARK in read_text(lp):
                     with open(lp, "w", encoding="utf-8") as f:
                         f.write(launcher_text(python, entry))
                     os.chmod(lp, 0o755)
                     state["launcher"] = lp
                     out("Wrote launcher %s" % lp)
+                    # Only the newest launcher is ctempo's: one in an earlier --bin-dir goes.
+                    if old_lp and os.path.exists(old_lp) and os.path.realpath(old_lp) != os.path.realpath(lp) \
+                            and LAUNCHER_MARK in read_text(old_lp):
+                        os.remove(old_lp)
+                        out("Removed launcher %s" % old_lp)
                 else:
                     out("Skipped launcher: %s exists and is not ours" % lp)
             except OSError as e:
                 out("Skipped launcher: %s" % e)
                 rc = 1
+        elif old_lp:
+            state.pop("launcher", None)  # the user deleted it
         if use_mod:
             m = state.get("mod") or {}
             # No snapshot yet (or an early mod entry without one), or a manual mod
@@ -641,7 +661,6 @@ def install(args, out=print):
                 out("  claude not on PATH: mod not installed")
             if _peek(us) != before or _mod_listed(us):
                 state["mod"].pop("manual", None)  # the plugin CLI has written there
-            _note_keys(state["mod"])
             state["mod"].update(marketplace=MARKETPLACE, plugin=PLUGIN_ID, root=root)
     finally:
         save_state(state)
@@ -717,43 +736,20 @@ def _listed_mod():
     return {"user_settings": us, "had_file": True, "had_keys": _user_keys(obj)}
 
 
-def _key_names(obj):
-    """The entry names in each plugin key (None when the key is absent)."""
-    return {k: sorted(obj[k]) if isinstance(obj.get(k), dict) else obj.get(k) for k in PLUGIN_KEYS}
-
-
-def _note_keys(mod):
-    """Remember the plugin keys' entries as ctempo saw them, so a later look
-    can tell a change made out of its sight."""
-    try:
-        mod["seen_keys"] = _key_names(read_settings(mod["user_settings"])[0])
-    except (KeyError, TypeError, OSError, ValueError):
-        pass
-
-
 def _forget_keys(mod, out_of_sight=False):
     """A plugin key the user file no longer holds at all (the user deleted or
     blanked the file since) is not the user's: tidy it away once empty. A key
     holding only ctempo's entry counts as gone only when the plugin CLI wrote
-    it out of ctempo's sight (a manual mod whose commands the user ran, or
-    entries that changed since ctempo last looked): when ctempo ran the
-    commands, that is just the user's own empty key with the mod in."""
+    it out of ctempo's sight (a manual mod whose commands the user ran): when
+    ctempo ran the commands, that is just the user's own empty key with the
+    mod in, also after the user added and removed other plugins since."""
     try:
         obj = read_settings(mod["user_settings"])[0]
     except (KeyError, TypeError, OSError, ValueError):
         return
-    seen, names = mod.get("seen_keys"), _key_names(obj)
-
-    def users(k):
-        if k not in obj:
-            return False
-        only_ours = isinstance(obj[k], dict) and list(obj[k]) == [OWN_ENTRY[k]]
-        moved = isinstance(seen, dict) and names[k] != seen.get(k)
-        return not (only_ours and (out_of_sight or moved))
-
+    now = _user_keys(obj) if out_of_sight else {k: k in obj for k in PLUGIN_KEYS}
     if mod.get("had_keys"):
-        mod["had_keys"] = {k: bool(had) and users(k) for k, had in mod["had_keys"].items()}
-    mod["seen_keys"] = names
+        mod["had_keys"] = {k: bool(had) and now.get(k, False) for k, had in mod["had_keys"].items()}
 
 
 def _cli_wrote(mod):
@@ -899,8 +895,6 @@ def uninstall(args, out=print):
         out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
         mod_ok = mod_ok and _done(code, so, se)
     untouched = untouched and _peek(us) == before
-    if cmds and not mod_ok:
-        _note_keys(mod)  # the mod stays: what its failed commands left is what ctempo saw
     if os.path.exists(real):
         obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten (or created) it
         cur = obj.get("statusLine")

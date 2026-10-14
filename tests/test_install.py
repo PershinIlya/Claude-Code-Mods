@@ -1,12 +1,14 @@
 """install / uninstall on throwaway settings files."""
 
 import argparse
+import contextlib
 import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
@@ -68,6 +70,17 @@ def args(settings, **kw):
              no_bootstrap=True)
     a.update(kw)
     return argparse.Namespace(**a)
+
+
+@contextlib.contextmanager
+def time_zone(tz):
+    """Local time in another time zone (a POSIX TZ value): the wall clock moves, time does not."""
+    try:
+        with mock.patch.dict(os.environ, {"TZ": tz}):
+            time.tzset()
+            yield
+    finally:
+        time.tzset()
 
 
 class Install(unittest.TestCase):
@@ -1394,6 +1407,101 @@ class Install(unittest.TestCase):
             rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.read(), before)
+
+    # -- eighth review ---------------------------------------------------------------
+    def test_launcher_follows_a_repin_and_only_the_newest_is_ctempos(self):
+        # Review 8 (delta-install#0): a repin without --bin-dir left the launcher running the
+        # old interpreter, and a launcher in an earlier --bin-dir outlived the full uninstall.
+        before = self.write(SETTINGS)
+        first, second = os.path.join(self.dir, "bin"), os.path.join(self.dir, "bin2")
+        lp1, lp2 = os.path.join(first, "ctempo"), os.path.join(second, "ctempo")
+        alt = self.alt_python()
+        self.run_cmd(install.install, args(self.path, apply=True, bin_dir=first))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=alt))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(install.read_text(lp1), install.launcher_text(alt, install.entry_path()))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=second))
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(lp1), out)
+        self.assertEqual(install.read_text(lp2), install.launcher_text(sys.executable, install.entry_path()))
+        os.remove(lp2)  # the user deleted it: only --bin-dir brings it back
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=alt))
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(lp2), out)
+        self.assertNotIn("launcher", install.load_state())
+        # A file the user put in a launcher's place is theirs: never rewritten or removed.
+        self.run_cmd(install.install, args(self.path, apply=True, bin_dir=first))
+        with open(lp1, "w") as f:
+            f.write("#!/bin/sh\necho mine\n")
+        self.run_cmd(install.install, args(self.path, apply=True, python=alt))
+        self.run_cmd(install.install, args(self.path, apply=True, bin_dir=second))
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(install.read_text(lp1), "#!/bin/sh\necho mine\n")
+        self.assertFalse(os.path.exists(lp2), out)
+        self.assertEqual(self.read(), before)
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
+    def test_backups_keep_their_order_when_the_clock_moves_west(self):
+        # Review 8 (delta-install#1): backups were named in local time, so after a move west
+        # (or the fall-back hour) a newer backup sorted before an older one, and an uninstall
+        # without install.json restored a statusLine the user had removed.
+        with time_zone("EST5"):  # New York
+            self.write(dict(SETTINGS, statusLine={"type": "command", "command": "~/bin/one.sh"}))
+            self.run_cmd(install.install, args(self.path, apply=True))
+            self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.write(SETTINGS)  # the user removed their statusLine
+        with time_zone("PST8"):  # Los Angeles, the same day
+            self.run_cmd(install.install, args(self.path, apply=True))
+            shutil.rmtree(self.home)  # install.json goes with the data folder
+            rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(json.loads(self.read()), SETTINGS)
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
+    def test_backups_named_in_utc_sort_among_older_local_time_names(self):
+        # Review 8 (delta-install#1): new backups are named in UTC (a Z marks them), older ones
+        # in local time; the order reads each name in its own time.
+        with time_zone("JST-9"):  # Tokyo, 9 hours ahead of UTC
+            for legacy, want in (("20261014-120000", "utc"), ("20261014-150000", "legacy")):
+                with self.subTest(legacy=legacy):
+                    self._reset()
+                    for name, cmd in ((legacy, "legacy"), ("20261014-050000Z", "utc")):
+                        with open(self.path + ".ctempo-backup-" + name, "w") as f:
+                            f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": cmd})))
+                    self.assertEqual(install._original_from_backups(self.path)[1]["command"], want)
+
+    def test_the_users_own_empty_plugin_key_survives_other_plugins_coming_and_going(self):
+        # Review 8 (delta-install#2): ctempo saw the user's key with another plugin in it, and the
+        # user then removed that plugin with the plugin CLI. Holding only ctempo's entry at the
+        # next look, the key counted as changed out of ctempo's sight, so uninstall removed it.
+        def other(add):
+            """The user installs or removes another plugin with the plugin CLI."""
+            obj = json.loads(self.read())
+            if add:
+                obj["enabledPlugins"]["other@mkt2"] = True
+            else:
+                obj["enabledPlugins"] = {k: v for k, v in obj["enabledPlugins"].items() if not k.startswith("other@")}
+            with open(self.path, "w") as f:
+                f.write(json.dumps(obj, indent=2))
+
+        empty = '{\n  "model": "opus",\n  "enabledPlugins": {}\n}\n'
+        listed = '{\n  "model": "opus",\n  "enabledPlugins": {"other@mkt": true}\n}\n'
+        for before, steps in ((empty, ("iU", "iP", "add", "uP", "remove", "uU")), (listed, ("iU", "remove", "uU")),
+                              (listed, ("iP", "remove", "uP")), (empty, ("iP", "add", "iP", "remove", "uP"))):
+            with self.subTest(steps=steps):
+                self._reset()
+                proj = self._proj()
+                with self._user_file(before):
+                    for s in steps:
+                        if s in ("add", "remove"):
+                            other(s == "add")
+                        else:
+                            self.assertEqual(self._steps(proj, s), [0])
+                self.assertEqual(json.loads(self.read()), {"model": "opus", "enabledPlugins": {}})
+                if before == empty:
+                    self.assertEqual(self.read(), before)
+                self._assert_clean(proj)
 
 
 if __name__ == "__main__":
