@@ -224,12 +224,15 @@ def cmd_profile(args, cfg):
             return 0
         rows = profile.heatmap_rows(w)
         top = max(max(r) for r in rows) or 1.0
+        low = min(min(r) for r in rows)
+        flat = top - low < 0.25  # within 25% of uniform everywhere: nothing to show
         print("Hour-of-week profile (%s); darker = larger share of a week's spend" % info["source"])
         print("      " + "".join("%-3d" % h if h % 3 == 0 else "" for h in range(24)))
         for d, r in enumerate(rows):
-            cells = "".join(SHADES[min(4, int(x / top * 4.999))] for x in r)
+            cells = "".join("·" if flat else SHADES[min(4, int((x - low) / (top - low) * 4.999))] for x in r)
             print("  %s %s  %4.1f%%" % (profile.DAYS[d], cells, sum(r) / 168 * 100))
-        print("  (each cell = 1 hour; day totals at the right; uniform would be 14.3% a day)")
+        print("  (each cell = 1 hour; day totals at the right; uniform would be 14.3%% a day%s)" % (
+            "; flat so far: no hour stands out yet" if flat else ""))
         print("Awake hours per week: %d of 168" % info["awake_hours"])
         if prof.prior_meta:
             m = prof.prior_meta
