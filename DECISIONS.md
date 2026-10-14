@@ -54,15 +54,21 @@ OAuth token (Keychain item "Claude Code-credentials"), it can be rate limited
 home directory, because Claude Code passes settings.json `env` values as
 written and the statusLine runs in each session's folder), WAL,
 `synchronous=NORMAL`, busy timeout 250 ms, schema version in `PRAGMA
-user_version`. Tables: `samples(ts, window, used_pct, resets_at, source,
-session_id, flag, window_id)` (the brief's columns plus `flag` and
-`window_id`), `windows` (one row per window instance: start, reset, first/last
-seen, last and max used, closed_at, unused_at_close, close_reason), `readers`
-(each session's last reading, for freshness), `kinds` (every rate-limit kind
-seen, with source and count), `meta` (profile, counters, rejections). One
-`BEGIN IMMEDIATE` transaction per ingest. Any `sqlite3.OperationalError`
-(locked) skips the write and still renders; a broken database falls back to a
-line built from the payload alone.
+user_version`. The first open of a new database waits up to the busy timeout
+for another opener's switch to WAL. SQLite answers a concurrent switch with
+"locked" at once, without the timeout, so when every open session re-rendered
+at install, some fell back to the bare line and lost their reading (found in
+review). Tables: `samples(ts, window, used_pct, resets_at, source, session_id,
+flag, window_id)` (the brief's columns plus `flag` and `window_id`), `windows`
+(one row per window instance: start, reset, first/last seen, last and max
+used, closed_at, unused_at_close, close_reason), `readers` (each session's
+last reading, for freshness), `kinds` (every rate-limit kind seen, with source
+and count), `meta` (profile, counters, rejections). One `BEGIN IMMEDIATE`
+transaction per ingest. Any `sqlite3.OperationalError` (locked) skips the
+write and still renders; when the skipped write would have opened a new window
+(no open instance whose reset is still ahead), that window shows the payload's
+level and reset only, with no pace math, as the bare line does; a broken
+database falls back to a line built from the payload alone.
 
 **D-06. Freshness.** The statusLine payload carries the rate limits from the
 session's *last API response*. An idle session re-renders every 60 s with an
@@ -114,7 +120,14 @@ run must itself be 15 points down, which closes ccpace's over-count case (50
 then 30, 48). A fresh reading with an *earlier* `resets_at` is an anomaly too
 ("shift"): if it is sustained, the open instance came from a bogus later
 reset, and the real window, closed by it, is reopened instead of being split
-in two. The superseded instance stays closed with reason `shift`. It never
+in two. One fresh reading undoes it when it carries the resets_at of the
+window that the bogus instance's rollover closed and comes from the session
+whose reading opened that instance: one reading did the damage, and a maxed or
+idle session repeats its real reading only as heartbeats, so the second fresh
+one never came. The line then kept the bogus reset time past the real reset,
+and `report` counted the window twice (found in review). From any other
+session it still takes `drop_samples`, since that session may lag a real early
+reset. The superseded instance stays closed with reason `shift`. It never
 ended, so `report`, the profile's points-vs-pace table, the typical week and
 the weekly lookback all leave it out.
 
@@ -279,7 +292,9 @@ pace), for slow down without a dry time, or at or above a target set below 100
 whatever the verdict (an idle window above its target was green, found in
 review); bold red when it runs dry with a slow down verdict, or is maxed; and
 green (an addition to the brief) when a window is in its tail with at least
-`min_free` points about to expire, never while the 5h burn rate is unknown
+`min_free` points about to expire below its target (max(0, target -
+projected): a target below 100 keeps a reserve, and green below the target
+invited spending it, found in review), never while the 5h burn rate is unknown
 (D-11), whatever `min_free` (0 included), and never for 0 points. At target
 100 every slow down runs dry, so yellow was unreachable at the defaults until
 red was made to need both (found in review). `NO_COLOR` and `TERM=dumb`
@@ -301,9 +316,14 @@ command inside ours (`--compose '<old command>'`, shell-quoted), so
 first, in its own process group, with the same stdin, and runs in parallel
 with ctempo's own work; its output comes first and our segment is appended to
 its last line (two spaces) or put on a new line when that would exceed
-`COLUMNS`. Timeout 1.5 s, then it is killed with its children and only our
-segment shows. `CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces
-instead. `refreshInterval` becomes 60, or stays lower if the old one was lower.
+`COLUMNS`. Its output is complete once it has exited and its stdout has closed
+or stayed quiet for 500 ms (Claude Code waits the same for a hook's remaining
+output); a background job it started may keep stdout open, and is left
+running. Timeout 1.5 s (`compose.timeout_ms`, counted from ctempo's start): a
+command still running then is killed with its children and only our segment
+shows; one that already exited keeps the output that arrived.
+`CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces instead.
+`refreshInterval` becomes 60, or stays lower if the old one was lower.
 
 **D-19. The mod.** Thin: it builds the statusLine-shaped payload from
 `rateLimits`, runs `python -I -S bin/ctempo statusline --source mod --format
@@ -341,20 +361,32 @@ since the last install becomes the new original, and so does a command the
 user put in ctempo's `--compose` argument, also when there was no statusLine
 before ctempo (then without the `refreshInterval` ctempo added; uninstall
 restores it, and a repin or `--replace` records it first, also into a record
-rebuilt after install.json was lost, where it wins over a backup); ctempo's
-own command is never recorded or restored as the original (a pre-ctempo
-backup, where a blank one means there was no statusLine, or `--compose` is
-used instead). Backups are created exclusively and never overwritten.
-`uninstall` asks which file when several are installed and never creates a
-missing file. Records are matched by real path, so a symlinked settings file
-is one record; a version-1 record with a relative path is recovered from its
-backup's name, and one that version 1 already uninstalled is dropped. If the
-plugin commands fail during uninstall (claude missing or hanging), the mod
-record and `runtime.json` are kept and uninstall exits 1 so a rerun retries
-(the warning says the mod may still be installed). When claude is not on PATH
-at install, install prints the plugin commands for the user to run and still
-records the mod (as manual, with the user-file snapshot), so uninstall runs
-the reverse commands. A mod stays manual until ctempo sees the plugin CLI
+rebuilt after install.json was lost; without a record it wins over a backup,
+at a repin and at uninstall alike, and the `--compose` of a newer backup that
+holds ctempo's command, as the one `--replace` takes, wins over an older
+backup from before ctempo, or stands in for one, then with the statusLine's
+other keys as ctempo ran it); ctempo's own command is never recorded or
+restored as the original (a pre-ctempo backup, where a blank one means there
+was no statusLine, or `--compose` is used instead). Backups are created
+exclusively and never overwritten. `uninstall` asks which file when several
+are installed and never creates a missing file. Records are matched by real
+path, so a symlinked settings file is one record; a version-1 record with a
+relative path is recovered from its backup's name, and one that version 1
+already uninstalled is dropped. If the plugin commands fail during uninstall
+(claude missing or hanging), the mod record and `runtime.json` are kept and
+uninstall exits 1 so a rerun retries (the warning says the mod may still be
+installed). `uninstall --no-mod` keeps them too, and the launcher (the kept
+mod reads `runtime.json`); they go with the mod. When install.json has no mod
+record (the data folder was deleted, or another `CTEMPO_HOME`) but the user
+settings file lists ctempo's plugin or its marketplace, uninstall rebuilds the
+record from that file and says so, then removes the mod as usual (`--no-mod`
+keeps it); with no snapshot left, that file is tidied by keys (a key that
+holds only ctempo's entry is not the user's). A version-1 mod record names no
+user file: its commands edited the default one, so that file's record is kept
+through a run that leaves the mod, and goes with the mod. When claude is not
+on PATH at install, install prints the plugin commands for the user to run and
+still records the mod (as manual, with the user-file snapshot), so uninstall
+runs the reverse commands. A mod stays manual until ctempo sees the plugin CLI
 write to the user file: the mod listed there at any install or uninstall, or
 the file changed by a plugin command ctempo ran (commands that time out leave
 it manual). A later install that finds claude on PATH while a manual mod's
@@ -385,30 +417,44 @@ ordered by their time and sequence number, never as strings. `uninstall`
 restores the original `statusLine` (or removes it), removes `enabledPlugins` /
 `extraKnownMarketplaces` if they were not the user's (absent before, or
 holding only ctempo's own entry because the commands were run by hand; a key
-the user file no longer holds of its own when ctempo next looks, as after the
-user deleted or blanked the file, stops counting as theirs) and the plugin CLI
-left them empty, and when the result equals the backup (a blank backup counts
-as `{}`, as on install) it writes the backup's bytes, so an untouched file
-comes back byte for byte (the test suite checks four formatting styles and
-blank files). The mod is installed with `claude plugin marketplace add <repo>`
-and `claude plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips
-it. `--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned
-interpreter.
+that ctempo next finds gone, as after the user deleted or blanked the file, or
+holding only ctempo's entry after a change made out of its sight, stops
+counting as theirs; ctempo remembers the plugin keys' entries as it last saw
+them for this. A user's own empty key with the mod in keeps counting: the
+plugin CLI leaves `{}` after removing its last plugin, so many files hold one,
+and uninstall used to remove it, found in review) and the plugin CLI left them
+empty, and when the result equals the backup (a blank backup counts as `{}`,
+as on install) it writes the backup's bytes, so an untouched file comes back
+byte for byte (the test suite checks four formatting styles and blank files).
+The mod is installed with `claude plugin marketplace add <repo>` and `claude
+plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips it.
+`--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned interpreter.
 
 ## The scavenger hook
 
 **D-20. `ctempo check`.** Exit 0 and `"ok": true` when spare quota can be
 harvested now, 1 otherwise, JSON on stdout either way. A 5h window is
-harvestable when it is in its tail (`--tail 5h=60m`), its projected unused is
-at least `--min-free` (default 10) and at least that much is free now, and the
-weekly window would not run dry or exceed its target if that leftover were
-spent (priced with the exchange rate; while that is unknown, at its clamp
-maximum of 50 weekly points per 5h window, and the JSON says
-`"exchange_rate_assumed": true`, only when a 5h leftover was priced that way).
-The weekly window is harvestable when it is in its tail (`week=2d`) with at
-least `min-free` projected to expire and the 5h window has room, both now and
-at the current burn rate (projected unused >= `min-free`): a scavenger must
-not starve interactive work. While the 5h burn rate is not known yet (D-11),
+harvestable when it is in its tail (`--tail 5h=60m`), its projected unused
+below its target (max(0, target - projected), `spare` in the JSON) is at least
+`--min-free` (default 10) and at least that much is free below the target now
+(target - used), and the weekly window would not run dry or exceed its target
+if that spare were spent (priced with the exchange rate; while that is
+unknown, at its clamp maximum of 50 weekly points per 5h window, and the JSON
+says `"exchange_rate_assumed": true`, only when a 5h leftover was priced that
+way). The weekly window is harvestable when it is in its tail (`week=2d`) with
+at least `min-free` projected to expire below its target and the 5h window has
+room below its own target, both now and at the current burn rate (projected
+unused >= `min-free`): a scavenger must not starve interactive work. What is
+spare is measured against each window's target, not 100, as for green (D-16);
+at target 100 nothing changes. A window at or above a target below 100, or
+with a slow down verdict, is never harvestable, and the reasons say so ("5h
+window is at or above its 90% target", "weekly window is spending faster than
+its 85% target allows (slow down)"). check used to say go on the reserve that
+a target below 100 keeps while the line was yellow, and one JSON both refused
+a 5h leftover as "already tight" and said go on the week's surplus (found in
+review). `projected_unused` and `free_now` stay out of 100; each window also
+reports its `target` and `spare`, and a go reason adds "below its N% target"
+when the target is below 100. While the 5h burn rate is not known yet (D-11),
 the 5h leftover is unknown: `projected_unused` and the weekly cost are null,
 nothing is priced (`exchange_rate_assumed` is false), the reason is "5h burn
 rate not known yet" (beside "already tight" when the week is tight on its own,
@@ -466,6 +512,14 @@ two `check`/`now` texts, and six install sequences) and rejected 3, a
 model-based fuzzer over install and uninstall (tests/test_install_fuzz.py)
 found 3 more classes, and the fixers' own notes 5 more (a leftover of 0
 counted as spare, a nan duration, a user file that is not valid JSON in two
-places, backups sorted as strings). All 87 are fixed, each with a regression
-test that was checked to fail on the code before its fix. Details in the
-commit messages from "Fix review findings" on.
+places, backups sorted as strings); a seventh confirmed 9 (10 reports: spare
+quota measured against 100 instead of the target, a bogus later reset that a
+maxed or idle session never undid, concurrent first opens racing the switch to
+WAL, the composer waiting for EOF behind a background job, 0% shown when a
+write failed at a rollover, and four install cases) and rejected 1, the
+fuzzer, extended with a `runtime.json` check after every step, a deleted data
+folder, `--compose` edits and the plugin commands run by hand, found 2 more,
+and a fixer's notes 1 more (the user's own empty plugin key removed by
+uninstall). All 99 are fixed, each with a regression test that was checked to
+fail on the code before its fix. Details in the commit messages from "Fix
+review findings" on.

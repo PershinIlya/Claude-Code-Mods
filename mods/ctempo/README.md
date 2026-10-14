@@ -27,10 +27,10 @@ claude plugin install ctempo@claude-tempo
 Then `/reload-plugins` in an open session, or start a new one.
 
 `ctempo uninstall --apply` removes it again, including when `ctempo install`
-only printed these commands because `claude` was not on PATH. A mod added
-without `ctempo install` is removed with
-`claude plugin uninstall ctempo@claude-tempo` and
-`claude plugin marketplace remove claude-tempo`.
+only printed these commands because `claude` was not on PATH. It also removes
+a mod added without `ctempo install` (it finds it in your user settings); or
+remove that with `claude plugin uninstall ctempo@claude-tempo` and `claude
+plugin marketplace remove claude-tempo`.
 
 Develop: `claude plugin validate .` and `claude plugin test .` from this
 folder.

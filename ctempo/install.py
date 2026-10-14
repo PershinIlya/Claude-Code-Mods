@@ -625,7 +625,7 @@ def install(args, out=print):
                     # Kept from before this snapshot, and the plugin CLI has not
                     # written there since: the snapshot is the newer baseline.
                     _drop_records(state, os.path.realpath(us))
-            _forget_keys(state["mod"])
+            _forget_keys(state["mod"], bool(state["mod"].get("manual")))
             us = state["mod"]["user_settings"]
             before = _peek(us)
             if claude_bin():
@@ -641,6 +641,7 @@ def install(args, out=print):
                 out("  claude not on PATH: mod not installed")
             if _peek(us) != before or _mod_listed(us):
                 state["mod"].pop("manual", None)  # the plugin CLI has written there
+            _note_keys(state["mod"])
             state["mod"].update(marketplace=MARKETPLACE, plugin=PLUGIN_ID, root=root)
     finally:
         save_state(state)
@@ -716,15 +717,43 @@ def _listed_mod():
     return {"user_settings": us, "had_file": True, "had_keys": _user_keys(obj)}
 
 
-def _forget_keys(mod):
-    """A plugin key the user file does not hold of its own now (the user deleted
-    or blanked the file since) is not the user's: tidy it away once empty."""
+def _key_names(obj):
+    """The entry names in each plugin key (None when the key is absent)."""
+    return {k: sorted(obj[k]) if isinstance(obj.get(k), dict) else obj.get(k) for k in PLUGIN_KEYS}
+
+
+def _note_keys(mod):
+    """Remember the plugin keys' entries as ctempo saw them, so a later look
+    can tell a change made out of its sight."""
     try:
-        now = _user_keys(read_settings(mod["user_settings"])[0])
+        mod["seen_keys"] = _key_names(read_settings(mod["user_settings"])[0])
+    except (KeyError, TypeError, OSError, ValueError):
+        pass
+
+
+def _forget_keys(mod, out_of_sight=False):
+    """A plugin key the user file no longer holds at all (the user deleted or
+    blanked the file since) is not the user's: tidy it away once empty. A key
+    holding only ctempo's entry counts as gone only when the plugin CLI wrote
+    it out of ctempo's sight (a manual mod whose commands the user ran, or
+    entries that changed since ctempo last looked): when ctempo ran the
+    commands, that is just the user's own empty key with the mod in."""
+    try:
+        obj = read_settings(mod["user_settings"])[0]
     except (KeyError, TypeError, OSError, ValueError):
         return
+    seen, names = mod.get("seen_keys"), _key_names(obj)
+
+    def users(k):
+        if k not in obj:
+            return False
+        only_ours = isinstance(obj[k], dict) and list(obj[k]) == [OWN_ENTRY[k]]
+        moved = isinstance(seen, dict) and names[k] != seen.get(k)
+        return not (only_ours and (out_of_sight or moved))
+
     if mod.get("had_keys"):
-        mod["had_keys"] = {k: bool(had) and now.get(k, False) for k, had in mod["had_keys"].items()}
+        mod["had_keys"] = {k: bool(had) and users(k) for k, had in mod["had_keys"].items()}
+    mod["seen_keys"] = names
 
 
 def _cli_wrote(mod):
@@ -810,9 +839,10 @@ def uninstall(args, out=print):
         # and runtime.json with it).
         mod = state["mod"] = rebuilt
     us = mod.get("user_settings")
+    out_of_sight = bool(mod.get("manual"))
     if mod.get("manual") and _mod_listed(us):
         mod.pop("manual")  # the user ran the printed commands: the plugin CLI has written there
-    _forget_keys(mod)
+    _forget_keys(mod, out_of_sight)
     if mod.get("had_keys") and os.path.realpath(us or "") == real:
         # This is the file the plugin CLI edits: its record of plugin keys counts.
         hk = dict(rec.get("had_keys") or {})
@@ -869,6 +899,8 @@ def uninstall(args, out=print):
         out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
         mod_ok = mod_ok and _done(code, so, se)
     untouched = untouched and _peek(us) == before
+    if cmds and not mod_ok:
+        _note_keys(mod)  # the mod stays: what its failed commands left is what ctempo saw
     if os.path.exists(real):
         obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten (or created) it
         cur = obj.get("statusLine")
