@@ -1,0 +1,12 @@
+{
+  "name": "claude-tempo",
+  "description": "Local marketplace for the ctempo usage pace mod",
+  "owner": { "name": "ctempo" },
+  "plugins": [
+    {
+      "name": "ctempo",
+      "source": "./mods/ctempo",
+      "description": "Claude usage pace (5-hour and weekly) above the prompt, drawn from the ctempo CLI"
+    }
+  ]
+}
