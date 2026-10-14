@@ -405,7 +405,8 @@ def _original_from_backups(spath):
         return None
     for n in names:
         try:
-            obj = json.loads(read_text(os.path.join(folder, n)))
+            text = read_text(os.path.join(folder, n))
+            obj = json.loads(text) if text.strip() else {}  # a blank file is {}, as in read_settings
         except (OSError, ValueError):
             continue
         if not isinstance(obj, dict):
@@ -438,6 +439,11 @@ def _with_compose(rec, cur):
     user may have changed it there, where settings.json shows what runs (D-17)."""
     comp = compose_of(cur["command"]) if isinstance(cur, dict) and isinstance(cur.get("command"), str) else None
     orig = rec.get("original_statusLine")
+    if comp and not is_ours(comp) and rec.get("had_statusLine") is False:
+        # No statusLine before ctempo, which then composes nothing: the user put it
+        # there. Keep their keys, not the refreshInterval ctempo added.
+        sl = {k: v for k, v in cur.items() if k != "refreshInterval"}
+        return dict(rec, had_statusLine=True, original_statusLine=dict(sl, command=comp))
     if comp and not is_ours(comp) and rec.get("had_statusLine") is True and isinstance(orig, dict) \
             and not is_ours(orig.get("command")) and orig.get("command") != comp:
         return dict(rec, original_statusLine=dict(orig, command=comp))
@@ -512,11 +518,13 @@ def install(args, out=print):
         backup = make_backup(spath) if raw is not None else None
         user_file = os.path.realpath((state.get("mod") or {}).get("user_settings") or "") == os.path.realpath(spath)
         if (rec is None or not rec.get("installed")) and user_file and raw is not None:
-            # The plugin CLI has written here already: the file to come back to
-            # is this file's kept record, else the snapshot taken before that.
+            # The mod is in already, so the plugin CLI may have written here: the
+            # file to come back to is this one, else (pristine) the one before the
+            # mod, from this file's kept record or the snapshot taken then.
             base = rec if rec is not None else state["mod"]
-            rec = {"settings_path": spath, "had_file": base.get("had_file"), "had_keys": dict(base.get("had_keys") or {}),
-                   "backup_path": base.get("backup_path"), "original_sha256": base.get("original_sha256")}
+            pristine = base.get("pristine") or {k: base.get(k) for k in ("had_file", "backup_path", "original_sha256")}
+            rec = {"settings_path": spath, "had_file": True, "had_keys": dict(base.get("had_keys") or {}),
+                   "backup_path": backup, "original_sha256": sha(raw), "pristine": pristine}
             rec.update(_statusline_part(obj, spath))
         elif rec is None or not rec.get("installed"):
             rec = {"settings_path": spath, "had_file": raw is not None, "had_keys": {k: (k in obj) for k in PLUGIN_KEYS}}
@@ -566,7 +574,10 @@ def install(args, out=print):
                 out("Skipped launcher: %s" % e)
                 rc = 1
         if use_mod:
-            if not (state.get("mod") or {}).get("user_settings"):  # none yet, or an early one without it
+            m = state.get("mod") or {}
+            # No snapshot yet (or an early mod entry without one), or a manual mod
+            # whose commands never ran: the user file may have changed since.
+            if not m.get("user_settings") or (m.get("manual") and claude_bin() and not _cli_wrote(m)):
                 # The plugin CLI edits the user settings file: remember
                 # which plugin keys it had, so uninstall can tidy up there.
                 us = settings_path(None)
@@ -641,15 +652,32 @@ def _mod_listed(us):
     return (isinstance(ep, dict) and PLUGIN_ID in ep) or (isinstance(km, dict) and MARKETPLACE in km)
 
 
-def _tidy_user_settings(state, mod, skip_real):
+def _cli_wrote(mod):
+    """Whether the plugin CLI has written to the user settings file: it lists the
+    mod, or has a plugin key it did not have before (True when it cannot tell)."""
+    us = mod.get("user_settings")
+    if _mod_listed(us):
+        return True
+    try:
+        obj, _, _ = read_settings(us)
+    except (OSError, ValueError):
+        return True
+    return any(k in obj and not had for k, had in (mod.get("had_keys") or {}).items())
+
+
+def _tidy_user_settings(state, mod, skip_real, touched=True):
     """Undo what the plugin CLI left in the user settings file: back to its
-    backup's bytes when nothing else changed there, else drop empty keys."""
+    backup's bytes when nothing else changed there, else drop empty keys.
+    When the plugin CLI never wrote there, only the file's kept record goes."""
     us = mod.get("user_settings")
     if not us or os.path.realpath(us) == skip_real or not os.path.exists(os.path.realpath(us)):
         return None
     key, rec = find_record(state, us)
     if rec is not None and rec.get("installed"):
         return None  # ctempo's statusLine is still there: its own uninstall restores the file
+    if not touched:
+        _drop_records(state, os.path.realpath(us))
+        return None
     # Its own record (a statusLine uninstalled earlier, kept for this), else
     # the snapshot taken before the plugin CLI first wrote to it.
     base = dict(rec) if rec is not None else {
@@ -718,9 +746,13 @@ def uninstall(args, out=print):
     cmds = unmod_commands() if (mod and not args.no_mod and not others) else []
     for c in cmds:
         out("  claude " + " ".join(c))
-    # Install left these commands to the user (claude was not on PATH). With
-    # claude still missing and no trace of them in the user file, they never ran.
-    never_ran = bool(cmds and mod.get("manual")) and not claude_bin() and not _mod_listed(mod.get("user_settings"))
+    # With claude not on PATH and no trace of the mod in the user file (the
+    # commands never ran or failed, or the user undid them by hand), whatever
+    # the record says, there is nothing to undo.
+    never_ran = bool(cmds) and not claude_bin() and not _mod_listed(mod.get("user_settings"))
+    # Install left the commands to the user, who never ran them: the plugin CLI
+    # never wrote to the user file, so it is not ours to tidy.
+    untouched = bool(cmds and mod.get("manual")) and not _cli_wrote(mod)
     if never_ran:
         out("  (claude is not on PATH and %s lists no ctempo mod: nothing to undo)" % mod.get("user_settings"))
     cur = obj.get("statusLine") if obj else None
@@ -756,7 +788,7 @@ def uninstall(args, out=print):
                 atomic_write(spath, new_raw)
                 out("Restored %s" % spath)
     if cmds and mod_ok:
-        msg = _tidy_user_settings(state, mod, real)
+        msg = _tidy_user_settings(state, mod, real, touched=not untouched)
         if msg:
             out(msg)
     _drop_records(state, real)
@@ -768,7 +800,7 @@ def uninstall(args, out=print):
     rc = 0
     if not installed_records(state):
         if cmds and not mod_ok:
-            out("warning: the ctempo mod is still installed (the plugin commands failed). "
+            out("warning: the plugin commands failed, so the ctempo mod may still be installed. "
                 "Run `ctempo uninstall --apply` again with claude on PATH, or the commands above yourself.")
             rc = 1  # keep state["mod"] and runtime.json so a rerun retries
         else:
@@ -812,17 +844,21 @@ def restore(obj, raw, fmt, rec):
     for k, had in (rec.get("had_keys") or {}).items():
         if not had and k in new and new[k] in ({}, []):
             new.pop(k)
-    if rec.get("had_file") is False and not new:
+    pristine = rec.get("pristine") or {}
+    if (rec.get("had_file") is False or pristine.get("had_file") is False) and not new:
         return new, None
-    # Byte-exact when nothing else changed: hand back the backup's bytes.
-    backup = rec.get("backup_path")
-    if backup and os.path.exists(backup):
+    # Byte-exact when nothing else changed: hand back the backup's bytes (the
+    # file before this install, else the one before the mod).
+    for snap in (rec, pristine):
+        backup = snap.get("backup_path")
+        if not (backup and os.path.exists(backup)):
+            continue
         try:
             with open(backup, "rb") as f:
                 orig_bytes = f.read()
             text = orig_bytes.decode("utf-8")
             orig_obj = json.loads(text) if text.strip() else {}  # a blank file is {}, as in read_settings
-            if orig_obj == new and hashlib.sha256(orig_bytes).hexdigest() == rec.get("original_sha256"):
+            if orig_obj == new and hashlib.sha256(orig_bytes).hexdigest() == snap.get("original_sha256"):
                 return new, orig_bytes
         except (OSError, ValueError):
             pass
