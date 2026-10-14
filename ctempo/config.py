@@ -101,11 +101,30 @@ def claude_dir():
     return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
 
 
+def _compatible(default, value):
+    """A user value replaces a default only if it has the same kind, so a
+    typo in config.json falls back to the default instead of breaking."""
+    if default is None:
+        return True
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, (int, float)):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
+    if isinstance(default, str):
+        return isinstance(value, str)
+    if isinstance(default, list):
+        return isinstance(value, list)
+    return False
+
+
 def _merge(base, over):
     for k, v in over.items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
-            _merge(base[k], v)
-        else:
+        if k not in base:
+            base[k] = v  # unknown keys are kept for newer versions
+        elif isinstance(base[k], dict):
+            if isinstance(v, dict):
+                _merge(base[k], v)
+        elif _compatible(base[k], v):
             base[k] = v
     return base
 
