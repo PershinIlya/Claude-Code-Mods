@@ -8,7 +8,7 @@ both windows: how fast am I spending, how fast can I afford to, and where will
 I land at the reset.
 
 ```
-5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×0.8▼ →96% @Thu 09:00
+5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00
 ```
 
 No network, no token: it reads the rate limits Claude Code already hands to the
@@ -25,18 +25,21 @@ Python 3.8+ standard library only.
 | `→88%` | projected level at the reset at the current burn rate |
 | `dry 12:40` | instead of the projection: you hit 100% at 12:40, before the reset |
 | `idle ≤9%/h` | nothing spent in the last 20 minutes; you can afford up to 9 points an hour |
+| `≤24%/h` | no rate yet (a window's first minutes, or the first 5 minutes after work starts); you can afford up to 24 points an hour |
 | `@13:20` | reset time |
 | `wk 48%` | weekly window: 48% used |
 | `+3` | points versus your on-pace level (plus: ahead of your usual rhythm, minus: surplus) |
-| `×0.8▼` | weekly multiplier (same reading as above) |
-| `→96%` | projected weekly level at the reset; 100 minus this will expire |
+| `×1.1` | weekly multiplier (same reading as above; no glyph: on pace) |
+| `→95%` | projected weekly level at the reset; 100 minus this will expire |
 | `dry~Wed 14:00` | the week runs out on Wednesday around 14:00 |
 | `@Thu 09:00` | weekly reset |
 | `5h 0%` / `wk 0%` | no open window (the next message starts one) |
 
-Colors: dim when fine; **yellow** when you are above target pace; **red** when
-a window runs dry before its reset or is maxed; **green** when a window is in
-its last stretch (1 hour for 5h, 2 days for the week) with at least 10 points
+Colors: dim when fine; **yellow** when a window runs dry before its reset but
+the multiplier is still on pace (0.9 to 1, no glyph), or when you are above a
+target set below 100; **red** when a window runs dry before its reset and the
+verdict is slow down (`▼`), or it is maxed; **green** when a window is in its
+last stretch (1 hour for 5h, 2 days for the week) with at least 10 points
 about to expire. `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
 
 `ctempo now` prints the same with the reasoning behind every number.
@@ -52,24 +55,29 @@ about to expire. `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdic
   fades out, idle is 0, and spend in a gap you did not observe (claude.ai
   while Claude Code sat idle) is spread over the gap rather than shown as a
   sudden burst;
-- allowed rate = (target − used) / hours to reset (target defaults to 100);
+- allowed rate = max(0, target − used) / hours to reset (target defaults to
+  100);
 - multiplier = allowed / current;
 - projection = used + rate × hours left, capped at 100, with the time it hits
   100 if that comes first.
 
 **Weekly window**
 
-- profile `w(h)`: 168 hour-of-week bins, the expected share of a week's spend in
-  each hour. Prior from your transcripts (last 45 days, cost-weighted tokens),
-  updated from the observed weekly-% spend of each hour with a 14-day half-life,
-  off-hours floored at 0.15 of a typical awake hour;
+- profile `w(h)`: 168 hour-of-week bins, the expected share of a week's spend
+  in each hour. Prior from your transcripts (last 45 days, cost-weighted
+  tokens), updated from the observed weekly-% spend of each hour with a 14-day
+  half-life, off-hours floored at 0.15 of a typical awake hour;
 - `E` = Σ w(h) from now to the reset: the share of a week's spend still ahead;
 - on-pace level = target × (1 − E); delta = used − on-pace;
 - intensity = what you spent over your last 24 awake hours / what the profile
-  expected for those hours (at target pace);
+  expected for those hours (at target pace). Spend in a long gap you did not
+  observe is spread over the gap by the profile, so only its expected part
+  counts. Right after install the count starts at the first timed reading, and
+  until the level moves the whole window so far stands in;
 - projection = used + intensity × target × E; "dry" is where an hour-by-hour
   walk at that intensity crosses 100%;
-- multiplier = (target − used) / (intensity × target × E).
+- multiplier = max(0, target − used) / (intensity × target × E): 0 once you
+  are past a target below 100, as for the 5-hour window.
 
 Readings from idle sessions, the 5-minute wobble of `resets_at`, the
 `used_percentage` epoch leak (#52326), resets that keep the same `resets_at`,
@@ -96,7 +104,9 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
    it instead);
 3. installs the Desktop mod from the local marketplace in this repo:
    `claude plugin marketplace add <repo>` then
-   `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip);
+   `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip). If
+   `claude` is not on PATH, it prints the two commands for you to run, and
+   uninstall still undoes them;
 4. writes `~/.claude-tempo/runtime.json` (the mod reads it), a default
    `config.json`, and a `ctempo` launcher in `--bin-dir`;
 5. builds the profile prior from `~/.claude/projects` transcripts
@@ -113,8 +123,9 @@ ctempo uninstall --apply
 ```
 
 It uninstalls the mod and the marketplace, puts your previous `statusLine`
-back (or removes ctempo's), removes the launcher and `runtime.json`. If you did
-not change `settings.json` in between, the file comes back byte for byte (it is
+back (the command inside ctempo's `--compose` if you changed it there), or
+removes ctempo's, removes the launcher and `runtime.json`. If you did not
+change `settings.json` in between, the file comes back byte for byte (it is
 restored from the backup). Your history stays in `~/.claude-tempo/`; delete
 that folder yourself if you want it gone.
 
@@ -126,7 +137,7 @@ that folder yourself if you want it gone.
 | `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate |
 | `ctempo report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
 | `ctempo profile [--rebuild]` | hour-of-week heatmap, lightest awake blocks, points vs pace by day before reset |
-| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1 |
+| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data |
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
 | `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen |
@@ -151,7 +162,7 @@ leave out keeps its default):
 | `profile.override` | null | `{"work_days": [0,1,2,3,4], "wake_hours": [8, 23], "off_day_factor": 0.3, "mode": "prior"}`; days are 0 = Monday; mode `replace` ignores learning |
 | `reset.drop_points`, `reset.drop_samples` | 15, 2 | a sustained drop that counts as a reset |
 | `display.symbols` | `unicode` | `ascii` for `x ^ v ->` |
-| `display.max_width` | 80 | the line drops optional parts to fit |
+| `display.max_width` | 80 | the line drops optional parts to fit, then is cut with `…` (`...` in ascii mode); each part keeps its color |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
 | `mod.refresh_s` | 60 | how often the mod refreshes the band (15 to 3600) |
 | `compose.timeout_ms` | 1500 | how long your previous status line may take |
@@ -159,8 +170,11 @@ leave out keeps its default):
 
 `CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
 does not inherit your shell's environment, so if you move it, set it in
-`~/.claude/settings.json` under `env` too. Values of the wrong type or out of
-range fall back to the default or are clamped.
+`~/.claude/settings.json` under `env` too. Claude Code passes that value as
+written, so ctempo expands a leading `~` itself and takes a relative path from
+your home directory, never from the session's folder. The mod does not expand
+`~otheruser/...`: use an absolute path for that. Values of the wrong type or
+out of range fall back to the default or are clamped.
 
 ## Data and privacy
 
@@ -188,18 +202,18 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 142 tests, Python 3.8 to 3.13
-claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 9 tests
+python3 -m unittest discover -s tests -t .     # 177 tests, Python 3.8 to 3.13
+claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
 The suite feeds synthetic time series (steady burn, bursts, idle, a reset
 mid-series, two parallel sessions, missing windows, bogus `resets_at`, the
 epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
-throwaway settings files, including the byte-identical round trip (CRLF,
-mode, several settings files, a crash mid-install, a lost install record).
-Three adversarial review passes found 40 defects; each one has a regression
-test that fails on the code before its fix.
+throwaway settings files, including the byte-identical round trip (CRLF, mode,
+several settings files, a crash mid-install, a lost install record). Four
+adversarial review passes found 59 defects; each one has a regression test
+that fails on the code before its fix.
 
 ## Layout
 
