@@ -176,6 +176,35 @@ class LearnEdges(TempHome):
         b = profile.bin_of(t + 4 * H)  # Wednesday 16:00, well inside the new window
         self.assertAlmostEqual(prof.S[b] / prof.W[b], 1.0, places=6)
 
+    def test_light_users_early_reset_counts_from_zero_in_batch_and_incremental(self):
+        # Review 4 (weekly-profile#4): the same early reset as above, but the
+        # old window peaks at 12.5 (less than drop_points). The new window's
+        # 0.25 is not "about the same level", so it counts from 0 when learned
+        # in one batch (profile --rebuild) too, not as 0 until it passes 12.5.
+        from ctempo import ingest
+        from ctempo.store import Store
+
+        R = int(MON + 4 * D + 2 * H)  # resets Friday
+        t = MON + 2 * D + 12 * H  # Wednesday 12:00, at 10% and climbing 1 point an hour
+        R2 = int(MON + 9 * D + 14 * H)  # early reset 14:37, resets_at on the hour
+        rows = [(t + k * 900, 10 + k * 0.25, R) for k in range(11)]
+        rows += [(t + 2 * H + 37 * 60 + k * 900, k * 0.25, R2) for k in range(1, 17)]
+        for ts, used, r in rows:
+            self.feed(ts, week=(used, r))
+        batch = self.learned(t + 8 * H)
+        for b in (profile.bin_of(t + 3 * H), profile.bin_of(t + 4 * H), profile.bin_of(t + 5 * H)):
+            self.assertAlmostEqual(batch.S[b] / batch.W[b], 1.0, places=6)  # Wednesday 15:00, 16:00, 17:00
+        st = Store(os.path.join(self.dir, "incremental.db"))
+        inc = profile.Profile()
+        for ts, used, r in rows:  # learn after every reading, as the statusline would
+            got, rej, k = ingest.parse_payload({"rate_limits": {"seven_day": {"used_percentage": used, "resets_at": r}}}, ts)
+            ingest.record(st, got, ts, "test", "s1", self.cfg, rej, k)
+            profile.learn(st, inc, ts, self.cfg, profile.uniform())
+        st.close()
+        self.assertEqual(batch.processed_until, inc.processed_until)
+        self.assertAlmostEqual(sum(batch.S), sum(inc.S), places=6)
+        self.assertAlmostEqual(sum(batch.W), sum(inc.W), places=6)
+
     def test_batch_and_incremental_learning_agree_with_parallel_dips(self):
         from ctempo import ingest
         from ctempo.store import Store
