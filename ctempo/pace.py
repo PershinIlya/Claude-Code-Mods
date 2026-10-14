@@ -164,6 +164,7 @@ def five_hour(store, now, cfg, reading=None):
     v["rate"] = rate
     v["rate_source"] = source
     v["rate_points"] = len(inside) + 2
+    v["rate_since"] = since  # the fit start: `ctempo now` names why there is no rate
 
     allowed = max(0.0, tgt - used) / rem_h if rem_h > 0 else 0.0
     v["allowed"] = allowed
@@ -185,27 +186,40 @@ def five_hour(store, now, cfg, reading=None):
         v["verdict"] = verdict_for(mult, cfg)
     if used >= 100.0:
         v["verdict"] = "maxed"
-    proj = v["projected"] if v["projected"] is not None else used
-    v["unused_at_reset"] = max(0.0, 100.0 - proj)
+    if v["verdict"] == "unknown":
+        # No rate yet: the burn is unknown, not zero, and so is the leftover
+        # (100 - used would assume nothing more is spent).
+        v["unused_at_reset"] = None
+    else:
+        proj = v["projected"] if v["projected"] is not None else used
+        v["unused_at_reset"] = max(0.0, 100.0 - proj)
     v["in_tail"] = (reset - now) <= float(cfg["tail"]["five_hour_min"]) * 60
     v["severity"] = severity(v, cfg)
     return v
+
+
+def over_target(v):
+    """At or above a target set below 100: nothing left to allow."""
+    return v.get("target", 100.0) < 100.0 and v.get("used", 0.0) >= v["target"]
 
 
 def severity(v, cfg):
     """dim (fine), opportunity (spare quota about to expire), warn, alert.
 
     alert: maxed, or it runs dry before the reset with a slow down verdict.
-    warn: a milder overshoot (dry, but on pace), or slow down without a dry
-    time (a target below 100). At target 100 slow down always runs dry.
+    warn: a milder overshoot (dry, but on pace), slow down without a dry
+    time, or at or above a target below 100 whatever the verdict (idle
+    included). At target 100 slow down always runs dry.
+    opportunity: in the tail with at least min_free points projected to
+    expire; never while the leftover is unknown (no rate yet).
     """
     if not v.get("present"):
         return "dim"
     dry = v.get("cap_ts") is not None
     if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
         return "alert"
-    if dry or v["verdict"] == "slow_down":
+    if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
-    if v.get("in_tail") and v.get("unused_at_reset", 0) >= float(cfg["min_free"]):
+    if v.get("in_tail") and (v.get("unused_at_reset") or 0) >= float(cfg["min_free"]):
         return "opportunity"
     return "dim"

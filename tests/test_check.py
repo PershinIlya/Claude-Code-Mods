@@ -1,10 +1,11 @@
 """`ctempo check`: the scavenger's go / no-go."""
 
+import os
 import unittest
 
 from ctempo import commands
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
-from ctempo.store import HEARTBEAT
+from ctempo.store import HEARTBEAT, Store
 
 from .helpers import MON, H, D, TempHome
 
@@ -106,6 +107,57 @@ class Check(TempHome):
         self.assertFalse(res["ok"])
         self.assertAlmostEqual(res["data_age_s"], 3 * H)
         self.assertIn("no fresh reading in the last 30m", res["reasons"])
+
+    def test_no_5h_rate_yet_is_no_go(self):
+        # Review 5 (A-pace-display#0, X-integration#0, C-commands-config-mod#0):
+        # a 10:00-15:00 window spent elsewhere until Claude Code reads 80% at
+        # 14:10, then 2 points a minute (dry at 14:20). From the second real
+        # reading, 14:11, to 14:15 there is no rate (D-11). Its leftover was
+        # 100 - used, as if nothing more were spent: check said go for the 5h
+        # window, and for a week in its tail.
+        T = MON + 3 * D
+        r5 = int(T + 15 * H)
+        r7 = int(T + D + 14 * H)  # the week ends tomorrow 14:00: in its tail
+        t0 = T + 14 * H + 10 * M
+        self.known("s1")
+        for i in range(25, 0, -1):
+            self.feed(t0 - i * H, week=(40, r7))  # an idle week at 40%: 60 points to expire
+        unknown = 0
+        for ts in self.late_start(t0, 80, 2, 60, r5, week=(40, r7), renders=20):
+            res = self.result(ts)
+            f, k = res["five_hour"], res["seven_day"]
+            self.assertFalse(res["ok"], (ts - t0, res["reasons"]))
+            if f["verdict"] == "unknown":
+                unknown += 1
+                self.assertTrue(f["in_tail"])
+                self.assertIsNone(f["projected_unused"])
+                self.assertFalse(f["harvestable"])
+                self.assertIsNone(res["weekly_cost_of_5h_leftover"])
+                self.assertTrue(k["in_tail"])
+                self.assertGreaterEqual(k["projected_unused"], 10)
+                self.assertFalse(k["harvestable"])  # the 5h room test fails too
+                self.assertEqual(res["reasons"], ["5h burn rate not known yet"])
+        self.assertEqual(unknown, 12)  # 14:11:00 to 14:14:40, one render every 20 s
+
+    def test_no_5h_rate_yet_is_no_go_from_a_new_session(self):
+        # Review 5 (C-commands-config-mod#0, X-integration#0): the same from a
+        # new session, 40 min before the reset at 50% and 1 point every 20 s
+        # (180 %/h, dry 23 min before the reset); and 5 min before the hour
+        # at 70% and 1 point a minute.
+        T = MON + 3 * D
+        r5 = int(T + 15 * H)
+        for i, (t0, first, every) in enumerate(((T + 14 * H + 20 * M, 50, 20), (T + 14 * H + 5 * M, 70, 60))):
+            self.st.close()
+            self.st = Store(os.path.join(self.dir, "new-%d.db" % i))
+            unknown = 0
+            for ts in self.late_start(t0, first, 1, every, r5, renders=20):
+                res = self.result(ts)
+                if res["five_hour"]["verdict"] == "unknown":
+                    unknown += 1
+                    self.assertFalse(res["ok"], (i, ts - t0, res["reasons"]))
+                    self.assertIsNone(res["five_hour"]["projected_unused"])
+                    self.assertIn("5h burn rate not known yet", res["reasons"])
+            self.assertGreater(unknown, 0, i)
 
     def test_unknown_exchange_rate_prices_5h_leftover_at_its_maximum(self):
         # Review 4 (runtime-ui#3): until the exchange rate is published (the

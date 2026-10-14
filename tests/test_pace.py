@@ -1,9 +1,11 @@
 """5-hour math against hand-computed values."""
 
+import os
 import unittest
 
 from ctempo import pace
 from ctempo.config import FIVE_HOUR
+from ctempo.store import Store
 
 from .helpers import MON, H, TempHome
 
@@ -244,6 +246,35 @@ class FiveHour(TempHome):
         self.assertEqual(set(verdicts[first_down:]), {"slow_down"})
         self.assertAlmostEqual(out[-1][1]["rate"], 30.0, delta=1.0)
 
+    def test_no_rate_yet_in_the_tail_is_never_green(self):
+        # Review 5 (A-pace-display#0, X-integration#0, C-commands-config-mod#0):
+        # a 10:00-15:00 window spent elsewhere until Claude Code reads it late.
+        # From the second real reading there is no rate for 5 minutes (D-11),
+        # and its leftover was 100 - used, as if nothing more were spent: the
+        # tail turned green while the window burned toward dry.
+        start = MON + 10 * H
+        r = int(start + 5 * H)
+        cases = [  # (first reading, level, step, seconds per step, known session)
+            (start + 4 * H + 10 * M, 80, 2, 60, True),  # 120 %/h: dry at 14:20
+            (start + 4 * H + 10 * M, 80, 2, 60, False),  # the same from a new session
+            (start + 4 * H + 5 * M, 70, 1, 60, False),  # 60 %/h: dry at 14:35
+            (start + 4 * H + 20 * M, 50, 1, 20, False),  # 180 %/h: dry at 14:36:40
+        ]
+        for i, (t0, first, step, every, known) in enumerate(cases):
+            self.st.close()
+            self.st = Store(os.path.join(self.dir, "tail-%d.db" % i))
+            if known:
+                self.known("s1")
+            out = [pace.five_hour(self.st, ts, self.cfg) for ts in self.late_start(t0, first, step, every, r, renders=30)]
+            unknown = [v for v in out if v["verdict"] == "unknown"]
+            self.assertTrue(unknown, i)  # the rate-less state is reached in the tail
+            for v in unknown:
+                self.assertTrue(v["in_tail"])
+                self.assertIsNone(v["unused_at_reset"], i)  # unknown, not 100 - used
+                self.assertEqual(v["severity"], "dim", i)
+            # Once the rate is known, the window runs dry: red.
+            self.assertEqual(out[-1]["severity"], "alert", i)
+
     def test_one_reading_fades_out_over_the_fit_window(self):
         # Review 4: a single reading gave the window average for 5 minutes, then
         # read idle at once. It now fades out over the 20-minute fit window.
@@ -312,6 +343,12 @@ class FiveHour(TempHome):
             (dict(verdict="slow_down"), "warn"),
             (dict(verdict="on_pace"), "dim"),
             (dict(verdict="idle", in_tail=True, unused_at_reset=20), "opportunity"),
+            # Review 5: no rate, no known leftover (D-11); at or above a target
+            # below 100 is yellow whatever the verdict (B-weekly-profile#2).
+            (dict(verdict="unknown", in_tail=True, unused_at_reset=None), "dim"),
+            (dict(verdict="idle", in_tail=True, unused_at_reset=20, target=80, used=80), "warn"),
+            (dict(verdict="unknown", target=80, used=85, unused_at_reset=None), "warn"),
+            (dict(verdict="idle", in_tail=True, unused_at_reset=25, target=80, used=75), "opportunity"),
         ]
         for kw, tone in cases:
             self.assertEqual(pace.severity(dict(base, **kw), self.cfg), tone, kw)
@@ -348,6 +385,21 @@ class FiveHour(TempHome):
         v = self.view()
         self.assertAlmostEqual(v["allowed"], 15.0)  # (80 - 50) / 2
         self.assertAlmostEqual(v["multiplier"], 2.5)
+
+    def test_idle_above_a_target_below_100_is_yellow(self):
+        # Review 5 (B-weekly-profile#2): with target_5h 80, an idle window at
+        # 85% 50 minutes before its reset was green (15 points "about to
+        # expire"), next to "idle ≤0.0%/h": it invited spending the reserve.
+        self.cfg["target_5h"] = 80
+        r = int(self.t + 50 * M)
+        for i in range(0, 21, 2):
+            self.feed(self.t - (20 - i) * M, five=(85, r))
+        v = self.view()
+        self.assertEqual(v["verdict"], "idle")
+        self.assertTrue(v["in_tail"])
+        self.assertAlmostEqual(v["unused_at_reset"], 15.0)
+        self.assertEqual(v["allowed"], 0.0)
+        self.assertEqual(v["severity"], "warn")
 
 
 if __name__ == "__main__":

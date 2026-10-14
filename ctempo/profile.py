@@ -216,6 +216,13 @@ def typical_week(store, now, half_life_s, weeks=8):
     return num / den if den > 0 else None
 
 
+def current_weights(store, prof, now, cfg):
+    """prof.weights scaled by the typical week (D-13): what the line, `ctempo
+    profile` and learning all use."""
+    hl = float(cfg["profile"]["half_life_days"]) * 86400
+    return prof.weights(now, cfg, typical_week(store, now, hl))
+
+
 def load(store):
     try:
         return Profile(store.meta_get(PROFILE_KEY))

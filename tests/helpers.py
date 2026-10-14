@@ -68,6 +68,16 @@ class TempHome(unittest.TestCase):
             for w in (config.FIVE_HOUR, config.SEVEN_DAY):
                 self.st.reader_set(sid, w, -1.0, 0, 1e12)
 
+    def late_start(self, t0, first, step, every, r5, week=None, renders=40):
+        """Claude Code first reads the 5h window at `first`% at t0 (it was spent
+        elsewhere before: claude.ai, another machine), then `step` points more
+        every `every` seconds, with a render every 20 s. Yields each render's
+        time once it is fed."""
+        for k in range(renders):
+            ts = t0 + 20 * k
+            self.feed(ts, five=(min(100, first + step * int(20 * k // every)), r5), week=week)
+            yield ts
+
     def rows(self, window):
         return self.st.db.execute(
             "SELECT ts, used_pct, resets_at, flag, window_id, session_id FROM samples WHERE window=? ORDER BY ts, id",

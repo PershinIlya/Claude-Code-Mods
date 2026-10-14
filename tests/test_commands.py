@@ -11,14 +11,16 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
-from ctempo import commands
+from ctempo import commands, weekly
 from ctempo.config import SEVEN_DAY
 
-from .helpers import D, TempHome
+from .helpers import MON, H, D, TempHome
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
+M = 60.0
 
 
 class Commands(unittest.TestCase):
@@ -124,6 +126,92 @@ class ShiftedWindow(TempHome):
         out = self.call(commands.cmd_profile, rebuild=False, json=False)
         self.assertIn("needs at least one closed weekly window", out)
         self.assertNotIn("Points vs pace", out)
+
+
+class NowText(TempHome):
+    """Review 5: `ctempo now` gives the reasoning behind every number, so
+    its reasons and its data age must be the ones that apply."""
+
+    def now(self, now, as_json=False):
+        out = io.StringIO()
+        with mock.patch.object(commands.time, "time", return_value=now), contextlib.redirect_stdout(out):
+            self.assertEqual(commands.cmd_now(argparse.Namespace(json=as_json), self.cfg), 0)
+        return out.getvalue()
+
+    def test_no_5h_rate_names_its_cause(self):
+        # Review 5 (A-pace-display#1, X-integration#1): since the fit starts at
+        # the window's first real reading (D-11), a window opened hours ago
+        # has no rate for 5 minutes after work starts. `now` said "the window
+        # opened less than 5 min ago" next to "resets 15:00, in 48m".
+        self.known("s1")
+        cases = [  # (window start, readings after it, now after it, the reason)
+            (MON + 10 * H, ((4 * H + 10 * M, 80), (4 * H + 11 * M, 82)), 4 * H + 12 * M,
+             "less than 5 min since work started in this window, at 14:10"),
+            (MON + D + 10 * H, ((50 * M, 3), (52 * M, 5)), 54 * M,
+             "less than 5 min since work started in this window, at 10:50"),
+            (MON + 2 * D + 10 * H, ((2 * M, 1),), 3 * M, "the window opened less than 5 min ago"),  # it did
+        ]
+        for start, readings, now, why in cases:
+            for t, used in readings:
+                self.feed(start + t, five=(used, int(start + 5 * H)))
+            out = self.now(start + now)
+            self.assertIn("burn rate      unknown (%s)" % why, out)
+
+    def test_weekly_window_fallback_names_its_cause(self):
+        # Review 5 (X-integration#1): first seen 3 days into the week at 30%,
+        # the level holds for 2 h. The lookback was cut at the first timed
+        # reading and has seen no step (D-15), but `now` said "recent span too
+        # short" although 2 h is 1.19% of the week, above the 1% minimum.
+        R = int(MON + 7 * D)
+        T = MON + 3 * D  # Thursday 00:00
+        self.known("s1")
+        for k in range(25):
+            self.feed(T + k * 300, week=(30, R))
+        out = self.now(T + 2 * H)
+        self.assertIn("whole window so far (the level has not moved since the first timed reading, Thu 00:00)", out)
+        self.assertNotIn("recent span too short", out)
+        # The next week, a new session's first reading only (D-06): no timed reading yet.
+        self.feed(T + 7 * D, week=(30, R + int(7 * D)), sid="s2")
+        self.assertIn("whole window so far (no timed reading yet)", self.now(T + 7 * D + 2 * H))
+
+    def test_data_age_ignores_heartbeats(self):
+        # Review 5 (X-integration#2): check measures data age from readings
+        # that carry information (D-20), but `now` said "last 0m ago" from an
+        # idle session's heartbeats while check called the data 3 hours old.
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 40 * M)
+        r7 = int(MON + 7 * D)
+        for i in range(11):  # work from 4 h to 3 h ago
+            self.feed(now - 4 * H + i * 6 * M, five=(3 * i, r5), week=(20, r7))
+        for i in range(179, -1, -1):  # then idle, re-rendering every minute
+            self.feed(now - i * M, five=(30, r5), week=(20, r7))
+        self.assertIn("last reading 3h 00m ago, last heartbeat 0m ago.", self.now(now))
+        self.assertAlmostEqual(json.loads(self.now(now, as_json=True))["data_age_s"], 3 * H)
+
+
+class ProfileScale(TempHome):
+    def test_profile_uses_the_lines_weekly_total(self):
+        # Review 5 (X-integration#3): `ctempo profile` (and --rebuild) built its
+        # weights without the typical week (D-13). After a closed week that
+        # peaked at 70%, learned only from its 10 busiest hours at 1 %/h, it
+        # took the ratio estimate, 10 / (10/168) = 168, and printed "typical
+        # week 168% of the limit" while the line used 70.
+        now = time.time()
+        R1 = int(now - 2 * D)
+        self.known("s1")
+        for k in range(41):  # 60 -> 70% over 10 h, ending 2 h before the reset
+            self.feed(R1 - 12 * H + k * 900, week=(60 + 0.25 * k, R1))
+        self.feed(now - H, week=(5, R1 + int(7 * D)), sid="s2")  # the new week, a first reading
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(commands.cmd_profile(argparse.Namespace(rebuild=True, json=False), self.cfg), 0)
+        self.assertIn("typical week 70% of the limit", out.getvalue())
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(commands.cmd_profile(argparse.Namespace(rebuild=False, json=True), self.cfg), 0)
+        info = json.loads(out.getvalue())["info"]
+        self.assertAlmostEqual(info["weekly_total"], 70.0)
+        self.assertAlmostEqual(weekly.weekly(self.st, time.time(), self.cfg)["weekly_typical"], 70.0)
 
 
 if __name__ == "__main__":
