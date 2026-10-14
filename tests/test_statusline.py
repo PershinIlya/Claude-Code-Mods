@@ -22,7 +22,7 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 def run(payload, home, args=(), env=None, raw=None):
     e = dict(os.environ)
-    e.update({"CTEMPO_HOME": home, "TZ": "UTC"})
+    e.update({"CTEMPO_HOME": home, "TZ": "UTC", "CLAUDE_CONFIG_DIR": os.path.join(home, "claude")})
     e.pop("NO_COLOR", None)
     e.update(env or {})
     data = raw if raw is not None else json.dumps(payload).encode()
