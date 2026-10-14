@@ -32,7 +32,9 @@ class Install(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="ctempo-inst-")
         self.home = os.path.join(self.dir, "home")
-        self.env = mock.patch.dict(os.environ, {"CTEMPO_HOME": self.home})
+        # Hermetic: no code path (old or new) can reach the real ~/.claude.
+        self.env = mock.patch.dict(os.environ, {"CTEMPO_HOME": self.home, "CLAUDE_CONFIG_DIR": os.path.join(self.dir, "claude"),
+                                                "HOME": os.path.join(self.dir, "userhome")})
         self.env.start()
         self.path = os.path.join(self.dir, "settings.json")
 

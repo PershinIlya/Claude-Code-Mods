@@ -38,6 +38,8 @@ class TempHome(unittest.TestCase):
         self.dir = tempfile.mkdtemp(prefix="ctempo-test-")
         self.old_home = os.environ.get("CTEMPO_HOME")
         os.environ["CTEMPO_HOME"] = self.dir
+        self.old_ccd = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(self.dir, "claude")  # never the real ~/.claude
         self.cfg = config.load()
         self.st = Store(os.path.join(self.dir, "tempo.db"))
 
@@ -47,6 +49,10 @@ class TempHome(unittest.TestCase):
             os.environ.pop("CTEMPO_HOME", None)
         else:
             os.environ["CTEMPO_HOME"] = self.old_home
+        if self.old_ccd is None:
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            os.environ["CLAUDE_CONFIG_DIR"] = self.old_ccd
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def feed(self, now, five=None, week=None, sid="s1", source="test"):
