@@ -1379,6 +1379,22 @@ class Install(unittest.TestCase):
         self.assertEqual(state.get("records"), {})
         self.assertNotIn("mod", state)
 
+    def test_the_users_own_empty_plugin_key_survives(self):
+        # Review 7 follow-up: the plugin CLI leaves "enabledPlugins": {} after
+        # its last plugin goes, so many user files hold it. Once the mod was in
+        # it, uninstall took the key for the plugin CLI's and removed it.
+        proj = os.path.join(self.dir, "proj-settings.json")
+        with open(proj, "w") as f:
+            f.write('{"model": "sonnet"}')
+        before = '{\n  "model": "opus",\n  "enabledPlugins": {}\n}\n'
+        with self._user_file(before), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))  # a repin looks again
+            rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

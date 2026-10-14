@@ -34,14 +34,16 @@ Python 3.8+ standard library only.
 | `dry~Wed 14:00` | the week runs out on Wednesday around 14:00 |
 | `@Thu 09:00` | weekly reset |
 | `5h 0%` / `wk 0%` | no open window (the next message starts one) |
+| `5h 12% @15:00` (level and reset only) | the database could not be written when a new window opened (locked, read-only or full); this is the payload's level, without pace math, until a write succeeds |
 
 Colors: dim when fine; **yellow** when a window runs dry before its reset but
 the multiplier is still on pace (0.9 to 1, no glyph), or when you are at or
 above a target set below 100 (idle included); **red** when a window runs dry
 before its reset and the verdict is slow down (`▼`), or it is maxed; **green**
 when a window is in its last stretch (1 hour for 5h, 2 days for the week) with
-at least 10 points about to expire (never while the 5h burn rate is not known
-yet). `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
+at least 10 points about to expire below its target (the reserve that a target
+below 100 keeps never counts; never while the 5h burn rate is not known yet).
+`NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
 
 `ctempo now` prints the same with the reasoning behind every number.
 
@@ -102,8 +104,9 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
 2. backs up `~/.claude/settings.json` to `settings.json.ctempo-backup-<time>`
    and sets only `statusLine` (`refreshInterval: 60`). If you already have a
    status line, ctempo **composes**: your command still runs, with the same
-   input, and ctempo's segment is appended to its output (`--replace` to replace
-   it instead);
+   input, and ctempo's segment is appended to its output (`--replace` to
+   replace it instead); a background job your command starts keeps running,
+   and a command still running after `compose.timeout_ms` is stopped;
 3. installs the Desktop mod from the local marketplace in this repo:
    `claude plugin marketplace add <repo>` then
    `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip). If
@@ -126,12 +129,16 @@ ctempo uninstall --apply
 
 It uninstalls the mod and the marketplace, puts your previous `statusLine`
 back (or the command inside ctempo's `--compose` if you put or changed one
-there), or removes ctempo's, removes the launcher and `runtime.json`. If you
-did not change `settings.json` in between, the file comes back byte for byte
-(it is restored from the backup). If `claude` is not on PATH, uninstall prints
-the two plugin commands and exits 1; once your settings list neither the
-plugin nor its marketplace (you ran them yourself), it completes. Your history
-stays in `~/.claude-tempo/`; delete that folder yourself if you want it gone.
+there), or removes ctempo's, removes the launcher and `runtime.json`.
+`--no-mod` keeps the mod, and `runtime.json` and the launcher with it, until
+an uninstall without it. If `~/.claude-tempo/install.json` is gone (you
+deleted the folder, or use another `CTEMPO_HOME`) while your settings still
+list the mod, uninstall says so and removes it all the same. If you did not
+change `settings.json` in between, the file comes back byte for byte (it is
+restored from the backup). If `claude` is not on PATH, uninstall prints the
+two plugin commands and exits 1; once your settings list neither the plugin
+nor its marketplace (you ran them yourself), it completes. Your history stays
+in `~/.claude-tempo/`; delete that folder yourself if you want it gone.
 
 ## Commands
 
@@ -141,7 +148,7 @@ stays in `~/.claude-tempo/`; delete that folder yourself if you want it gone.
 | `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate, and the age of the last reading (heartbeats shown apart) |
 | `ctempo report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
 | `ctempo profile [--rebuild]` | hour-of-week heatmap, lightest awake blocks, points vs pace by day before reset |
-| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
+| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); spare quota is measured against each window's target (`spare` in the JSON), so a window at or above a target below 100, or one that should slow down, is never harvestable; `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
 | `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen |
@@ -156,11 +163,11 @@ leave out keeps its default):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `target_5h`, `target_week` | 100 | level to pace against; 90 keeps a 10-point reserve |
+| `target_5h`, `target_week` | 100 | level to pace against; 90 keeps a 10-point reserve, which green and `check` never count as spare |
 | `rate_window_min` | 20 | 5h least-squares window, minutes |
 | `verdict.speed_up`, `verdict.slow_down` | 1.2, 0.9 | multiplier thresholds |
 | `tail.five_hour_min`, `tail.seven_day_hours` | 60, 48 | "last stretch" of each window |
-| `min_free` | 10 | points about to expire that count as worth using (green, `check`); 0 to 100, and 0 still needs more than 0 points |
+| `min_free` | 10 | points about to expire below the target that count as worth using (green, `check`); 0 to 100, and 0 still needs more than 0 points |
 | `profile.half_life_days` | 14 | how fast the profile forgets |
 | `profile.floor` | 0.15 | off-hour weight relative to a typical awake hour |
 | `profile.override` | null | `{"work_days": [0,1,2,3,4], "wake_hours": [8, 23], "off_day_factor": 0.3, "mode": "prior"}`; days are 0 = Monday; mode `replace` ignores learning |
@@ -169,7 +176,7 @@ leave out keeps its default):
 | `display.max_width` | 80 | the line drops optional parts to fit, then is cut with `…` (`...` in ascii mode); each part keeps its color |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
 | `mod.refresh_s` | 60 | how often the mod refreshes the band (15 to 3600) |
-| `compose.timeout_ms` | 1500 | how long your previous status line may take |
+| `compose.timeout_ms` | 1500 | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped |
 | `retention_days` | 365 | history kept |
 
 `CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
@@ -206,7 +213,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 215 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 238 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
@@ -216,12 +223,15 @@ epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
 throwaway settings files, including the byte-identical round trip (CRLF, mode,
 several settings files, a crash mid-install, a lost install record). A
-model-based fuzzer runs 300 seeded random sequences of installs and uninstalls
-on two settings files, with claude working, missing or hanging and hand edits
-in between, and checks that nothing of ctempo is left, each file holds the
-user's JSON, and a file the user never edited comes back byte for byte. Six
-adversarial review passes (and the fuzzer) found 87 defects; each one has a
-regression test that fails on the code before its fix.
+model-based fuzzer runs 400 seeded random sequences of installs and uninstalls
+(some with `--no-mod`) on two settings files, with claude working, missing or
+hanging, hand edits (the command inside ctempo's `--compose` included), the
+plugin commands run by hand and the data folder deleted in between. It checks
+after every step that `runtime.json` exists while a mod record does, and at
+the end that nothing of ctempo is left, each file holds the user's JSON, and a
+file the user never edited comes back byte for byte. Seven adversarial review
+passes (and the fuzzer) found 99 defects; each one has a regression test that
+fails on the code before its fix.
 
 ## Layout
 
