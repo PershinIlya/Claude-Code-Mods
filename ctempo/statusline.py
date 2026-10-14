@@ -159,17 +159,24 @@ def bare_line(readings, now, cfg=None):
 class Composer:
     """Runs the user's previous statusLine command in parallel with ours.
 
-    communicate() runs in a thread so our own work overlaps with theirs; the
-    command gets its own process group so a timeout kills its children too.
+    A thread feeds its stdin and reads its stdout so our own work overlaps
+    with theirs. As in Claude Code, the output is complete once the command
+    has exited and stdout is closed or quiet for QUIET_S: a background job it
+    started may keep stdout open, and is left running. The command gets its
+    own process group, so one still running at the deadline is killed with
+    its children.
     """
 
-    def __init__(self, cmd, raw, timeout):
+    QUIET_S = 0.5  # Claude Code waits 500 ms for the rest of a hook's output
+
+    def __init__(self, cmd, raw, deadline):
         import subprocess
         import threading
 
         env = dict(os.environ)
         env["CTEMPO_COMPOSED"] = "1"
         self.result = None
+        self.deadline = deadline
         self.p = subprocess.Popen(
             cmd,
             shell=True,
@@ -179,20 +186,59 @@ class Composer:
             env=env,
             start_new_session=True,
         )
-        self.t = threading.Thread(target=self._run, args=(raw, timeout), daemon=True)
+        self.t = threading.Thread(target=self._run, args=(raw or b"",), daemon=True)
         self.t.start()
 
-    def _run(self, raw, timeout):
+    def _run(self, raw):
+        # Not communicate(): it waits for EOF, which a background job holding
+        # stdout delays past the deadline, and on 3.8 a retry after a timeout
+        # stops feeding stdin. Writes go in PIPE_BUF chunks, which never block.
+        import select
+        import selectors
+
+        p, out, sent, quiet = self.p, [], 0, None
         try:
-            out, _ = self.p.communicate(input=raw, timeout=timeout)
-            self.result = (self.p.returncode, out)
+            with getattr(selectors, "PollSelector", selectors.SelectSelector)() as sel:
+                sel.register(p.stdout, selectors.EVENT_READ)
+                if raw:
+                    sel.register(p.stdin, selectors.EVENT_WRITE)
+                else:
+                    p.stdin.close()
+                while sel.get_map():
+                    now = time.time()
+                    if quiet is None and p.poll() is not None:
+                        quiet = now + self.QUIET_S
+                    end = self.deadline if quiet is None else min(quiet, self.deadline)
+                    if now >= end:
+                        break
+                    for key, _ in sel.select(min(0.05, end - now)):
+                        if key.fileobj is p.stdout:
+                            data = os.read(key.fd, 32768)
+                            if not data:
+                                sel.unregister(p.stdout)
+                            out.append(data)
+                            if quiet is not None:
+                                quiet = time.time() + self.QUIET_S
+                        else:
+                            try:
+                                sent += os.write(key.fd, raw[sent:sent + getattr(select, "PIPE_BUF", 512)])
+                            except OSError:  # it exited or closed stdin unread
+                                sent = len(raw)
+                            if sent >= len(raw):
+                                sel.unregister(p.stdin)
+                                p.stdin.close()
+            # Exited: its output. Still running at the deadline: TimeoutExpired, result stays None.
+            self.result = (p.wait(max(0.0, self.deadline - time.time())), b"".join(out))
         except Exception:
             pass
 
-    def finish(self, deadline):
-        self.t.join(max(0.05, deadline - time.time()))
+    def finish(self):
+        self.t.join(max(0.0, self.deadline - time.time()) + 0.1)
         if self.result is None:
-            self._kill()
+            # Kill only a command still running (or a stuck reader): a background
+            # job left by one that exited is not ours to stop.
+            if self.t.is_alive() or self.p.poll() is None:
+                self._kill()
             return None
         rc, out = self.result
         if rc != 0:
@@ -250,14 +296,14 @@ def main(argv):
             and not os.environ.get("CTEMPO_COMPOSED")
         ):
             try:
-                composer = Composer(cmd, raw, float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0)
+                composer = Composer(cmd, raw, t0 + float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0)
             except Exception as e:
                 log_error(e, "compose")
         now = opts["now"] or time.time()
         readings = {}
         try:
             def segs_of(v5, vw):
-                if not v5.get("present") and not vw.get("present"):
+                if not any(v.get("present") or v.get("raw") for v in (v5, vw)):
                     return render.fit([("ctempo: waiting for usage data", "dim")], cfg)
                 return render.segments(v5, vw, cfg)
 
@@ -303,8 +349,7 @@ def main(argv):
     if composer is not None:
         # Outside the main try: whatever failed above, the user's own line still shows.
         try:
-            timeout = float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0
-            theirs = composer.finish(t0 + timeout)
+            theirs = composer.finish()
             out = join_composed(theirs, out, cfg, columns_env())
         except Exception as e:
             log_error(e, "compose")

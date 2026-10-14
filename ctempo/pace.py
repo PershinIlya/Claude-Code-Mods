@@ -123,6 +123,8 @@ def five_hour(store, now, cfg, reading=None):
     if inst is None or inst["reset_ts"] <= now:
         v["verdict"] = "fresh"
         v["severity"] = "dim"
+        if reading:  # the write failed before it opened this window: show its level, no math
+            v["raw"] = reading
         return v
     tgt = config.target(cfg, FIVE_HOUR)
     used = current_used(store, inst, reading)

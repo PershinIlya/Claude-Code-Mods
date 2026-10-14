@@ -123,6 +123,8 @@ def weekly(store, now, cfg, reading=None, prof=None):
     if inst is None or inst["reset_ts"] <= now:
         v["verdict"] = "fresh"
         v["severity"] = "dim"
+        if reading:  # the write failed before it opened this window: show its level, no math
+            v["raw"] = reading
         return v
     tgt = config.target(cfg, SEVEN_DAY)
     used = current_used(store, inst, reading)

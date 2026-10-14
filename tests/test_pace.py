@@ -162,6 +162,18 @@ class FiveHour(TempHome):
         self.feed(self.t - 6 * H, five=(10, int(self.t - 2 * H)))
         self.assertFalse(self.view()["present"])
 
+    def test_no_window_keeps_an_unstored_reading(self):
+        # Review 7 (fresh-eyes#2): when the write failed at a rollover, only
+        # the expired instance was there and the reading was dropped ("5h 0%"
+        # while the payload said 12%). It is kept for display, with no math.
+        self.assertEqual(pace.five_hour(self.st, self.t, self.cfg, (12.0, self.R))["raw"], (12.0, self.R))
+        self.feed(self.t - 6 * H, five=(80, int(self.t - 2 * H)))
+        v = pace.five_hour(self.st, self.t, self.cfg, (12.0, self.R))
+        self.assertFalse(v["present"])
+        self.assertEqual(v["raw"], (12.0, self.R))
+        self.assertEqual(v["severity"], "dim")
+        self.assertNotIn("raw", self.view())
+
     def test_steady_whole_percent_steps_keep_their_rate(self):
         # Review #0: 9 %/h in whole percents is one new value every 6 min 40 s.
         # 85% with 2 h left: allowed 7.5 %/h, so every render (one every 20 s)
