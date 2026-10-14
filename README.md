@@ -69,23 +69,35 @@ below 100 keeps never counts; never while the 5h burn rate is not known yet).
 - profile `w(h)`: 168 hour-of-week bins, the expected share of a week's spend
   in each hour. Prior from your transcripts (last 45 days, cost-weighted
   tokens), updated from the observed weekly-% spend of each hour with a 14-day
-  half-life, off-hours floored at 0.15 of a typical awake hour;
+  half-life, off-hours floored at 0.15 of a typical awake hour. The prior
+  itself fades toward uniform with the same half-life from the day it was
+  built, so a schedule that changed since then takes over. The hours from a
+  week's last reading to its reset are learned as idle, at low confidence,
+  unless that week was maxed (blocked hours say nothing about your habits);
 - `E` = Σ w(h) from now to the reset: the share of a week's spend still ahead;
-- on-pace level = target × (1 − E); delta = used − on-pace;
+- on-pace level = target × (1 − E); after an early reset that keeps the same
+  reset time, it is paced from that reset instead: target × the share of the
+  span from it to the reset that has passed; delta = used − on-pace;
 - intensity = what you spent over your last 24 awake hours / what the profile
   expected for those hours (at target pace). Spend in a long gap you did not
   observe is spread over the gap by the profile, so only its expected part
-  counts. Right after install the count starts at the first timed reading, and
-  until the level moves the whole window so far stands in (the typical week
-  while the window is still at 0);
+  counts. When the 24 hours reach back into the previous week, its hours after
+  it hit 100% (blocked until the reset) are left out of the expected part; its
+  other hours after its last reading count as no spend, since a last day spent
+  on claude.ai only and an idle one leave the same readings. Right after
+  install the count starts at the first timed reading, and until the level
+  moves the whole window so far stands in (the typical week while the window
+  is still at 0, or within the first 2% of a week's expected spend after an
+  early reset);
 - projection = used + intensity × target × E; "dry" is where an hour-by-hour
   walk at that intensity crosses 100%;
 - multiplier = max(0, target − used) / (intensity × target × E): 0 once you
   are past a target below 100, as for the 5-hour window.
 
-Readings from idle sessions, the 5-minute wobble of `resets_at`, the
-`used_percentage` epoch leak (#52326), resets that keep the same `resets_at`,
-and DST weeks are all handled; DECISIONS.md explains each rule.
+Readings from idle sessions, the 5-minute wobble of `resets_at`, resets that
+move later, the `used_percentage` epoch leak (#52326), resets that keep the
+same `resets_at`, and DST weeks are all handled; DECISIONS.md explains each
+rule.
 
 ## Install (on your Mac)
 
@@ -101,19 +113,22 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
    Homebrew, then the one you ran it with; `--python /abs/path` to choose) and
    pins it in the command, run as `python -I -S` so conda or PYTHONPATH cannot
    interfere;
-2. backs up `~/.claude/settings.json` to `settings.json.ctempo-backup-<time>`
-   and sets only `statusLine` (`refreshInterval: 60`). If you already have a
-   status line, ctempo **composes**: your command still runs, with the same
-   input, and ctempo's segment is appended to its output (`--replace` to
-   replace it instead); a background job your command starts keeps running,
-   and a command still running after `compose.timeout_ms` is stopped;
+2. backs up `~/.claude/settings.json` to
+   `settings.json.ctempo-backup-<UTC time>` and sets only `statusLine`
+   (`refreshInterval: 60`). If you already have a status line, ctempo
+   **composes**: your command still runs, with the same input, and ctempo's
+   segment is appended to its output (`--replace` to replace it instead); a
+   background job your command starts keeps running, and a command still
+   running after `compose.timeout_ms` is stopped;
 3. installs the Desktop mod from the local marketplace in this repo:
    `claude plugin marketplace add <repo>` then
    `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip). If
    `claude` is not on PATH, it prints the two commands for you to run, and
    uninstall still undoes them;
 4. writes `~/.claude-tempo/runtime.json` (the mod reads it), a default
-   `config.json`, and a `ctempo` launcher in `--bin-dir`;
+   `config.json`, and a `ctempo` launcher in `--bin-dir` (a later install
+   repins it without `--bin-dir`, after `--python` or a moved clone too; a new
+   `--bin-dir` moves it there);
 5. builds the profile prior from `~/.claude/projects` transcripts
    (`--no-bootstrap` to skip).
 
@@ -133,12 +148,13 @@ there), or removes ctempo's, removes the launcher and `runtime.json`.
 `--no-mod` keeps the mod, and `runtime.json` and the launcher with it, until
 an uninstall without it. If `~/.claude-tempo/install.json` is gone (you
 deleted the folder, or use another `CTEMPO_HOME`) while your settings still
-list the mod, uninstall says so and removes it all the same. If you did not
-change `settings.json` in between, the file comes back byte for byte (it is
-restored from the backup). If `claude` is not on PATH, uninstall prints the
-two plugin commands and exits 1; once your settings list neither the plugin
-nor its marketplace (you ran them yourself), it completes. Your history stays
-in `~/.claude-tempo/`; delete that folder yourself if you want it gone.
+list the mod, uninstall says so and removes it all the same. A launcher made
+before the folder was deleted stays: remove it yourself. If you did not change
+`settings.json` in between, the file comes back byte for byte (it is restored
+from the backup). If `claude` is not on PATH, uninstall prints the two plugin
+commands and exits 1; once your settings list neither the plugin nor its
+marketplace (you ran them yourself), it completes. Your history stays in
+`~/.claude-tempo/`; delete that folder yourself if you want it gone.
 
 ## Commands
 
@@ -213,7 +229,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 238 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 257 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
@@ -229,8 +245,8 @@ hanging, hand edits (the command inside ctempo's `--compose` included), the
 plugin commands run by hand and the data folder deleted in between. It checks
 after every step that `runtime.json` exists while a mod record does, and at
 the end that nothing of ctempo is left, each file holds the user's JSON, and a
-file the user never edited comes back byte for byte. Seven adversarial review
-passes (and the fuzzer) found 99 defects; each one has a regression test that
+file the user never edited comes back byte for byte. Eight adversarial review
+passes (and the fuzzer) found 114 defects; each one has a regression test that
 fails on the code before its fix.
 
 ## Layout
