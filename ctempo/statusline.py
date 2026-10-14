@@ -1,0 +1,250 @@
+"""`ctempo statusline`: read the payload, record a sample, print the line.
+
+Hot path. Fail open: any error prints a minimal line and exits 0, the
+traceback goes to ~/.claude-tempo/errors.log (capped), never to stdout.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+
+from . import config
+
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)")
+LOG_MAX = 64 * 1024
+
+
+def log_error(exc, where="statusline"):
+    try:
+        import traceback
+
+        path = config.log_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.exists(path) and os.path.getsize(path) > LOG_MAX:
+            os.replace(path, path + ".1")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("%s %s: %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), where, exc))
+            f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)[-6:]))
+    except Exception:
+        pass
+
+
+def parse_args(argv):
+    opts = {"source": "statusline", "format": "ansi", "record": True, "compose": True, "now": None, "compose_cmd": None}
+    it = iter(argv)
+    for a in it:
+        if a == "--source":
+            opts["source"] = next(it, "statusline")
+        elif a == "--format":
+            opts["format"] = next(it, "ansi")
+        elif a == "--no-record":
+            opts["record"] = False
+        elif a == "--no-compose":
+            opts["compose"] = False
+        elif a == "--compose":
+            opts["compose_cmd"] = next(it, None)
+        elif a == "--now":
+            opts["now"] = float(next(it, "0"))
+    return opts
+
+
+def compute(raw, cfg, opts, now):
+    """Record the payload and compute both views. Returns (v5, vw, readings)."""
+    import sqlite3
+
+    from . import ingest, pace, profile, weekly
+    from .store import Store
+
+    try:
+        payload = json.loads(raw) if raw and raw.strip() else {}
+    except ValueError:
+        payload = {}
+    readings, rejects, kinds = ingest.parse_payload(payload, now)
+    sid = payload.get("session_id") if isinstance(payload, dict) else None
+    sid = sid if isinstance(sid, str) and sid else None
+    st = Store(timeout_ms=cfg.get("db_timeout_ms", 250))
+    try:
+        if opts["record"] and (readings or rejects or kinds):
+            try:
+                ingest.record(st, readings, now, opts["source"], sid, cfg, rejects, kinds)
+            except sqlite3.OperationalError as e:  # locked: skip this write, still render
+                log_error(e, "record")
+        prof = profile.load(st)
+        if opts["record"]:
+            maybe_learn(st, prof, now, cfg)
+        v5 = pace.five_hour(st, now, cfg, readings.get(config.FIVE_HOUR))
+        vw = weekly.weekly(st, now, cfg, readings.get(config.SEVEN_DAY), prof)
+    finally:
+        st.close()
+    return v5, vw, readings
+
+
+def maybe_learn(st, prof, now, cfg):
+    """Fold newly completed hours into the profile, at most every 10 minutes."""
+    import sqlite3
+
+    from . import profile
+
+    checked = st.meta_get("profile_checked_at", 0) or 0
+    if now - checked < 600:
+        return
+    try:
+        st.begin()
+        w, _, _ = prof.weights(now, cfg)
+        profile.learn(st, prof, now, cfg, w)
+        profile.save(st, prof)
+        st.meta_set("profile_checked_at", now)
+        st.commit()
+    except sqlite3.OperationalError as e:
+        st.rollback()
+        log_error(e, "learn")
+
+
+def bare_line(readings, now):
+    """Fallback without the database: levels and reset times only."""
+    from .render import dhm, hm, pct
+
+    parts = []
+    if config.FIVE_HOUR in readings:
+        u, r = readings[config.FIVE_HOUR]
+        parts.append("5h %s @%s" % (pct(u), hm(r)))
+    if config.SEVEN_DAY in readings:
+        u, r = readings[config.SEVEN_DAY]
+        parts.append("wk %s @%s" % (pct(u), dhm(r)))
+    return " · ".join(parts) or "ctempo: no data"
+
+
+def start_compose(cmd, raw):
+    import subprocess
+    import threading
+
+    env = dict(os.environ)
+    env["CTEMPO_COMPOSED"] = "1"
+    p = subprocess.Popen(
+        cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env
+    )
+
+    def feed():
+        try:
+            p.stdin.write(raw)
+            p.stdin.close()
+        except OSError:
+            pass
+
+    threading.Thread(target=feed, daemon=True).start()
+    return p
+
+
+def finish_compose(p, deadline):
+    import subprocess
+
+    try:
+        out, _ = p.communicate(timeout=max(0.05, deadline - time.time()))
+    except subprocess.TimeoutExpired:
+        p.kill()
+        return None
+    except OSError:
+        return None
+    if p.returncode != 0:
+        return None
+    return out.decode("utf-8", "replace").rstrip("\n")
+
+
+def visible_len(s):
+    return len(ANSI_RE.sub("", s))
+
+
+def join_composed(theirs, ours, cfg, columns):
+    if not theirs:
+        return ours
+    lines = theirs.split("\n")
+    sep = cfg["compose"].get("separator", "  ")
+    if visible_len(lines[-1]) + len(sep) + visible_len(ours) <= columns:
+        lines[-1] = lines[-1] + sep + ours
+    else:
+        lines.append(ours)
+    return "\n".join(lines)
+
+
+def main(argv):
+    t0 = time.time()
+    opts = {"format": "ansi"}
+    color = False
+    out = ""
+    composer = None
+    try:
+        opts = parse_args(argv)
+        raw = b"" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.buffer.read()
+        cfg = config.load()
+        from . import render
+
+        color = render.use_color(cfg) and opts["format"] == "ansi"
+        cmd = opts["compose_cmd"] or cfg["compose"].get("command")
+        if (
+            cmd
+            and opts["compose"]
+            and opts["source"] == "statusline"
+            and opts["format"] == "ansi"
+            and not os.environ.get("CTEMPO_COMPOSED")
+        ):
+            try:
+                composer = start_compose(cmd, raw)
+            except OSError as e:
+                log_error(e, "compose")
+        now = opts["now"] or time.time()
+        readings = {}
+        try:
+            v5, vw, readings = compute(raw, cfg, opts, now)
+            segs = render.segments(v5, vw, cfg)
+            if not v5.get("present") and not vw.get("present"):
+                segs = [("ctempo: waiting for usage data", "dim")]
+        except Exception as e:  # database trouble: degrade to the bare line
+            log_error(e)
+            if not readings:
+                from . import ingest
+
+                try:
+                    readings = ingest.parse_payload(json.loads(raw or b"{}"), now)[0]
+                except Exception:
+                    readings = {}
+            segs = [(bare_line(readings, now), "dim")]
+            v5 = vw = {}
+        if opts["format"] == "json":
+            out = json.dumps(
+                {
+                    "ok": True,
+                    "line": render.plain(segs),
+                    "segments": [{"text": t, "tone": tone} for t, tone in segs],
+                    "surfaces": cfg["mod"].get("surfaces", ["desktop"]),
+                    "refresh_s": cfg["mod"].get("refresh_s", 60),
+                    "five_hour": _brief(v5),
+                    "seven_day": _brief(vw),
+                },
+                separators=(",", ":"),
+            )
+        else:
+            out = render.to_ansi(segs, color)
+        if composer is not None:
+            timeout = float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0
+            theirs = finish_compose(composer, t0 + timeout)
+            columns = int(os.environ.get("COLUMNS") or 0) or 200
+            out = join_composed(theirs, out, cfg, columns)
+    except Exception as e:
+        log_error(e)
+        if opts.get("format") == "json":
+            out = json.dumps({"ok": False, "line": "ctempo: error", "segments": [{"text": "ctempo: error", "tone": "dim"}]})
+        else:
+            out = "ctempo: error"
+    try:
+        sys.stdout.write(out + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+    return 0
+
+
+def _brief(v):
+    keys = ("present", "used", "reset_ts", "verdict", "severity", "multiplier", "projected", "delta")
+    return {k: v.get(k) for k in keys if k in v} if v else {}
