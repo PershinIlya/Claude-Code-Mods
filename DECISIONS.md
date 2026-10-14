@@ -165,8 +165,12 @@ one id; the largest usage wins. Weight = `input + 1.25 cache_creation + 0.1
 cache_read + 5 output` (API price ratios relative to fresh input); only the
 distribution over the week matters. Each bin's mean is over *every* hour of
 the period, zeros included (thevibeworks averages per active day, which runs
-high), then lightly smoothed along the hour axis. It misses claude.ai and
-Desktop chat; the percent observations correct that over time.
+high), then lightly smoothed along the hour axis. A short history is blended
+toward uniform: `prior = mix x shape + (1 - mix) x uniform`, `mix = min(1,
+days / 14)`, and the prior strength `k` moves from 0.25 to 1 with it. Found
+on live data: one hour of transcripts otherwise made a three-hour spike. It
+misses claude.ai and Desktop chat; the percent observations correct that over
+time. `install --apply` runs the bootstrap too (`--no-bootstrap` skips it).
 
 **D-15. Weekly numbers.** As in the brief, with these details:
 `E` is normalized by the week's total share (DST weeks have 167 or 169 local
@@ -219,8 +223,8 @@ json` through `$.process.run` and draws the tone-tagged segments it gets back
 (no ANSI parsing). It calls the CLI after each `session.measure` whose
 `rateLimits` changed and every 60 s (time-dependent numbers), never on the
 start path, and coalesces calls that arrive while one runs (statusline-anywhere
-drops them). It draws on the surfaces in `mod.surfaces` (default `desktop`;
-VS Code and mobile draw nothing per the docs) and passes the band on in the
+drops them). It draws on the surfaces in `mod.surfaces` (default `["desktop"]`;
+VS Code and mobile draw no band per the docs) and passes the band on in the
 terminal, where the statusLine already shows the line; it keeps what other
 mods draw below its own row. Every `kind` it sees is logged by the CLI in the
 `kinds` table.
@@ -255,7 +259,8 @@ at least `--min-free` (default 10) and at least that much is free now, and the
 weekly window would not run dry or exceed its target if that leftover were
 spent (priced with the exchange rate). The weekly window is harvestable when
 it is in its tail (`week=2d`) with at least `min-free` projected to expire and
-the 5h window has room now. Data older than `--max-age` (30 min) is a no-go:
+the 5h window has room, both now and at the current burn rate (projected
+unused >= `min-free`): a scavenger must not starve interactive work. Data older than `--max-age` (30 min) is a no-go:
 headless runs do not render a statusLine, so a scavenger has to refresh the
 data itself (v2).
 
