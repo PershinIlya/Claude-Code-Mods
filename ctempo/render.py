@@ -79,6 +79,8 @@ def _glyph(verdict, s):
 def five_hour_parts(v, s):
     """List of (text, droppable) for the 5h segment."""
     if not v.get("present"):
+        if v.get("raw"):  # an unstored reading (the write failed): level and reset, as the bare line
+            return [("5h " + pct(v["raw"][0]), False), ("@" + hm(v["raw"][1]), True)]
         return [("5h 0%", False)]
     parts = [("5h " + pct(v["used"]), False)]
     verdict = v["verdict"]
@@ -101,6 +103,8 @@ def five_hour_parts(v, s):
 
 def weekly_parts(v, s):
     if not v.get("present"):
+        if v.get("raw"):
+            return [("wk " + pct(v["raw"][0]), False), ("@" + dhm(v["raw"][1]), True)]
         return [("wk 0%", False)]
     d = v["delta"]
     sign = s["pm"] + "0" if abs(d) < 0.5 else ("%+d" % int(round(d)))

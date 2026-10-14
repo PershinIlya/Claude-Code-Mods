@@ -322,6 +322,18 @@ class Weekly(TempHome):
         self.feed(MON + H, five=(10, int(MON + 3 * H)))
         self.assertFalse(self.view(MON + H)["present"])
 
+    def test_missing_weekly_window_keeps_an_unstored_reading(self):
+        # Review 7 (fresh-eyes#2): when the write failed at a rollover, only
+        # the expired instance was there and the reading was dropped ("wk 0%"
+        # while the payload said 1%). It is kept for display, with no math.
+        R7 = int(MON + 7 * D)
+        self.feed(MON - 6 * D, week=(90, int(MON)))
+        v = weekly.weekly(self.st, MON + 120, self.cfg, (1.0, R7))
+        self.assertFalse(v["present"])
+        self.assertEqual(v["raw"], (1.0, R7))
+        self.assertEqual(v["severity"], "dim")
+        self.assertNotIn("raw", self.view(MON + 120))
+
     def test_exchange_rate(self):
         R5 = int(MON + 5 * H)
         R7 = int(MON + 7 * D)

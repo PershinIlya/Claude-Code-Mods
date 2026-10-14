@@ -4,7 +4,9 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -13,7 +15,7 @@ import unittest
 
 from ctempo import config, render
 
-from .helpers import MON, H, D, utc
+from .helpers import MON, H, D, TempHome, payload, utc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
@@ -228,6 +230,43 @@ class Statusline(unittest.TestCase):
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
         self.assertLess(el, 4.0)
 
+    def test_compose_leaves_a_background_job_alone(self):
+        # Review 7 (fresh-eyes#0): a background job that inherits stdout kept
+        # the pipe open, so the render waited for EOF until the 1.5 s timeout,
+        # dropped "hi" and SIGKILLed the job with the group. Like Claude Code,
+        # the shell's exit plus a quiet window ends the read; only a shell
+        # still running at the timeout is killed, with its children.
+        left = os.path.join(self.home, "left")
+        killed = os.path.join(self.home, "killed")
+        t = time.time()
+        p, el = run(self.p, self.home, args=["--compose", "echo hi; (sleep 3; touch %s) &" % shlex.quote(left)],
+                    env={"COLUMNS": "200"})
+        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("hi  5h 42%"), p.stdout)
+        self.assertLess(el, 1.2)
+        t2 = time.time()
+        p, _ = run(self.p, self.home, args=["--compose", "(sleep 3; touch %s) & sleep 5" % shlex.quote(killed)])
+        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
+        while not os.path.exists(left) and time.time() < t + 10:
+            time.sleep(0.1)
+        self.assertTrue(os.path.exists(left))
+        time.sleep(max(0.0, t2 + 4 - time.time()))
+        self.assertFalse(os.path.exists(killed))
+
+    def test_compose_reads_output_until_a_quiet_window(self):
+        # Review 7 (fresh-eyes#0): after the shell exits, output its
+        # background job writes soon after still counts; output that never
+        # stops is read until the deadline, and what arrived is used.
+        p, el = run(self.p, self.home, args=["--compose", "echo a; (sleep 0.2; echo b) &"], env={"COLUMNS": "200"})
+        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("a\nb  5h 42%"), p.stdout)
+        self.assertLess(el, 1.2)
+        chatty = "echo hi; (i=0; while [ $i -lt 40 ]; do echo x; sleep 0.1; i=$((i+1)); done) &"
+        p, el = run(self.p, self.home, args=["--compose", chatty], env={"COLUMNS": "200"})
+        lines = ANSI.sub("", p.stdout.decode()).rstrip("\n").split("\n")
+        self.assertEqual(lines[0], "hi")
+        self.assertIn("5h 42%", lines[-1])
+        self.assertGreater(len(lines), 5)
+        self.assertLess(el, 3.0)
+
     def test_no_recursion_when_composed_with_itself(self):
         cmd = "%s -I -S %s statusline --compose 'printf x'" % (sys.executable, ENTRY)
         p, el = run(self.p, self.home, args=["--compose", cmd], env={"COLUMNS": "300"})
@@ -304,6 +343,17 @@ class Render(unittest.TestCase):
         self.assertTrue(self.line(self.v5(rate_source="window_avg", verdict="on_pace", multiplier=1.0), self.vw()).startswith("5h 62% ~×1.0 →88%"))
         self.assertEqual(self.line({"present": False}, {"present": False}), "5h 0% · wk 0%")
 
+    def test_unstored_reading_without_a_window(self):
+        # Review 7 (fresh-eyes#2): with the write failed and no open window,
+        # the payload's level and reset show, like the bare line, not "0%".
+        v5 = {"present": False, "raw": (12.0, MON + 15 * H)}
+        vw = {"present": False, "raw": (43.4, MON + 3 * D + 9 * H)}
+        self.assertEqual(self.line(v5, {"present": False}), "5h 12% @15:00 · wk 0%")
+        self.assertEqual(self.line({"present": False}, vw), "5h 0% · wk 43% @Thu 09:00")
+        cfg = config.load(os.devnull)
+        cfg["display"]["max_width"] = 20
+        self.assertEqual(self.line(v5, vw, cfg), "5h 12% · wk 43%")
+
     def test_width_never_exceeds_limit(self):
         long5 = self.v5(verdict="slow_down", multiplier=0.06, cap_ts=MON + 12 * H, used=99.7)
         longw = self.vw(dry_ts=MON + 2 * D + 14 * H, delta=-88.0, multiplier=12.0)
@@ -373,6 +423,43 @@ class Render(unittest.TestCase):
         self.assertIn("\033[33mwk", out)
         self.assertFalse(render.use_color(self.cfg, {"NO_COLOR": "1"}))
         self.assertTrue(render.use_color(self.cfg, {}))
+
+
+class WriteFailedAtRollover(TempHome):
+    """Review 7 (fresh-eyes#2): a write that fails (database locked, or not
+    writable) at a rollover never opens the new window, so the view saw only
+    the expired one and the line said "5h 0%" (or waited for usage data)
+    while the payload carried the new window's level."""
+
+    def locked_render(self, now, five=None, week=None):
+        with open(os.path.join(self.dir, "config.json"), "w") as f:
+            json.dump({"db_timeout_ms": 10}, f)
+        lock = sqlite3.connect(os.path.join(self.dir, "tempo.db"), isolation_level=None)
+        lock.execute("BEGIN IMMEDIATE")
+        try:
+            p, _ = run(payload(five, week), self.dir, args=["--now", str(now), "--no-compose"], env={"NO_COLOR": "1"})
+        finally:
+            lock.execute("ROLLBACK")
+            lock.close()
+        return p.stdout.decode("utf-8").rstrip("\n")
+
+    def test_5h_rollover_shows_the_payload_level(self):
+        R1, R7 = int(MON + 5 * H), int(MON + 7 * D)
+        self.feed(MON + 4 * H, five=(80, R1), week=(42, R7))
+        self.feed(MON + 4 * H + 600, five=(84, R1), week=(43, R7))
+        line = self.locked_render(R1 + 120, five=(12, R1 + 5 * H), week=(43, R7))
+        self.assertTrue(line.startswith("5h 12% @10:00 · wk 43% "), line)
+
+    def test_weekly_rollover_shows_the_payload_level(self):
+        R5, R7 = int(MON + D + 2 * H), int(MON + D)
+        self.feed(MON + 22 * H, five=(5, R5), week=(60, R7))
+        line = self.locked_render(R7 + 120, five=(5, R5), week=(1, R7 + 7 * D))
+        self.assertTrue(line.startswith("5h 5% "), line)
+        self.assertTrue(line.endswith(" · wk 1% @Tue 00:00"), line)
+
+    def test_first_render_does_not_wait_for_data_it_has(self):
+        line = self.locked_render(MON, five=(42, MON + 2 * H), week=(31.5, MON + 3 * D))
+        self.assertEqual(line, "5h 42% @02:00 · wk 32% @Thu 00:00")
 
 
 class TildeHome(unittest.TestCase):
