@@ -96,6 +96,11 @@ class Weekly(TempHome):
             (dict(verdict="slow_down"), "warn"),
             (dict(verdict="on_pace"), "dim"),
             (dict(verdict="speed_up", in_tail=True, expire=20), "opportunity"),
+            # Review 5 (B-weekly-profile#2): at or above a target below 100 is
+            # yellow whatever the verdict, idle and unknown included.
+            (dict(verdict="idle", in_tail=True, expire=15, target=80, used=85), "warn"),
+            (dict(verdict="unknown", target=90, used=90), "warn"),
+            (dict(verdict="speed_up", in_tail=True, expire=30, target=80, used=50), "opportunity"),
         ]
         for kw, tone in cases:
             self.assertEqual(weekly._severity(dict(base, **kw), self.cfg), tone, kw)
@@ -240,6 +245,57 @@ class Weekly(TempHome):
         v = self.view(T + 3 * H)
         self.assertEqual(v["intensity_source"], "recent")
         self.assertAlmostEqual(v["intensity"], 1 / (100 * 3 / 168), places=6)
+
+    def test_cut_lookback_with_the_window_still_at_0_falls_back_to_the_typical_week(self):
+        # Review 5 (B-weekly-profile#1): the week reset Saturday 02:00, nothing
+        # was used over the weekend, and the first reading of the new window,
+        # Monday 09:00, is 0. The cut lookback's zero is no news (D-15), and
+        # neither is the whole window's: it gave intensity 0, "×? →0%".
+        R0 = int(MON - 2 * D + 2 * H)  # Saturday 02:00
+        R1 = R0 + int(7 * D)
+        now = MON + 11 * H  # Monday 11:00, two hours of heartbeats at 0
+        # 57 of the week's 168 hours are behind (uniform profile): E = 111/168.
+        cases = [(True, "typical", 0.7), (False, "assumed", 1.0)]  # with or without a closed week at 70%
+        for i, (closed, source, intensity) in enumerate(cases):
+            self.st.close()
+            self.st = Store(os.path.join(self.dir, "zero-%d.db" % i))
+            self.known("s1")
+            if closed:
+                self.feed(R0 - 12 * H, week=(69, R0))
+                self.feed(R0 - 2 * H, week=(70, R0))  # observed in its last day
+            for k in range(25):
+                self.feed(MON + 9 * H + k * 300, week=(0, R1))
+            v = self.view(now)
+            self.assertTrue(v["lookback_start"] > now - 24 * H)  # cut at Monday 09:00
+            self.assertEqual(v["lookback_actual"], 0.0)
+            self.assertEqual(v["intensity_source"], source)
+            self.assertAlmostEqual(v["intensity"], intensity, places=9)
+            self.assertAlmostEqual(v["projected"], intensity * 100 * 111 / 168, places=6)  # 46.25 / 66.07
+            self.assertAlmostEqual(v["multiplier"], 168 / (intensity * 111), places=6)  # 2.16 / 1.51
+            self.assertEqual(v["verdict"], "speed_up")
+            text = " ".join(t for t, _ in render.weekly_parts(v, render.SYMBOLS["unicode"]))
+            self.assertNotIn("×?", text)
+            self.assertNotIn("→0%", text)
+
+    def test_idle_above_a_target_below_100_is_yellow(self):
+        # Review 5 (B-weekly-profile#2): with target_week 80, a week at 85%
+        # with 40 h to its reset and nothing spent in the last 24 awake hours
+        # was green (15 points "about to expire"); a point more spent made it
+        # yellow. At or above a target below 100 is yellow, idle included.
+        self.cfg["target_week"] = 80
+        now = MON + 4 * D + 8 * H  # Friday 08:00
+        R = int(now + 40 * H)
+        self.known("s1")
+        for h in range(40, 29, -1):  # 75 -> 85% until 30 h ago
+            self.feed(now - h * H, week=(115 - h, R))
+        for h in range(29, -1, -1):  # then idle
+            self.feed(now - h * H, week=(85, R))
+        v = self.view(now)
+        self.assertEqual(v["intensity_source"], "recent")
+        self.assertEqual(v["verdict"], "idle")
+        self.assertTrue(v["in_tail"])
+        self.assertAlmostEqual(v["expire"], 15.0)
+        self.assertEqual(v["severity"], "warn")
 
     def test_multiplier_is_zero_past_a_target_below_100(self):
         # Review 4 (weekly-profile#3): target_week 90 and 93 used gave ×-0.0▼.

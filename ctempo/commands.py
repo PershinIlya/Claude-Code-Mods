@@ -26,6 +26,13 @@ def views(st, cfg, now):
     return pace.five_hour(st, now, cfg), weekly.weekly(st, now, cfg, prof=prof), prof
 
 
+def last_reading(st):
+    """Time of the newest reading that carries information, or None. A
+    heartbeat repeats an old one (D-06), so an idle open session must not
+    make old data look new."""
+    return st.db.execute("SELECT MAX(ts) FROM samples WHERE flag != ?", (HEARTBEAT,)).fetchone()[0]
+
+
 def dur(seconds):
     s = int(max(0, seconds))
     d, s = divmod(s, 86400)
@@ -58,22 +65,26 @@ def cmd_now(args, cfg):
         return 1
     try:
         v5, vw, prof = views(st, cfg, now)
-        last = st.db.execute("SELECT MAX(ts), COUNT(*) FROM samples").fetchone()
+        count = st.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+        last = last_reading(st)  # the same data age as check (D-20)
+        beat = st.db.execute("SELECT MAX(ts) FROM samples WHERE flag = ?", (HEARTBEAT,)).fetchone()[0]
+        age = now - last if last else None
         ppw = weekly.exchange_rate(st, now)[0]
         if args.json:
-            print(json.dumps({"now": now, "five_hour": v5, "seven_day": vw, "exchange_rate": ppw}, indent=2, default=str))
+            print(json.dumps({"now": now, "data_age_s": age, "five_hour": v5, "seven_day": vw, "exchange_rate": ppw},
+                             indent=2, default=str))
             return 0
         segs = render.segments(v5, vw, cfg)
         print(render.to_ansi(segs, render.use_color(cfg) and sys.stdout.isatty()))
         print()
         _print_5h(v5, cfg)
         print()
-        _print_week(vw, ppw)
+        _print_week(vw, ppw, now)
         print()
-        age = now - last[0] if last[0] else None
         print(
-            "Data: %d samples, last %s ago. Profile: %s."
-            % (last[1], dur(age) if age is not None else "never", vw.get("profile_source", "n/a"))
+            "Data: %d samples, last reading %s, last heartbeat %s. Profile: %s."
+            % (count, "%s ago" % dur(age) if age is not None else "never",
+               "%s ago" % dur(now - beat) if beat else "never", vw.get("profile_source", "n/a"))
         )
     finally:
         st.close()
@@ -88,7 +99,14 @@ def _print_5h(v, cfg):
     print("  used           %5.1f%%   (target %.0f%%)" % (v["used"], t))
     print("  resets         %s, in %s" % (render.hm(v["reset_ts"]), dur(v["reset_ts"] - time.time())))
     if v.get("rate") is None:
-        print("  burn rate      unknown (the window opened less than %s min ago)" % cfg["rate_min_span_min"])
+        # The fit waits for min_span after the window's start, or after its
+        # first real reading once a second one follows (D-11).
+        span = cfg["rate_min_span_min"]
+        if v["rate_since"] > v["start_ts"]:
+            why = "less than %s min since work started in this window, at %s" % (span, render.hm(v["rate_since"]))
+        else:
+            why = "the window opened less than %s min ago" % span
+        print("  burn rate      unknown (%s)" % why)
     else:
         how = {"lsq": "least squares over the last %s min" % cfg["rate_window_min"],
                "interpolated": "least squares over the last %s min, mostly interpolated between "
@@ -108,21 +126,27 @@ def _print_5h(v, cfg):
             print("  projection     %5.1f%% at reset, ~%.0f%% would expire" % (v["projected"], v["unused_at_reset"]))
 
 
-def _print_week(v, ppw):
+def _print_week(v, ppw, now):
     print("Weekly window: %s" % VERDICT_TEXT.get(v.get("verdict"), v.get("verdict")))
     if not v.get("present"):
         return
     t = v["target"]
     print("  used           %5.1f%%   (target %.0f%%)" % (v["used"], t))
-    print("  resets         %s, in %s" % (render.dhm(v["reset_ts"]), dur(v["reset_ts"] - time.time())))
+    print("  resets         %s, in %s" % (render.dhm(v["reset_ts"]), dur(v["reset_ts"] - now)))
     print("  profile        %.0f%% of a week's expected spend is still ahead (E = %.3f, %s)" % (v["E"] * 100, v["E"], v["profile_source"]))
     print(
         "  on-pace level  %5.1f%%   you are %+.1f points %s"
         % (v["on_pace"], v["delta"], "ahead (spending faster than your profile)" if v["delta"] > 0 else "behind (surplus)")
     )
+    why = "recent span too short"
+    if v["lookback_cut"] and v["lookback_actual"] <= 0:
+        # A lookback cut short at the first timed reading knows nothing
+        # until the level moves (D-15).
+        why = ("no timed reading yet" if v["lookback_start"] >= now
+               else "the level has not moved since the first timed reading, %s" % render.dhm(v["lookback_start"]))
     src = {
-        "recent": "last %s: spent %.1f pts, profile expected %.1f" % (dur(time.time() - v["lookback_start"]), v["lookback_actual"], v["lookback_expected"]),
-        "window": "whole window so far (recent span too short)",
+        "recent": "last %s: spent %.1f pts, profile expected %.1f" % (dur(now - v["lookback_start"]), v["lookback_actual"], v["lookback_expected"]),
+        "window": "whole window so far (%s)" % why,
         "typical": "your typical week (no recent data)",
         "assumed": "assumed (no data yet)",
     }
@@ -223,7 +247,7 @@ def cmd_profile(args, cfg):
                 prof = profile.load(st)
                 prof.S, prof.W, prof.T = [0.0] * 168, [0.0] * 168, [0.0] * 168
                 prof.processed_until, prof.learned_hours = None, 0
-                n = profile.learn(st, prof, now, cfg, prof.weights(now, cfg)[0])
+                n = profile.learn(st, prof, now, cfg, profile.current_weights(st, prof, now, cfg)[0])
                 profile.save(st, prof)
                 st.commit()
             except Exception:
@@ -231,7 +255,7 @@ def cmd_profile(args, cfg):
                 raise
             print("Rebuilt from stored samples: %d hours learned." % n)
         prof = profile.load(st)
-        w, awake, info = prof.weights(now, cfg)
+        w, awake, info = profile.current_weights(st, prof, now, cfg)
         if args.json:
             print(json.dumps({"weights": w, "awake": awake, "info": info, "prior_meta": prof.prior_meta}, indent=2))
             return 0
@@ -324,9 +348,7 @@ ASSUMED_EXCHANGE_RATE = 50.0
 def check_result(st, cfg, now, min_free, tail, max_age):
     v5, vw, _ = views(st, cfg, now)
     ppw = weekly.exchange_rate(st, now)[0]
-    # Data age counts readings that carry information: a heartbeat repeats an
-    # old one (D-06), so an idle open session must not make old data look new.
-    last = st.db.execute("SELECT MAX(ts) FROM samples WHERE flag != ?", (HEARTBEAT,)).fetchone()[0]
+    last = last_reading(st)
     age = (now - last) if last else None
     reasons = []
     f = {"present": v5.get("present", False)}
@@ -353,10 +375,13 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     stale = age is None or age > max_age
     if stale:
         reasons.append("no fresh reading in the last %s" % dur(max_age) if age is not None else "no fresh readings at all")
+    # No 5h burn rate yet (D-11): its leftover is unknown (projected_unused
+    # null), so neither harvest may count on it.
+    rate_unknown = f["present"] and f["projected_unused"] is None
     week_cost = None
     assumed = f["present"] and ppw is None
-    if f["present"]:
-        week_cost = (f["projected_unused"] or 0) * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
+    if f["present"] and not rate_unknown:
+        week_cost = f["projected_unused"] * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
     week_ok = (not k["present"]) or (
         k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= config.target(cfg, SEVEN_DAY)
     )
@@ -369,8 +394,11 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     # Harvesting weekly surplus must not starve your own 5h window: it needs
     # room now and at the current burn rate.
     five_room = f["free_now"] >= min_free and (not f["present"] or (f["projected_unused"] or 0) >= min_free)
-    k["harvestable"] = bool(k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free and five_room)
-    if k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free and not five_room:
+    week_surplus = k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free
+    k["harvestable"] = bool(week_surplus and five_room)
+    if rate_unknown and (f["in_tail"] or week_surplus):
+        reasons.append("5h burn rate not known yet")
+    elif week_surplus and not five_room:
         reasons.append("weekly surplus is there, but the 5h window has no room at the current burn")
     if f["harvestable"]:
         reasons.append("5h window ends in %s with ~%.0f%% projected unused" % (dur(f["seconds_to_reset"]), f["projected_unused"]))

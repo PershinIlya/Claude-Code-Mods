@@ -13,7 +13,7 @@
 
 from . import config, profile
 from .config import DURATION, FIVE_HOUR, SEVEN_DAY
-from .pace import current_used, verdict_for
+from .pace import current_used, over_target, verdict_for
 from .store import FIRST, FRESH
 
 MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend
@@ -129,8 +129,7 @@ def weekly(store, now, cfg, reading=None, prof=None):
     reset = inst["reset_ts"]
     start = reset - DURATION[SEVEN_DAY]
     prof = prof or profile.load(store)
-    hl = float(cfg["profile"]["half_life_days"]) * 86400
-    w, awake, info = prof.weights(now, cfg, profile.typical_week(store, now, hl))
+    w, awake, info = profile.current_weights(store, prof, now, cfg)
 
     elapsed = profile.share_between(w, start, now)
     left = profile.share_between(w, now, reset)
@@ -151,16 +150,17 @@ def weekly(store, now, cfg, reading=None, prof=None):
     intensity, source = None, None
     # Readings are whole percents: a lookback cut short at the first reading
     # (install, first sighting late in the window) that has not seen a step
-    # yet knows nothing, so its zero is not "idle".
+    # yet knows nothing, so its zero is not "idle"; nor is the whole window's
+    # while it is still at 0 (the typical week stands in).
     if share >= MIN_EXPECTED_SHARE and t_eff < now and not (cut and actual <= 0):
         intensity, source = actual / (tgt * share), "recent"
-    elif elapsed >= MIN_WINDOW_SHARE:
+    elif elapsed >= MIN_WINDOW_SHARE and not (cut and used <= 0):
         intensity, source = used / (tgt * elapsed), "window"
     elif info["weekly_total"]:
         intensity, source = info["weekly_total"] / tgt, "typical"
     else:
         intensity, source = 1.0, "assumed"
-    v.update(intensity=intensity, intensity_source=source, lookback_start=t_eff,
+    v.update(intensity=intensity, intensity_source=source, lookback_start=t_eff, lookback_cut=cut,
              lookback_actual=actual, lookback_expected=tgt * share)
 
     remaining_spend = intensity * tgt * E
@@ -184,11 +184,12 @@ def weekly(store, now, cfg, reading=None, prof=None):
 
 
 def _severity(v, cfg):
-    # The 5h tiers (pace.severity): red needs a dry time and a slow down verdict.
+    # The 5h tiers (pace.severity): red needs a dry time and a slow down
+    # verdict; at or above a target below 100 is yellow, idle included.
     dry = v.get("dry_ts") is not None
     if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
         return "alert"
-    if dry or v["verdict"] == "slow_down":
+    if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
     if v.get("in_tail") and v.get("expire", 0) >= float(cfg["min_free"]):
         return "opportunity"

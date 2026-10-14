@@ -130,7 +130,7 @@ def maybe_learn(st, prof, now, cfg):
     try:
         st.begin()
         prof = profile.load(st)
-        w, _, _ = prof.weights(now, cfg)
+        w, _, _ = profile.current_weights(st, prof, now, cfg)
         profile.learn(st, prof, now, cfg, w)
         profile.save(st, prof)
         st.meta_set("profile_checked_at", now)

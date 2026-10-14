@@ -2,9 +2,10 @@
 
   5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00
 
-Tones: dim (fine), opportunity (green: spare quota about to expire),
-warn (yellow: runs dry before the reset but on pace, or slow down against a
-target below 100), alert (red: runs dry with a slow down verdict, or maxed).
+Tones: dim (fine), opportunity (green: spare quota about to expire, never
+while the 5h burn rate is unknown), warn (yellow: runs dry before the reset
+but on pace, slow down without a dry time, or at or above a target below
+100), alert (red: runs dry with a slow down verdict, or maxed).
 """
 
 import os
