@@ -13,7 +13,7 @@
 
 from . import config, profile
 from .config import DURATION, FIVE_HOUR, SEVEN_DAY
-from .pace import current_used, over_target, verdict_for
+from .pace import current_used, over_target, spare, verdict_for
 from .store import FIRST, FRESH
 
 MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend
@@ -191,6 +191,6 @@ def _severity(v, cfg):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
-    if v.get("in_tail") and v.get("expire", 0) >= float(cfg["min_free"]):
+    if v.get("in_tail") and spare(v.get("expire"), cfg["min_free"]):
         return "opportunity"
     return "dim"

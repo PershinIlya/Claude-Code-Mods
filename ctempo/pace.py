@@ -203,6 +203,13 @@ def over_target(v):
     return v.get("target", 100.0) < 100.0 and v.get("used", 0.0) >= v["target"]
 
 
+def spare(points, min_free):
+    """At least min_free points, and some: with min_free 0 a leftover of 0
+    (maxed, or dry before the reset) is nothing to harvest. None (unknown)
+    is never spare."""
+    return points is not None and points > 0 and points >= float(min_free)
+
+
 def severity(v, cfg):
     """dim (fine), opportunity (spare quota about to expire), warn, alert.
 
@@ -221,7 +228,6 @@ def severity(v, cfg):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
-    unused = v.get("unused_at_reset")
-    if v.get("in_tail") and unused is not None and unused >= float(cfg["min_free"]):
+    if v.get("in_tail") and spare(v.get("unused_at_reset"), cfg["min_free"]):
         return "opportunity"
     return "dim"

@@ -249,11 +249,14 @@ not idle): the whole window so far (unless it is still at 0 after a cut
 lookback, which is no news either; it showed `×? →0%`), then the typical week
 `M / target`, then 1.0, each labeled in `ctempo now` with its reason (recent
 span too short; the level has not moved since the first timed reading; no
-timed reading yet). "Dry" is the hour-by-hour walk at that intensity
-(thevibeworks' `_profile_walk` shape). Verdict thresholds are the same as for
-5h; "idle" when the last 24 awake hours spent nothing. The multiplier is
-max(0, target - used) / remaining spend, so it is 0 past a target below 100,
-as for 5h.
+timed reading yet); the typical week and 1.0 also say why the whole window
+could not stand in (it is still at 0%, or it is too new: under 2% of a week's
+expected spend has passed since it opened). They said "no recent data" and "no
+data yet" next to hours of readings. "Dry" is the hour-by-hour walk at that
+intensity (thevibeworks' `_profile_walk` shape). Verdict thresholds are the
+same as for 5h; "idle" when the last 24 awake hours spent nothing. The
+multiplier is max(0, target - used) / remaining spend, so it is 0 past a
+target below 100, as for 5h.
 
 **D-23. Exchange rate.** Weekly points per full 5-hour window, from paired
 readings (thevibeworks' `pct_per_window`: published once the 5h side rose 50
@@ -277,17 +280,18 @@ whatever the verdict (an idle window above its target was green, found in
 review); bold red when it runs dry with a slow down verdict, or is maxed; and
 green (an addition to the brief) when a window is in its tail with at least
 `min_free` points about to expire, never while the 5h burn rate is unknown
-(D-11). At target 100 every slow down runs dry, so yellow was unreachable at
-the defaults until red was made to need both (found in review). `NO_COLOR` and
-`TERM=dumb` disable color; `display.symbols: "ascii"` swaps the glyphs. Output
-is written as UTF-8 bytes whatever the locale. Config values of the wrong type
-or out of range fall back to the default or are clamped at load
-(`config.RANGES`), so a typo never breaks the line. When the line would exceed
-`display.max_width` (80), optional parts are dropped in order: 5h reset time,
-weekly delta, weekly reset time, then projections. If it still does not fit,
-it is cut at the width with `…` (`...` in ascii mode) and each part keeps its
-tone; the bare line and the waiting message use the configured separator and
-are fitted the same way. The statusline never prints a traceback: errors go to
+(D-11), whatever `min_free` (0 included), and never for 0 points. At target
+100 every slow down runs dry, so yellow was unreachable at the defaults until
+red was made to need both (found in review). `NO_COLOR` and `TERM=dumb`
+disable color; `display.symbols: "ascii"` swaps the glyphs. Output is written
+as UTF-8 bytes whatever the locale. Config values of the wrong type or out of
+range fall back to the default or are clamped at load (`config.RANGES`), so a
+typo never breaks the line. When the line would exceed `display.max_width`
+(80), optional parts are dropped in order: 5h reset time, weekly delta, weekly
+reset time, then projections. If it still does not fit, it is cut at the width
+with `…` (`...` in ascii mode) and each part keeps its tone; the bare line and
+the waiting message use the configured separator and are fitted the same way.
+The statusline never prints a traceback: errors go to
 `~/.claude-tempo/errors.log` (64 KB, one rotation) and the line degrades to
 "ctempo: error" or a bare line from the payload.
 
@@ -336,44 +340,60 @@ record per absolute settings path, saved *before* the settings file is written
 since the last install becomes the new original, and so does a command the
 user put in ctempo's `--compose` argument, also when there was no statusLine
 before ctempo (then without the `refreshInterval` ctempo added; uninstall
-restores it, and a repin or `--replace` records it first); ctempo's own
-command is never recorded or restored as the original (a pre-ctempo backup,
-where a blank one means there was no statusLine, or `--compose` is used
-instead). Backups are created exclusively and never overwritten. `uninstall`
-asks which file when several are installed and never creates a missing file.
-Records are matched by real path, so a symlinked settings file is one record;
-a version-1 record with a relative path is recovered from its backup's name,
-and one that version 1 already uninstalled is dropped. If the plugin commands
-fail during uninstall (claude missing or hanging), the mod record and
-`runtime.json` are kept and uninstall exits 1 so a rerun retries (the warning
-says the mod may still be installed). When claude is not on PATH at install,
-install prints the plugin commands for the user to run and still records the
-mod (as manual, with the user-file snapshot), so uninstall runs the reverse
-commands, and a later install that finds claude on PATH while the user file
-shows no trace of the mod takes the user-file snapshot again before running
-them. Whatever the mod record, if claude is missing at uninstall and the user
+restores it, and a repin or `--replace` records it first, also into a record
+rebuilt after install.json was lost, where it wins over a backup); ctempo's
+own command is never recorded or restored as the original (a pre-ctempo
+backup, where a blank one means there was no statusLine, or `--compose` is
+used instead). Backups are created exclusively and never overwritten.
+`uninstall` asks which file when several are installed and never creates a
+missing file. Records are matched by real path, so a symlinked settings file
+is one record; a version-1 record with a relative path is recovered from its
+backup's name, and one that version 1 already uninstalled is dropped. If the
+plugin commands fail during uninstall (claude missing or hanging), the mod
+record and `runtime.json` are kept and uninstall exits 1 so a rerun retries
+(the warning says the mod may still be installed). When claude is not on PATH
+at install, install prints the plugin commands for the user to run and still
+records the mod (as manual, with the user-file snapshot), so uninstall runs
+the reverse commands. A mod stays manual until ctempo sees the plugin CLI
+write to the user file: the mod listed there at any install or uninstall, or
+the file changed by a plugin command ctempo ran (commands that time out leave
+it manual). A later install that finds claude on PATH while a manual mod's
+user file shows no trace of it takes the user-file snapshot again before
+running them, and that snapshot replaces a record kept for the user file.
+Whatever the mod record, if claude is missing at uninstall and the user
 settings file lists neither the plugin nor its marketplace (the commands never
 ran or failed, or the user undid them by hand), there is nothing to undo and
-uninstall completes. A user file the plugin CLI never wrote to (a manual mod
-whose commands never ran) is never rewritten. The plugin CLI edits the user
-settings file, so that file's record outlives its own uninstall while the mod
-stays (installed elsewhere, or its commands failed), and whoever removes the
-mod brings the file back from its backup; a user file that only the plugin CLI
-touched gets a backup of its own before the first plugin command (also when an
-older mod record has none), and that snapshot is the file's baseline whenever
-it has no record of its own, as when an uninstall reaches it without one. A
-later install into it keeps two baselines: the file as it is then (its own
-backup), and, as a fallback, the file before the mod (its kept record's
-baseline, else that snapshot). Restore tries them in that order. Every record
-of a file, under any name, goes when it is uninstalled. `uninstall` restores
-the original `statusLine` (or removes it), removes `enabledPlugins` /
-`extraKnownMarketplaces` if they did not exist before and the plugin CLI left
-them empty, and when the result equals the backup (a blank backup counts as
-`{}`, as on install) it writes the backup's bytes, so an untouched file comes
-back byte for byte (the test suite checks four formatting styles and blank
-files). The mod is installed with `claude plugin marketplace add <repo>` and
-`claude plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips it.
-`--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned interpreter.
+uninstall completes. A user file the plugin CLI never wrote to (a manual mod)
+is never rewritten, also when an uninstall reaches it as its own target,
+unless the reverse commands write there at uninstall (then it comes back from
+its snapshot, or goes if it did not exist). A user file that is not valid JSON
+is left alone (it is not "absent" for the snapshot either: its plugin keys
+count as the user's). The plugin CLI edits the user settings file, so that
+file's record outlives its own uninstall while the mod stays (installed
+elsewhere, or its commands failed), and whoever removes the mod brings the
+file back from its backup; a user file that only the plugin CLI touched gets a
+backup of its own before the first plugin command (also when an older mod
+record has none), and that snapshot is the file's baseline whenever it has no
+record of its own, as when an uninstall reaches it without one. A later
+install into it keeps two baselines: the file as it is then (its own backup),
+and, as a fallback, the file before the mod (its kept record's baseline, else
+that snapshot). Restore tries them in that order, and deletes the file because
+there was none before the mod only when neither backup matches. Every record
+of a file, under any name, goes when it is uninstalled, and the user file's
+kept record goes with the mod (also when that file is gone). Backups are
+ordered by their time and sequence number, never as strings. `uninstall`
+restores the original `statusLine` (or removes it), removes `enabledPlugins` /
+`extraKnownMarketplaces` if they were not the user's (absent before, or
+holding only ctempo's own entry because the commands were run by hand; a key
+the user file no longer holds of its own when ctempo next looks, as after the
+user deleted or blanked the file, stops counting as theirs) and the plugin CLI
+left them empty, and when the result equals the backup (a blank backup counts
+as `{}`, as on install) it writes the backup's bytes, so an untouched file
+comes back byte for byte (the test suite checks four formatting styles and
+blank files). The mod is installed with `claude plugin marketplace add <repo>`
+and `claude plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips
+it. `--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned
+interpreter.
 
 ## The scavenger hook
 
@@ -384,21 +404,29 @@ at least `--min-free` (default 10) and at least that much is free now, and the
 weekly window would not run dry or exceed its target if that leftover were
 spent (priced with the exchange rate; while that is unknown, at its clamp
 maximum of 50 weekly points per 5h window, and the JSON says
-`"exchange_rate_assumed": true`). The weekly window is harvestable when it is
-in its tail (`week=2d`) with at least `min-free` projected to expire and the
-5h window has room, both now and at the current burn rate (projected unused >=
-`min-free`): a scavenger must not starve interactive work. While the 5h burn
-rate is not known yet (D-11), the 5h leftover is unknown: `projected_unused`
-and the weekly cost are null, the reason is "5h burn rate not known yet", and
-neither the 5h harvest nor the weekly harvest's 5h room test passes (so the
-weekly harvest also pauses in the first 5 minutes of each 5h window). Data
-older than `--max-age` (30 min) is a no-go. Age is measured from the newest
-reading that carries information (FRESH, FIRST or ANOMALY), never from
-heartbeats: an open idle session re-renders an old reading every minute, while
-headless runs and claude.ai spend without rendering a statusLine. `ctempo now`
-reports the same age (`data_age_s` in `--json`) with the last heartbeat beside
-it; `doctor` keeps its per-source liveness on all samples, since a heartbeat
-proves the statusLine runs. A scavenger has to refresh the data itself (v2).
+`"exchange_rate_assumed": true`, only when a 5h leftover was priced that way).
+The weekly window is harvestable when it is in its tail (`week=2d`) with at
+least `min-free` projected to expire and the 5h window has room, both now and
+at the current burn rate (projected unused >= `min-free`): a scavenger must
+not starve interactive work. While the 5h burn rate is not known yet (D-11),
+the 5h leftover is unknown: `projected_unused` and the weekly cost are null,
+nothing is priced (`exchange_rate_assumed` is false), the reason is "5h burn
+rate not known yet" (beside "already tight" when the week is tight on its own,
+without a price), and neither the 5h harvest nor the weekly harvest's 5h room
+test passes, whatever `--min-free` (0 included: the unknown leftover was read
+as 0, and 0 >= 0 passed it and crashed `check`), so the weekly harvest also
+pauses in the first 5 minutes of each 5h window. A leftover or free room
+counts only when it is at least `--min-free` and more than 0 (at 0, a maxed 5h
+window had "room"). `--min-free` is clamped to 0 to 100, like `min_free` in
+the config; nan, inf or a negative duration is an error (JSON with `"error"`,
+exit 1). Data older than `--max-age` (30 min) is a no-go. Age is measured from
+the newest reading that carries information (FRESH, FIRST or ANOMALY), never
+from heartbeats: an open idle session re-renders an old reading every minute,
+while headless runs and claude.ai spend without rendering a statusLine.
+`ctempo now` reports the same age (`data_age_s` in `--json`) with the last
+heartbeat beside it; `doctor` keeps its per-source liveness on all samples,
+since a heartbeat proves the statusLine runs. A scavenger has to refresh the
+data itself (v2).
 
 ## Retention
 
@@ -432,6 +460,12 @@ multiplier; `CTEMPO_HOME`, `check` and `report`; install retries, baselines
 and the `--compose` argument) and rejected 2; a fifth, over those fixes,
 confirmed 11 distinct defects (14 reports: an unknown 5h burn taken as zero,
 `now` reasons and data age, the profile scale, a weekly window at 0, idle
-above a target, and five install edge cases) and rejected 1. All 70 are fixed,
-each with a regression test that was checked to fail on the code before its
-fix. Details in the commit messages from "Fix review findings" on.
+above a target, and five install edge cases) and rejected 1; a sixth confirmed
+9 (10 reports: an unknown 5h leftover compared as a number at `min_free` 0,
+two `check`/`now` texts, and six install sequences) and rejected 3, a
+model-based fuzzer over install and uninstall (tests/test_install_fuzz.py)
+found 3 more classes, and the fixers' own notes 5 more (a leftover of 0
+counted as spare, a nan duration, a user file that is not valid JSON in two
+places, backups sorted as strings). All 87 are fixed, each with a regression
+test that was checked to fail on the code before its fix. Details in the
+commit messages from "Fix review findings" on.
