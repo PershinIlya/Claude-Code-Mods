@@ -66,7 +66,7 @@ def cmd_now(args, cfg):
         segs = render.segments(v5, vw, cfg)
         print(render.to_ansi(segs, render.use_color(cfg) and sys.stdout.isatty()))
         print()
-        _print_5h(v5)
+        _print_5h(v5, cfg)
         print()
         _print_week(vw, ppw)
         print()
@@ -80,7 +80,7 @@ def cmd_now(args, cfg):
     return 0
 
 
-def _print_5h(v):
+def _print_5h(v, cfg):
     print("5-hour window: %s" % VERDICT_TEXT.get(v.get("verdict"), v.get("verdict")))
     if not v.get("present"):
         return
@@ -90,7 +90,7 @@ def _print_5h(v):
     if v.get("rate") is None:
         print("  burn rate      unknown (fewer than 3 readings over 5 minutes)")
     else:
-        how = {"lsq": "least squares over the last 20 min",
+        how = {"lsq": "least squares over the last %s min" % cfg["rate_window_min"],
                "since_last": "average since the previous reading (too few recent readings)",
                "window_avg": "window average (too few recent readings)"}
         print("  burn rate      %5.1f %%/h  %s" % (v["rate"], how.get(v["rate_source"], "")))
