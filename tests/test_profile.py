@@ -163,6 +163,19 @@ class LearnEdges(TempHome):
         self.assertIsNotNone(kept.prior)
         self.assertIsNotNone(profile.load(self.st).prior)
 
+    def test_early_reset_with_rounded_start_counts_from_zero(self):
+        R = int(MON + 4 * D + 2 * H)  # resets Friday
+        t = MON + 2 * D + 12 * H  # Wednesday 12:00, at 64% and climbing 1 point an hour
+        for k in range(11):
+            self.feed(t + k * 900, week=(64 + k * 0.25, R))
+        # 14:37 an early reset; the new window's resets_at is on the hour: 14:00 next week.
+        R2 = int(MON + 9 * D + 14 * H)
+        for k in range(1, 17):
+            self.feed(t + 2 * H + 37 * 60 + k * 900, week=(k * 0.25, R2))
+        prof = self.learned(t + 8 * H)
+        b = profile.bin_of(t + 4 * H)  # Wednesday 16:00, well inside the new window
+        self.assertAlmostEqual(prof.S[b] / prof.W[b], 1.0, places=6)
+
     def test_batch_and_incremental_learning_agree_with_parallel_dips(self):
         from ctempo import ingest
         from ctempo.store import Store

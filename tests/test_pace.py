@@ -49,19 +49,44 @@ class FiveHour(TempHome):
         self.assertEqual(v["severity"], "dim")
 
     def test_burst_then_cap_time(self):
-        self.feed(self.t - 10 * M, five=(40, self.R))
-        self.feed(self.t - 5 * M, five=(40, self.R), sid="s2")  # same value, other session: no new row
-        self.st.add_sample(self.t - 5 * M, FIVE_HOUR, 40, self.R, "test", "s3", 1, 1)  # heartbeat tick
+        self.feed(self.t - 20 * M, five=(40, self.R))
+        self.feed(self.t - 10 * M, five=(40, self.R), sid="s2")
+        self.st.add_sample(self.t - 5 * M, FIVE_HOUR, 70, self.R, "test", "idle", 1, 1)  # a heartbeat: no level info
         self.feed(self.t, five=(50, self.R))
         v = self.view()
-        # Points (0, 40), (5 min, 40), (10 min, 50): 60 %/h (see Slope).
-        self.assertAlmostEqual(v["rate"], 60.0, places=6)
-        self.assertAlmostEqual(v["multiplier"], 25.0 / 60.0)
+        # Fresh points (0, 40), (1/6 h, 40), (1/3 h, 50): x mean 1/6, y mean 130/3;
+        # Sxy = (1/6)(10/3) + (1/6)(20/3) = 10/6, Sxx = 2/36, slope = 30 %/h.
+        self.assertAlmostEqual(v["rate"], 30.0, places=6)
+        self.assertEqual(v["rate_source"], "lsq")
+        self.assertAlmostEqual(v["multiplier"], 25.0 / 30.0)  # allowed (100 - 50) / 2 h
         self.assertEqual(v["verdict"], "slow_down")
-        self.assertAlmostEqual(v["projected_raw"], 170.0)
+        self.assertAlmostEqual(v["projected_raw"], 110.0)
         self.assertEqual(v["projected"], 100.0)
-        self.assertAlmostEqual(v["cap_ts"], self.t + 50 * M)  # (100 - 50) / 60 h
+        self.assertAlmostEqual(v["cap_ts"], self.t + 100 * M)  # (100 - 50) / 30 h
         self.assertEqual(v["severity"], "alert")
+
+    def test_heartbeats_never_make_a_burst(self):
+        # An idle session re-renders its stale 52 after a sleep; the busy one read 60 and 61.
+        self.feed(self.t - 60 * M, five=(60, self.R), sid="busy")
+        self.feed(self.t - 59 * M, five=(52, self.R), sid="idle")  # its first, lower reading
+        self.feed(self.t - 8 * M, five=(52, self.R), sid="idle")  # heartbeat after a 40-minute sleep
+        self.feed(self.t - 7 * M, five=(61, self.R), sid="busy")
+        for k in range(1, 8):
+            self.feed(self.t - 7 * M + k * 60, five=(61, self.R), sid="busy")
+        v = self.view()
+        # Level path: 60 an hour ago, linear to 61 seven minutes ago, then flat:
+        # a few %/h at most; never a burst from the idle session's stale 52.
+        self.assertLess(v["rate"], 4.0)
+        self.assertIsNone(v["cap_ts"])
+
+    def test_open_session_heartbeats_do_not_squeeze_a_gap(self):
+        self.feed(self.t - 2 * H, five=(30, self.R))
+        for k in range(1, 120):  # the session stays open: a heartbeat a minute at 30
+            self.feed(self.t - 2 * H + k * 60, five=(30, self.R))
+        self.feed(self.t, five=(70, self.R), sid="s2")  # 40 points spent on claude.ai meanwhile
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 20.0, places=6)  # spread over the 2 h gap
+        self.assertIsNone(v["cap_ts"] if v["projected_raw"] < 100 else None)
 
     def test_idle_is_zero_rate_and_shows_allowed(self):
         self.feed(self.t - 30 * M, five=(50, self.R))
@@ -82,12 +107,12 @@ class FiveHour(TempHome):
             self.feed(self.t - i * M, five=(45, self.R))
         self.assertEqual(self.view()["rate"], 0.0)
 
-    def test_too_few_points_falls_back_to_window_average(self):
-        r = int(self.t + 3 * H)  # window started 2 h ago
+    def test_one_reading_gives_the_window_average(self):
+        r = int(self.t + 3 * H)  # window started 2 h ago, at 0
         self.feed(self.t, five=(30, r))
         v = self.view()
-        self.assertEqual(v["rate_source"], "window_avg")
-        self.assertAlmostEqual(v["rate"], 15.0)  # 30 points over 2 h
+        self.assertEqual(v["rate_source"], "interpolated")
+        self.assertAlmostEqual(v["rate"], 15.0)  # the path rises 30 points over 2 h
         self.assertAlmostEqual(v["allowed"], 70.0 / 3.0)
         self.assertAlmostEqual(v["projected"], 75.0)
 
@@ -95,7 +120,7 @@ class FiveHour(TempHome):
         self.feed(self.t - 2 * H, five=(30, self.R))  # last read 2 h ago
         self.feed(self.t, five=(70, self.R))  # claude.ai use in between
         v = self.view()
-        self.assertEqual(v["rate_source"], "since_last")
+        self.assertEqual(v["rate_source"], "interpolated")
         self.assertAlmostEqual(v["rate"], 20.0)  # 40 points over 2 h, not 120 %/h
         # 70 + 20 * 2 h = 110: the cap comes after 30 / 20 = 1.5 h, not in 15 minutes.
         self.assertAlmostEqual(v["projected_raw"], 110.0)
@@ -109,7 +134,6 @@ class FiveHour(TempHome):
         self.feed(self.t - 60, five=(90, r), sid="s2")
         self.feed(self.t, five=(90, r), sid="s3")  # readings minutes apart must not hide the gap
         v = self.view()
-        self.assertEqual(v["rate_source"], "since_last")
         self.assertEqual(v["rate"], 0.0)
         self.assertEqual(v["verdict"], "idle")
         self.assertEqual(v["severity"], "opportunity")  # 10 points left, 30 min to go

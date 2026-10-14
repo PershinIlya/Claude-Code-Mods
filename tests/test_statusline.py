@@ -114,7 +114,8 @@ class Statusline(unittest.TestCase):
                        "compose": {"command": True, "timeout_ms": 1e9}, "display": {"max_width": 3, "symbols": "emoji"},
                        "target_5h": float("inf") if False else 100}, f)
         cfg = config.load(os.path.join(self.home, "config.json"))
-        self.assertIsNone(cfg["profile"]["override"])
+        self.assertEqual(cfg["profile"]["override"]["work_days"], [0, 1, 2, 3, 4])  # bad field: default
+        self.assertEqual(cfg["profile"]["override"]["wake_hours"], [8, 23])
         self.assertEqual(cfg["profile"]["half_life_days"], 0.5)
         self.assertIsNone(cfg["compose"]["command"])
         self.assertEqual(cfg["compose"]["timeout_ms"], 10000)
@@ -125,6 +126,18 @@ class Statusline(unittest.TestCase):
         self.assertTrue(line.startswith("5h 42%"), line)  # full math, not the bare fallback
         self.assertLessEqual(len(line), 20)
         self.assertNotIn("error", line)
+
+    def test_override_fields_are_checked_one_by_one_and_empty_surfaces_kept(self):
+        with open(os.path.join(self.home, "config.json"), "w") as f:
+            json.dump({"profile": {"override": {"work_days": [0, 1, 2.0, 9, "x"], "wake_hours": [7.5, 23],
+                                                "off_day_factor": 3, "mode": "REPLACE"}},
+                       "mod": {"surfaces": []}}, f)
+        cfg = config.load(os.path.join(self.home, "config.json"))
+        self.assertEqual(cfg["profile"]["override"],
+                         {"work_days": [0, 1, 2], "wake_hours": [7, 23], "off_day_factor": 1.0, "mode": "replace"})
+        self.assertEqual(cfg["mod"]["surfaces"], [])
+        p, _ = run(self.p, self.home, args=["--source", "mod", "--format", "json"])
+        self.assertEqual(json.loads(p.stdout)["surfaces"], [])
 
     def test_pathological_config_falls_back_to_defaults(self):
         with open(os.path.join(self.home, "config.json"), "w") as f:

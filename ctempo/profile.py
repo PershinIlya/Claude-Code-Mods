@@ -282,6 +282,7 @@ def learn(store, prof, now, cfg, w_current=None):
     pc = cfg["profile"]
     hl = float(pc["half_life_days"]) * 86400
     max_gap = float(pc["max_gap_hours"]) * HOUR
+    drop = float(cfg["reset"]["drop_points"])
     pu = prof.processed_until
     first = store.db.execute(
         "SELECT MIN(ts) FROM samples WHERE window=? AND flag=?", (SEVEN_DAY, FRESH)
@@ -323,13 +324,16 @@ def learn(store, prof, now, cfg, w_current=None):
             if wid not in starts:
                 inst = store.instance(wid)
                 starts[wid] = inst["start_ts"] if inst else ts
-            if starts[wid] < prev[0]:
-                # A window that began before the previous reading (a moved
-                # or bogus reset, or the real window reopened): continuation.
+            if starts[wid] < prev[0] and used > run_max - drop:
+                # A window that began before the previous reading at about the
+                # same level (a moved or bogus reset, the real window
+                # reopened): a continuation, not new spend.
                 a, delta = prev[0], max(0.0, used - run_max)
                 run_max = max(run_max, used)
             else:
-                a, delta, run_max = starts[wid], used, used
+                # A real reset (an early one too, whose start is rounded down
+                # to the hour): the new window counts from 0.
+                a, delta, run_max = max(prev[0], starts[wid]), used, used
         else:
             a, delta = prev[0], max(0.0, used - run_max)
             run_max = max(run_max, used)
