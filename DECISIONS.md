@@ -110,18 +110,23 @@ window, closed by it, is reopened instead of being split in two.
 
 ## 5-hour math
 
-**D-11. Burn rate.** Least-squares slope of the running max over the trailing
-20 minutes (brief), with two anchors: the window's value at the start of the
-fit window, if it was read within 5 minutes before that edge (an older value
-would squeeze usage from an unobserved gap into 20 minutes: 128 %/h and a
-false "dry" in review), and the current reading at "now" (if not already a
-stored row). Heartbeats are points too. Effect: a burst that stopped 15
-minutes ago keeps lowering the slope as flat points accumulate, and drops out
-after 20 minutes; idle gives exactly 0. ccpool fits only the samples and ends
-at the last one, so an old burst keeps a positive slope. Needs 3 points
-spanning 5 minutes; otherwise the average since the previous reading (at
-least 5 minutes back), else the window average (`used / elapsed`, the window
-opened at 0); both are marked `~` on the line. Slopes below 0.05 %/h count as idle.
+**D-11. Burn rate.** A heartbeat repeats a session's last API response and
+says nothing about the account's level (claude.ai keeps spending while a
+Claude Code session idles), so the rate uses fresh readings only. They form
+a *level path*: a running max, through 0 at the window start (every window
+opens empty), linear between readings (spend in an unobserved gap is spread
+over the gap instead of being squeezed into the moment we looked), and flat
+after the last reading (no news, no spend: a finished burst fades out over
+the next 20 minutes and idle reads exactly 0). The rate is the least-squares
+slope of that path over the trailing 20 minutes (brief), sampled at its
+edges and at every fresh reading inside. With at least 3 fresh readings
+spanning 5 minutes the fit is plain least squares; otherwise it leans on
+interpolation and the line marks it `~` (a single reading in a window gives
+the window average). Slopes below 0.05 %/h count as idle. ccpool fits only
+raw samples and ends at the last one, so an old burst keeps a positive slope.
+This model came out of two review passes: anchoring on the last stored value
+let an idle session's stale heartbeat fake a 36 %/h burst, and an open
+session's heartbeats squeezed two hours of claude.ai use into minutes.
 
 **D-12. Allowed rate, multiplier, projection.** As in the brief: allowed =
 (target - used) / hours to reset; multiplier = allowed / current; projection
@@ -267,7 +272,12 @@ changed since the last install becomes the new original; ctempo's own
 command is never recorded or restored as the original (a pre-ctempo backup
 or `--compose` is used instead). Backups are created exclusively and never
 overwritten. `uninstall` asks which file when several are installed and
-never creates a missing file. `uninstall`
+never creates a missing file. Records are matched by real path, so a
+symlinked settings file is one record; a version-1 record with a relative
+path is recovered from its backup's name. If the plugin commands fail during
+uninstall (claude missing or hanging), the mod record and `runtime.json` are
+kept and uninstall exits 1 so a rerun retries; the plugin keys the CLI
+leaves empty are tidied in the user settings file it edits. `uninstall`
 restores the original `statusLine` (or removes it), removes
 `enabledPlugins` / `extraKnownMarketplaces` if they did not exist before and
 the plugin CLI left them empty, and when the result equals the backup it
@@ -313,6 +323,8 @@ after 7 days.
 ## Review
 
 An adversarial review (6 reviewers, each finding checked by a skeptic who
-tried to refute it) confirmed 23 defects and rejected 11; all 23 are fixed
-with a regression test each, and every new test was checked to fail on the
-old code. Details in the commit messages from "Fix review findings".
+tried to refute it) confirmed 23 defects and rejected 11. A second pass over
+the fixes confirmed 10 more (mostly install edge cases, and the 5h model
+above) and rejected 1. All 33 are fixed, each with a regression test that
+was checked to fail on the code before its fix. Details in the commit
+messages from "Fix review findings" on.

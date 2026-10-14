@@ -21,7 +21,7 @@ Python 3.8+ standard library only.
 |---|---|
 | `5h 62%` | 5-hour window: 62% used |
 | `×1.4▲` | multiplier: you can go 1.4 times faster and still land on the target at the reset. `▲` speed up (≥ 1.2), no glyph on pace, `▼` slow down (< 0.9) |
-| `~×1.4` | same, from the window average (fewer than 3 readings over 5 minutes yet) |
+| `~×1.4` | same, but the rate leans on interpolation (fewer than 3 fresh readings in the last 20 minutes) |
 | `→88%` | projected level at the reset at the current burn rate |
 | `dry 12:40` | instead of the projection: you hit 100% at 12:40, before the reset |
 | `idle ≤9%/h` | nothing spent in the last 20 minutes; you can afford up to 9 points an hour |
@@ -45,9 +45,11 @@ about to expire. `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdic
 
 **5-hour window**
 
-- current rate = least-squares slope of used % over the trailing 20 minutes
-  (needs 3 readings spanning 5 minutes), anchored at the window's value 20
-  minutes ago and at now, so a burst that ended fades out; 0 when idle;
+- current rate = least-squares slope, over the trailing 20 minutes, of the
+  level path drawn through fresh readings only (0 at the window start, linear
+  between readings, flat after the last): a burst that ended fades out, idle
+  is 0, and spend in a gap you did not observe (claude.ai while Claude Code
+  sat idle) is spread over the gap rather than shown as a sudden burst;
 - allowed rate = (target − used) / hours to reset (target defaults to 100);
 - multiplier = allowed / current;
 - projection = used + rate × hours left, capped at 100, with the time it hits
@@ -184,7 +186,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 124 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 131 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 9 tests
 ```
 
@@ -194,8 +196,8 @@ epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
 throwaway settings files, including the byte-identical round trip (CRLF,
 mode, several settings files, a crash mid-install, a lost install record).
-An adversarial review found 23 defects; each one has a regression test that
-fails on the code before its fix.
+Two adversarial review passes found 33 defects; each one has a regression
+test that fails on the code before its fix.
 
 ## Layout
 
