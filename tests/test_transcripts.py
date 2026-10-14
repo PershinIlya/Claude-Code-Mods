@@ -88,6 +88,8 @@ class Bootstrap(TempHome):
         prof = profile.load(self.st)
         self.assertEqual(len(prof.prior), 168)
         tue10, tue11, tue3 = prof.prior[24 + 10], prof.prior[24 + 11], prof.prior[24 + 3]
+        # 28 days covered: trusted fully (14 days or more).
+        self.assertEqual(prof.prior_meta["trust"], 1.0)
         self.assertGreater(tue10, 0.25)
         self.assertGreater(tue11, 0.25)
         self.assertLess(tue3, 0.001)
@@ -101,6 +103,16 @@ class Bootstrap(TempHome):
         self.assertAlmostEqual(weights[0], 610.0)
         self.assertAlmostEqual(weights[-1], 10 + 100 + 2500)
         self.assertEqual(stats["bad_lines"], 1)
+
+
+class ShortHistory(unittest.TestCase):
+    def test_an_hour_of_transcripts_stays_near_uniform(self):
+        now = MON + 10 * H
+        events = [(MON + 9 * H + k * 60, 100.0) for k in range(30)]
+        prior, meta = transcripts.build_prior(events, now - 45 * D, now, 14)
+        self.assertLess(meta["trust"], 0.01)
+        self.assertAlmostEqual(sum(prior), 1.0)
+        self.assertLess(max(prior) / min(prior), 2.0)
 
 
 if __name__ == "__main__":

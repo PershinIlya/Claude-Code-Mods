@@ -22,7 +22,8 @@ SETTINGS = {
 
 
 def args(settings, **kw):
-    a = dict(apply=False, settings=settings, no_mod=True, python=sys.executable, replace=False, bin_dir=None)
+    a = dict(apply=False, settings=settings, no_mod=True, python=sys.executable, replace=False, bin_dir=None,
+             no_bootstrap=True)
     a.update(kw)
     return argparse.Namespace(**a)
 

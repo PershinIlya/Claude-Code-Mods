@@ -1,0 +1,26 @@
+Interpreter candidates (python -I -S startup, best of 3):
+  * /usr/bin/python3                         Python 3.13, sqlite 3.45.1, 22 ms
+
+Settings: /root/.claude/settings.json
+  statusLine: add statusLine
+--- /root/.claude/settings.json (now)
++++ /root/.claude/settings.json (after)
+@@ -0,0 +1,7 @@
++{
++  "statusLine": {
++    "type": "command",
++    "command": "/usr/bin/python3 -I -S /home/user/Claude-Code-Mods/bin/ctempo statusline",
++    "refreshInterval": 60
++  }
++}
+
+Mod (Desktop Code tab band), via the local marketplace in /home/user/Claude-Code-Mods:
+  claude plugin marketplace add /home/user/Claude-Code-Mods
+  claude plugin install ctempo@claude-tempo --scope user
+Launcher: /root/.local/bin/ctempo -> /usr/bin/python3 -I -S /home/user/Claude-Code-Mods/bin/ctempo
+Runtime info for the mod: /root/.claude-tempo/runtime.json
+Wrote /root/.claude/settings.json
+Wrote launcher /root/.local/bin/ctempo
+  claude plugin marketplace add -> exit 0 Adding marketplace…√ Successfully added marketplace: claude-tempo (declared in user settings)
+  claude plugin install ctempo@claude-tempo -> exit 0 Installing plugin "ctempo@claude-tempo"...√ Successfully installed plugin: ctempo@claude-tempo (scope: user)
+Done. Restart Claude Code or run /reload-plugins to load the mod; the statusLine applies at once.
