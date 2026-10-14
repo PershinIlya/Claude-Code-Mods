@@ -98,10 +98,16 @@ written only on change or once a day.
 **D-08. Window instances.** `resets_at` within 300 s of the open instance is
 the same window: the epoch wobbles by seconds between renders (ccpool,
 claumon). A later `resets_at` rolls over (the old instance closes with
-`unused_at_close = 100 - max_used`). Instances whose reset time passed close
-as `expired` at their reset time; a reading whose `resets_at` is not in the
-future is rejected (no grace, so the two rules agree). Window start is `resets_at - 5 h` or
-`- 7 d`.
+`unused_at_close = 100 - max_used`). At about the same level (less than
+min(`drop_points`, max(1, half the old max)) below it, the continuation test
+learning uses, D-13) the reset moved: that window never ended, and it closes
+as `shift` (D-10), so `report`, the profile's points-vs-pace table, the
+typical week and the weekly lookback leave it out. A weekly reset that moved 1
+h later mid-week listed the running week as finished, with 55 phantom unused
+points (found in review). Instances whose reset time passed close as `expired`
+at their reset time; a reading whose `resets_at` is not in the future is
+rejected (no grace, so the two rules agree). Window start is `resets_at - 5 h`
+or `- 7 d`.
 
 **D-09. Guards.** `used_percentage` must be a finite number in [0, 105]:
 Claude Code bug #52326 sometimes puts the `resets_at` epoch there (ccpool,
@@ -114,22 +120,32 @@ length plus 15 min (5h) or 1 h (7d). Each rejection is counted in `meta`
 **D-10. Reset detection.** Besides a later `resets_at`: a fresh reading at
 least 15 points below the window's max (15 included) is an ANOMALY; two
 consecutive fresh anomalies (default `reset.drop_samples = 2`) are a reset,
-the new instance starts at the first one. This is ccpace's rule; ccpace
-observed a real 100 to 0 reset with an unchanged `resets_at`. Every low in the
-run must itself be 15 points down, which closes ccpace's over-count case (50
-then 30, 48). A fresh reading with an *earlier* `resets_at` is an anomaly too
-("shift"): if it is sustained, the open instance came from a bogus later
-reset, and the real window, closed by it, is reopened instead of being split
-in two. One fresh reading undoes it when it carries the resets_at of the
-window that the bogus instance's rollover closed and comes from the session
-whose reading opened that instance: one reading did the damage, and a maxed or
+the new instance starts at the first one, and the weekly math paces it from
+there (D-15). This is ccpace's rule; ccpace observed a real 100 to 0 reset
+with an unchanged `resets_at`. Every low in the run must itself be 15 points
+down, which closes ccpace's over-count case (50 then 30, 48). A fresh reading
+with an *earlier* `resets_at` is an anomaly too ("shift"): if it is sustained,
+the open instance came from a bogus later reset, and the real window, closed
+by it, is reopened instead of being split in two. One fresh reading undoes it
+when it carries the resets_at of the window that the bogus instance's rollover
+closed and comes from the session whose reading opened that instance, unless
+the reading sits `drop_points` or more above the bogus instance's max. A drop
+that large is what a real early reset looks like, and two processes can share
+a session id (`claude -c` or `--resume` without `--fork-session`): the idle
+one's stale reading of the old window flipped the line back to the dead window
+on every render (found in review): one reading did the damage, and a maxed or
 idle session repeats its real reading only as heartbeats, so the second fresh
-one never came. The line then kept the bogus reset time past the real reset,
-and `report` counted the window twice (found in review). From any other
-session it still takes `drop_samples`, since that session may lag a real early
-reset. The superseded instance stays closed with reason `shift`. It never
-ended, so `report`, the profile's points-vs-pace table, the typical week and
-the weekly lookback all leave it out.
+one never came. The undo still moves the real window's pending readings from
+other sessions (up to `drop_samples - 1`) into it. One was left behind in the
+superseded instance, and the reopened window showed a level too low until the
+next fresh reading (found in review). A bogus later reset at the same level
+closes the real window as `shift` (D-08), and the undo matches either reason.
+The line then kept the bogus reset time past the real reset, and `report`
+counted the window twice (found in review). From any other session it still
+takes `drop_samples`, since that session may lag a real early reset. The
+superseded instance stays closed with reason `shift`. It never ended, so
+`report`, the profile's points-vs-pace table, the typical week and the weekly
+lookback all leave it out.
 
 ## 5-hour math
 
@@ -197,9 +213,17 @@ cut at local hour boundaries, so DST days with 23 or 25 hours are handled.
   the previous reading and its level is closer to the old level than to 0:
   less than min(`drop_points`, max(1, half the old level)) below it. Otherwise
   it counts from 0. With the 15-point drop alone, `profile --rebuild` learned
-  a light user's early reset as 0 %/h (found in review). Per bin, a
-  decay-weighted mean with a 14-day half-life (continuous-time EWMA: weight
-  `0.5 ** (age / 14 d)`).
+  a light user's early reset as 0 %/h (found in review). At a real reset, the
+  old window's tail from its last fresh reading to the new window's start,
+  when longer than `max_gap_hours`, is learned as no spend at confidence 0.25
+  (no reading, no news, no spend, D-11). Unlearned, those hours kept `M p(h)`
+  for good. With a Monday 09:00 reset and a uniform prior, a weekday user's
+  weekend stayed awake: 107 awake hours instead of 45, and a typical week of
+  90% for a true 56% (found in review). A window that reached 100% is the
+  exception. The account was blocked in its tail, which says nothing about the
+  habit, and learning it as idle made a user who caps every Tuesday read "on
+  pace" on Monday. Per bin, a decay-weighted mean with a 14-day half-life
+  (continuous-time EWMA: weight `0.5 ** (age / 14 d)`).
 - shrinkage: `r(h) = (n m + k M p) / (n + k)`, `n` the decayed confidence
   weight, `m` the observed mean, `M` the weekly total. `k = 1` for an
   informative prior (transcripts, override), `0.25` for the uniform one so a
@@ -212,7 +236,14 @@ cut at local hour boundaries, so DST days with 23 or 25 hours are handled.
   ratio from 40 to 106 in a test. The line, `ctempo profile`, `profile
   --rebuild` and learning all build the weights this way
   (`profile.current_weights`); `profile` used the ratio and printed a typical
-  week of 168% (found in review).
+  week of 168% (found in review). `ctempo profile` names the three lightest
+  3-hour blocks whose hours are all awake by that rule, and none on a flat
+  profile. It listed "Mon 00-03, Mon 03-06, Mon 06-09" on a flat profile, and
+  wake-up or bedtime blocks that were two-thirds asleep (found in review). Its
+  points-vs-pace table is the level minus the on-pace level for `target_week`,
+  so the reset column is what expired (100 - peak) only at target 100. Below
+  100 the note under the table says it is the peak versus the target and
+  points to `report` (found in review).
 - floor: every bin is raised to `0.15 x typical`, typical = mean of the
   busiest third of the bins (ccpool's 0.15). An hour is "awake" when its rate
   is at least 0.25 x typical (thevibeworks' rest-hour threshold).
@@ -235,41 +266,63 @@ cache_read + 5 output` (API price ratios relative to fresh input); only the
 distribution over the week matters. Each bin's mean is over *every* hour of
 the period, zeros included (thevibeworks averages per active day, which runs
 high), then lightly smoothed along the hour axis. A short history is blended
-toward uniform: `prior = mix x shape + (1 - mix) x uniform`, with
-`mix = min(1, covered_days / 14, active_days / 4)`; `covered_days` starts
-where 5% of the cost is behind, so one stray old message does not buy trust
-(found in review). The prior strength `k` moves from 0.25 to 1 with `mix`. Found
-on live data: one hour of transcripts otherwise made a three-hour spike. It
-misses claude.ai and Desktop chat; the percent observations correct that over
-time. `install --apply` runs the bootstrap too (`--no-bootstrap` skips it).
+toward uniform: `prior = mix x shape + (1 - mix) x uniform`, with `mix =
+min(1, covered_days / 14, active_days / 4)`; `covered_days` starts where 5% of
+the cost is behind, so one stray old message does not buy trust (found in
+review). The prior strength `k` moves from 0.25 to 1 with `mix`. Found on live
+data: one hour of transcripts otherwise made a three-hour spike. It misses
+claude.ai and Desktop chat; the percent observations correct that over time.
+For that, the prior fades toward uniform with the profile half-life from its
+`built_at`, in shape (`a x prior + (1 - a) x uniform`, `a = 0.5 ** (age / 14
+d)`) and in strength (trust times `a`). Hours that went idle since then are
+only seen through overnight gaps, learned at low confidence and spread by the
+prior's own shape. So a prior of constant strength kept Mon-Fri 9-13 at 20% of
+the week 8 weeks after a move to 14-23 (found in review). `ctempo bootstrap`
+builds a fresh one. `install --apply` runs the bootstrap too (`--no-bootstrap`
+skips it).
 
 **D-15. Weekly numbers.** As in the brief, with these details: `E` is
 normalized by the week's total share (DST weeks have 167 or 169 local hours).
-Intensity uses the last 24 *awake* hours, walking back through nights and
-weekends, and crosses into the previous weekly window when needed (spend =
-previous window's peak minus its value at the lookback start, plus the current
-window from 0). The value at the lookback start is the running max of readings
-up to it. A FIRST reading (D-06) never fixes that start: with no FRESH reading
-at or before it, the count starts at the first FRESH one (a stale level
-re-rendered at install showed a red "dry" for a day, depending on which
-session rendered first). When the start falls in a gap between readings longer
-than `max_gap_hours`, the gap's rise is spread over it by profile share, as in
-learning (D-13), and only the part after the start counts (a weekend of
-claude.ai use was charged to the last 24 hours). Fallbacks when the lookback
-holds less than 1% of a week's expected spend, or when it was cut short at the
-first reading and has not seen a whole-percent step yet (that zero is no news,
-not idle): the whole window so far (unless it is still at 0 after a cut
-lookback, which is no news either; it showed `×? →0%`), then the typical week
-`M / target`, then 1.0, each labeled in `ctempo now` with its reason (recent
-span too short; the level has not moved since the first timed reading; no
-timed reading yet); the typical week and 1.0 also say why the whole window
-could not stand in (it is still at 0%, or it is too new: under 2% of a week's
-expected spend has passed since it opened). They said "no recent data" and "no
-data yet" next to hours of readings. "Dry" is the hour-by-hour walk at that
-intensity (thevibeworks' `_profile_walk` shape). Verdict thresholds are the
-same as for 5h; "idle" when the last 24 awake hours spent nothing. The
-multiplier is max(0, target - used) / remaining spend, so it is 0 past a
-target below 100, as for 5h.
+After a drop reset (D-10) the instance starts at the drop. The elapsed share,
+the on-pace level (`target x (1 - E / span)`, `span` the instance's own share
+of the week) and the whole-window fallback count from there, while `E`,
+intensity and the projection keep the full week's normalization. Measured from
+`resets_at - 7 d`, a user exactly on pace for the new window read 38 points
+behind for days. In its first hour, the whole-window fallback divided the new
+level by the old week's elapsed share: `×9+▲ →2%` (found in review). Normal
+instances are unchanged. Intensity uses the last 24 *awake* hours, walking
+back through nights and weekends, and crosses into the previous weekly window
+when needed (spend = previous window's peak minus its value at the lookback
+start, plus the current window from 0). The value at the lookback start is the
+running max of readings up to it. A FIRST reading (D-06) never fixes that
+start: with no FRESH reading at or before it, the count starts at the first
+FRESH one (a stale level re-rendered at install showed a red "dry" for a day,
+depending on which session rendered first). When the start falls in a gap
+between readings longer than `max_gap_hours`, the gap's rise is spread over it
+by profile share, as in learning (D-13), and only the part after the start
+counts (a weekend of claude.ai use was charged to the last 24 hours). When the
+lookback reaches into a previous window that reached 100%, the hours from its
+cap to the new window's start are left out of the expected share, since
+nothing could be spent there. The cap is that window's first FRESH or FIRST
+reading at 100, an upper bound. Two hours after a Thursday reset, a user
+blocked since Tuesday read "on pace" and capped again (found in review). The
+rest of the previous window after its last reading still counts as no spend: a
+claude.ai-only last day and an idle one leave the same readings, so spreading
+that tail by the profile would trade one error for the other. Fallbacks when
+the lookback holds less than 1% of a week's expected spend, or when it was cut
+short at the first reading and has not seen a whole-percent step yet (that
+zero is no news, not idle): the whole window so far (unless it is still at 0
+after a cut lookback, which is no news either; it showed `×? →0%`), then the
+typical week `M / target`, then 1.0, each labeled in `ctempo now` with its
+reason (recent span too short; the level has not moved since the first timed
+reading; no timed reading yet); the typical week and 1.0 also say why the
+whole window could not stand in (it is still at 0%, or it is too new: under 2%
+of a week's expected spend has passed since it opened). They said "no recent
+data" and "no data yet" next to hours of readings. "Dry" is the hour-by-hour
+walk at that intensity (thevibeworks' `_profile_walk` shape). Verdict
+thresholds are the same as for 5h; "idle" when the last 24 awake hours spent
+nothing. The multiplier is max(0, target - used) / remaining spend, so it is 0
+past a target below 100, as for 5h.
 
 **D-23. Exchange rate.** Weekly points per full 5-hour window, from paired
 readings (thevibeworks' `pct_per_window`: published once the 5h side rose 50
@@ -295,20 +348,24 @@ green (an addition to the brief) when a window is in its tail with at least
 `min_free` points about to expire below its target (max(0, target -
 projected): a target below 100 keeps a reserve, and green below the target
 invited spending it, found in review), never while the 5h burn rate is unknown
-(D-11), whatever `min_free` (0 included), and never for 0 points. At target
-100 every slow down runs dry, so yellow was unreachable at the defaults until
-red was made to need both (found in review). `NO_COLOR` and `TERM=dumb`
-disable color; `display.symbols: "ascii"` swaps the glyphs. Output is written
-as UTF-8 bytes whatever the locale. Config values of the wrong type or out of
-range fall back to the default or are clamped at load (`config.RANGES`), so a
-typo never breaks the line. When the line would exceed `display.max_width`
-(80), optional parts are dropped in order: 5h reset time, weekly delta, weekly
-reset time, then projections. If it still does not fit, it is cut at the width
-with `…` (`...` in ascii mode) and each part keeps its tone; the bare line and
-the waiting message use the configured separator and are fitted the same way.
-The statusline never prints a traceback: errors go to
-`~/.claude-tempo/errors.log` (64 KB, one rotation) and the line degrades to
-"ctempo: error" or a bare line from the payload.
+(D-11), whatever `min_free` (0 included), and never for 0 points. Times
+(resets, dry times) are rounded to the nearest minute: a window keeps the
+`resets_at` of its first reading (D-08), and when that one wobbled 2 s early
+the line showed `@13:59` and `@Thu 08:59` for the whole window (found in
+review); a wobble of 30 s or more still shows a minute early. At target 100
+every slow down runs dry, so yellow was unreachable at the defaults until red
+was made to need both (found in review). `NO_COLOR` and `TERM=dumb` disable
+color; `display.symbols: "ascii"` swaps the glyphs. Output is written as UTF-8
+bytes whatever the locale. Config values of the wrong type or out of range
+fall back to the default or are clamped at load (`config.RANGES`), so a typo
+never breaks the line. When the line would exceed `display.max_width` (80),
+optional parts are dropped in order: 5h reset time, weekly delta, weekly reset
+time, then projections. If it still does not fit, it is cut at the width with
+`…` (`...` in ascii mode) and each part keeps its tone; the bare line and the
+waiting message use the configured separator and are fitted the same way. The
+statusline never prints a traceback: errors go to `~/.claude-tempo/errors.log`
+(64 KB, one rotation) and the line degrades to "ctempo: error" or a bare line
+from the payload.
 
 **D-17. Composing with an existing statusLine.** `install` keeps the old
 command inside ours (`--compose '<old command>'`, shell-quoted), so
@@ -351,9 +408,9 @@ the home (Claude Code passes the value as written, without expanding `~`).
 **D-18. install / uninstall.** Dry run by default: prints the interpreter
 probe table, a unified diff of `settings.json`, the plugin commands and the
 files it would write. `--apply` copies `settings.json` to
-`settings.json.ctempo-backup-YYYYmmdd-HHMMSS`, then writes atomically (tmp +
-rename, symlinked settings keep the link). Only `statusLine` changes; the
-file's indentation, line endings (CRLF too), trailing newline and mode are
+`settings.json.ctempo-backup-YYYYmmdd-HHMMSSZ` (UTC), then writes atomically
+(tmp + rename, symlinked settings keep the link). Only `statusLine` changes;
+the file's indentation, line endings (CRLF too), trailing newline and mode are
 kept. What was there before is recorded in `~/.claude-tempo/install.json`, one
 record per absolute settings path, saved *before* the settings file is written
 (a crash later still leaves uninstall what it needs). A statusLine changed
@@ -413,22 +470,31 @@ that snapshot). Restore tries them in that order, and deletes the file because
 there was none before the mod only when neither backup matches. Every record
 of a file, under any name, goes when it is uninstalled, and the user file's
 kept record goes with the mod (also when that file is gone). Backups are
-ordered by their time and sequence number, never as strings. `uninstall`
-restores the original `statusLine` (or removes it), removes `enabledPlugins` /
-`extraKnownMarketplaces` if they were not the user's (absent before, or
-holding only ctempo's own entry because the commands were run by hand; a key
-that ctempo next finds gone, as after the user deleted or blanked the file, or
-holding only ctempo's entry after a change made out of its sight, stops
-counting as theirs; ctempo remembers the plugin keys' entries as it last saw
-them for this. A user's own empty key with the mod in keeps counting: the
-plugin CLI leaves `{}` after removing its last plugin, so many files hold one,
-and uninstall used to remove it, found in review) and the plugin CLI left them
+ordered by their time and sequence number, never as strings: a name ending in
+Z is UTC, an older one without it is local time (local time goes back after a
+move west or at the fall-back hour, and a newer backup then sorted first,
+found in review). `uninstall` restores the original `statusLine` (or removes
+it), removes `enabledPlugins` / `extraKnownMarketplaces` if they were not the
+user's (absent before, or holding only ctempo's own entry because the commands
+were run by hand; a key that ctempo next finds gone, as after the user deleted
+or blanked the file, stops counting as theirs, and so does one holding only
+ctempo's entry for a manual mod whose commands the user ran. A user's own
+empty key with the mod in keeps counting, also after the user added and
+removed other plugins: the plugin CLI leaves `{}` after removing its last
+plugin, so many files hold one, and uninstall used to remove it, found in
+review twice. When the user deletes or blanks the user file and runs the
+printed commands by hand after ctempo ran them, ctempo cannot tell those keys
+from the user's own, and they may stay empty) and the plugin CLI left them
 empty, and when the result equals the backup (a blank backup counts as `{}`,
 as on install) it writes the backup's bytes, so an untouched file comes back
 byte for byte (the test suite checks four formatting styles and blank files).
 The mod is installed with `claude plugin marketplace add <repo>` and `claude
 plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips it.
 `--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned interpreter.
+A later install rewrites it with the new pin without `--bin-dir` (a `--python`
+repin, a moved clone), unless the user deleted it. A launcher written in
+another `--bin-dir` replaces it: the earlier one is removed while it is still
+ctempo's, so uninstall removes the only one there is (found in review).
 
 ## The scavenger hook
 
@@ -440,22 +506,26 @@ below its target (max(0, target - projected), `spare` in the JSON) is at least
 (target - used), and the weekly window would not run dry or exceed its target
 if that spare were spent (priced with the exchange rate; while that is
 unknown, at its clamp maximum of 50 weekly points per 5h window, and the JSON
-says `"exchange_rate_assumed": true`, only when a 5h leftover was priced that
-way). The weekly window is harvestable when it is in its tail (`week=2d`) with
-at least `min-free` projected to expire below its target and the 5h window has
-room below its own target, both now and at the current burn rate (projected
-unused >= `min-free`): a scavenger must not starve interactive work. What is
-spare is measured against each window's target, not 100, as for green (D-16);
-at target 100 nothing changes. A window at or above a target below 100, or
-with a slow down verdict, is never harvestable, and the reasons say so ("5h
-window is at or above its 90% target", "weekly window is spending faster than
-its 85% target allows (slow down)"). check used to say go on the reserve that
-a target below 100 keeps while the line was yellow, and one JSON both refused
-a 5h leftover as "already tight" and said go on the week's surplus (found in
-review). `projected_unused` and `free_now` stay out of 100; each window also
-reports its `target` and `spare`, and a go reason adds "below its N% target"
-when the target is below 100. While the 5h burn rate is not known yet (D-11),
-the 5h leftover is unknown: `projected_unused` and the weekly cost are null,
+says `"exchange_rate_assumed": true`, only when a positive 5h leftover was
+priced that way. A leftover of 0 costs 0 at any rate, and the reason is then
+"the weekly budget is already tight", without a price; it said "priced at 50"
+next to nothing left, found in review). The weekly window is harvestable when
+it is in its tail (`week=2d`) with at least `min-free` projected to expire
+below its target and the 5h window has room below its own target, both now and
+at the current burn rate (projected unused >= `min-free`): a scavenger must
+not starve interactive work. What is spare is measured against each window's
+target, not 100, as for green (D-16); at target 100 nothing changes. A window
+at or above a target below 100, or with a slow down verdict, is never
+harvestable, and the reasons say so ("5h window is at or above its 90%
+target", "weekly window is spending faster than its 85% target allows (slow
+down)"). check used to say go on the reserve that a target below 100 keeps
+while the line was yellow, and one JSON both refused a 5h leftover as "already
+tight" and said go on the week's surplus (found in review). `projected_unused`
+and `free_now` stay out of 100; each window also reports its `target` and
+`spare`, and a go reason adds "below its N% target" when the target is below
+100; targets print as set (99.5 printed as "100%", which made "below its 100%
+target", found in review). While the 5h burn rate is not known yet (D-11), the
+5h leftover is unknown: `projected_unused` and the weekly cost are null,
 nothing is priced (`exchange_rate_assumed` is false), the reason is "5h burn
 rate not known yet" (beside "already tight" when the week is tight on its own,
 without a price), and neither the 5h harvest nor the weekly harvest's 5h room
@@ -520,6 +590,15 @@ write failed at a rollover, and four install cases) and rejected 1, the
 fuzzer, extended with a `runtime.json` check after every step, a deleted data
 folder, `--compose` edits and the plugin commands run by hand, found 2 more,
 and a fixer's notes 1 more (the user's own empty plugin key removed by
-uninstall). All 99 are fixed, each with a regression test that was checked to
-fail on the code before its fix. Details in the commit messages from "Fix
-review findings" on.
+uninstall); an eighth confirmed 15 and rejected none (a capped previous week
+counted as expected spend in the weekly lookback, the old window's tail before
+a reset never learned, a transcript prior that never faded, a drop reset paced
+from `resets_at - 7 d`, a weekly reset moved later counted as a finished week,
+the one-reading undo flipped by a shared session id and leaving another
+session's pending reading behind, reset times shown a minute early, a 5h
+leftover of 0 priced at the assumed exchange rate, fractional targets printed
+as whole numbers, two `ctempo profile` texts, and three install cases: a
+launcher that kept its first pin, backups named in local time, and the user's
+own empty plugin key after other plugins came and went). All 114 are fixed,
+each with a regression test that was checked to fail on the code before its
+fix. Details in the commit messages from "Fix review findings" on.
