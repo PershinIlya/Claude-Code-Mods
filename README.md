@@ -25,7 +25,7 @@ Python 3.8+ standard library only.
 | `→88%` | projected level at the reset at the current burn rate |
 | `dry 12:40` | instead of the projection: you hit 100% at 12:40, before the reset |
 | `idle ≤9%/h` | nothing spent in the last 20 minutes; you can afford up to 9 points an hour |
-| `≤24%/h` | no rate yet (a window's first minutes, or the first 5 minutes after work starts); you can afford up to 24 points an hour |
+| `≤24%/h` | no rate yet (a window's first minutes, or the first 5 minutes after work starts); you can afford up to 24 points an hour; the burn is unknown, so this part is never green and `check` says no go |
 | `@13:20` | reset time |
 | `wk 48%` | weekly window: 48% used |
 | `+3` | points versus your on-pace level (plus: ahead of your usual rhythm, minus: surplus) |
@@ -36,11 +36,12 @@ Python 3.8+ standard library only.
 | `5h 0%` / `wk 0%` | no open window (the next message starts one) |
 
 Colors: dim when fine; **yellow** when a window runs dry before its reset but
-the multiplier is still on pace (0.9 to 1, no glyph), or when you are above a
-target set below 100; **red** when a window runs dry before its reset and the
-verdict is slow down (`▼`), or it is maxed; **green** when a window is in its
-last stretch (1 hour for 5h, 2 days for the week) with at least 10 points
-about to expire. `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
+the multiplier is still on pace (0.9 to 1, no glyph), or when you are at or
+above a target set below 100 (idle included); **red** when a window runs dry
+before its reset and the verdict is slow down (`▼`), or it is maxed; **green**
+when a window is in its last stretch (1 hour for 5h, 2 days for the week) with
+at least 10 points about to expire (never while the 5h burn rate is not known
+yet). `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
 
 `ctempo now` prints the same with the reasoning behind every number.
 
@@ -73,7 +74,8 @@ about to expire. `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdic
   expected for those hours (at target pace). Spend in a long gap you did not
   observe is spread over the gap by the profile, so only its expected part
   counts. Right after install the count starts at the first timed reading, and
-  until the level moves the whole window so far stands in;
+  until the level moves the whole window so far stands in (the typical week
+  while the window is still at 0);
 - projection = used + intensity × target × E; "dry" is where an hour-by-hour
   walk at that intensity crosses 100%;
 - multiplier = max(0, target − used) / (intensity × target × E): 0 once you
@@ -123,21 +125,23 @@ ctempo uninstall --apply
 ```
 
 It uninstalls the mod and the marketplace, puts your previous `statusLine`
-back (the command inside ctempo's `--compose` if you changed it there), or
-removes ctempo's, removes the launcher and `runtime.json`. If you did not
-change `settings.json` in between, the file comes back byte for byte (it is
-restored from the backup). Your history stays in `~/.claude-tempo/`; delete
-that folder yourself if you want it gone.
+back (or the command inside ctempo's `--compose` if you put or changed one
+there), or removes ctempo's, removes the launcher and `runtime.json`. If you
+did not change `settings.json` in between, the file comes back byte for byte
+(it is restored from the backup). If `claude` is not on PATH, uninstall prints
+the two plugin commands and exits 1; once your settings list neither the
+plugin nor its marketplace (you ran them yourself), it completes. Your history
+stays in `~/.claude-tempo/`; delete that folder yourself if you want it gone.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `ctempo statusline` | reads the status-line JSON on stdin, records a sample, prints the line (`--format json` for the mod) |
-| `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate |
+| `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate, and the age of the last reading (heartbeats shown apart) |
 | `ctempo report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
 | `ctempo profile [--rebuild]` | hour-of-week heatmap, lightest awake blocks, points vs pace by day before reset |
-| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data |
+| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown) |
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
 | `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen |
@@ -202,7 +206,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 177 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 193 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
@@ -211,8 +215,8 @@ mid-series, two parallel sessions, missing windows, bogus `resets_at`, the
 epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
 throwaway settings files, including the byte-identical round trip (CRLF, mode,
-several settings files, a crash mid-install, a lost install record). Four
-adversarial review passes found 59 defects; each one has a regression test
+several settings files, a crash mid-install, a lost install record). Five
+adversarial review passes found 70 defects; each one has a regression test
 that fails on the code before its fix.
 
 ## Layout
