@@ -172,6 +172,45 @@ class Record(TempHome):
         self.assertEqual(opened[0]["reset_ts"], self.R5)
         self.assertEqual(opened[0]["max_used"], 14)
 
+    def test_heartbeat_with_later_reset_does_not_redo_a_rollover(self):
+        t = MON + H
+        self.feed(t, five=(10, self.R5), sid="a")
+        bogus = int(t + 5 * H)
+        self.feed(t + 60, five=(12, bogus), sid="b")  # b's bogus later reset rolls over
+        self.feed(t + 120, five=(13, self.R5), sid="a")
+        self.feed(t + 180, five=(14, self.R5), sid="a")  # sustained: the real window is reopened
+        for k in range(5):  # b keeps re-rendering its old (bogus) reading
+            self.assertEqual(self.feed(t + 240 + k * 61, five=(12, bogus), sid="b")[FIVE_HOUR], "stale")
+        opened = [i for i in self.windows(FIVE_HOUR) if i["closed_at"] is None]
+        self.assertEqual([i["reset_ts"] for i in opened], [self.R5])
+
+    def test_first_words_of_unknown_sessions_cannot_fake_a_reset(self):
+        # ctempo is installed while three sessions are open: every one
+        # re-renders at once; two idle ones carry an old, much lower value.
+        t = MON + D
+        self.feed(t, week=(60, self.R7), sid="busy")
+        self.assertEqual(self.feed(t + 1, week=(30, self.R7), sid="idle1")[SEVEN_DAY], "stale")
+        self.assertEqual(self.feed(t + 2, week=(31, self.R7), sid="idle2")[SEVEN_DAY], "stale")
+        self.assertEqual(len(self.windows(SEVEN_DAY)), 1)
+        self.assertEqual(self.windows(SEVEN_DAY)[0]["max_used"], 60)
+
+    def test_drop_of_exactly_drop_points_is_an_anomaly(self):
+        t = MON + D
+        self.feed(t, week=(60, self.R7), sid="a")
+        self.assertEqual(self.feed(t + 60, week=(45, self.R7), sid="a")[SEVEN_DAY], "anomaly")
+
+    def test_no_grace_at_expiry_no_duplicate_window(self):
+        self.feed(MON + H, five=(30, self.R5))
+        acts = self.feed(self.R5 + 2, five=(30, self.R5))  # 2 s after its own reset
+        self.assertEqual(acts[FIVE_HOUR], "rejected:expired")
+        self.assertEqual(len(self.windows(FIVE_HOUR)), 1)
+
+    def test_heartbeats_do_not_move_last_seen(self):
+        t = MON + H
+        self.feed(t, five=(10, self.R5))
+        self.feed(t + 3600, five=(10, self.R5))
+        self.assertEqual(self.windows(FIVE_HOUR)[0]["last_seen"], t)
+
     def test_missing_windows_and_rejects_are_counted(self):
         self.feed(MON + H, week=(5, self.R7))
         self.assertEqual(self.rows(FIVE_HOUR), [])

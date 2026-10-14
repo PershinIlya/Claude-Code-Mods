@@ -91,6 +91,27 @@ class FiveHour(TempHome):
         self.assertAlmostEqual(v["allowed"], 70.0 / 3.0)
         self.assertAlmostEqual(v["projected"], 75.0)
 
+    def test_unobserved_gap_is_averaged_not_squeezed_into_20_minutes(self):
+        self.feed(self.t - 2 * H, five=(30, self.R))  # last read 2 h ago
+        self.feed(self.t, five=(70, self.R))  # claude.ai use in between
+        v = self.view()
+        self.assertEqual(v["rate_source"], "since_last")
+        self.assertAlmostEqual(v["rate"], 20.0)  # 40 points over 2 h, not 120 %/h
+        # 70 + 20 * 2 h = 110: the cap comes after 30 / 20 = 1.5 h, not in 15 minutes.
+        self.assertAlmostEqual(v["projected_raw"], 110.0)
+        self.assertAlmostEqual(v["cap_ts"], self.t + 1.5 * H)
+
+    def test_idle_after_early_burst_is_idle_not_dry(self):
+        r = int(self.t + 30 * M)  # window opened 4.5 h ago
+        for i in range(0, 61, 5):  # 90 points in its first hour
+            self.feed(r - 5 * H + i * M, five=(min(90, 1.5 * i), r))
+        self.feed(self.t, five=(90, r))  # first reading after 3.5 idle hours
+        v = self.view()
+        self.assertEqual(v["rate_source"], "since_last")
+        self.assertEqual(v["rate"], 0.0)
+        self.assertEqual(v["verdict"], "idle")
+        self.assertEqual(v["severity"], "opportunity")  # 10 points left, 30 min to go
+
     def test_maxed(self):
         self.feed(self.t, five=(100, self.R))
         v = self.view()

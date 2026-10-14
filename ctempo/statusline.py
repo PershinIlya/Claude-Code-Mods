@@ -69,16 +69,21 @@ def compute(raw, cfg, opts, now, line_of=None):
     sid = sid if isinstance(sid, str) and sid else None
     st = Store(timeout_ms=cfg.get("db_timeout_ms", 250))
     try:
+        recorded = False
         if opts["record"] and (readings or rejects or kinds):
             try:
                 ingest.record(st, readings, now, opts["source"], sid, cfg, rejects, kinds)
+                recorded = True
             except sqlite3.OperationalError as e:  # locked: skip this write, still render
                 log_error(e, "record")
+        # Once stored, the database has the judged level; the raw reading may
+        # be an idle session's stale value. Only an unstored reading is used.
+        shown = {} if recorded else readings
         prof = profile.load(st)
         if opts["record"]:
             maybe_learn(st, prof, now, cfg)
-        v5 = pace.five_hour(st, now, cfg, readings.get(config.FIVE_HOUR))
-        vw = weekly.weekly(st, now, cfg, readings.get(config.SEVEN_DAY), prof)
+        v5 = pace.five_hour(st, now, cfg, shown.get(config.FIVE_HOUR))
+        vw = weekly.weekly(st, now, cfg, shown.get(config.SEVEN_DAY), prof)
         if opts["record"] and line_of is not None:
             rl = payload.get("rate_limits") if isinstance(payload, dict) else None
             note_render(st, now, opts["source"], line_of(v5, vw), rl)

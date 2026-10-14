@@ -140,6 +140,39 @@ class Statusline(unittest.TestCase):
         self.assertNotIn("x", out.split("5h")[0])
 
 
+class StaleReadingAfterReset(unittest.TestCase):
+    """An idle session's pre-reset reading must not win on display."""
+
+    def test_shows_the_judged_level(self):
+        from ctempo import ingest, statusline
+        from ctempo.store import Store
+
+        utc()
+        home = tempfile.mkdtemp(prefix="ctempo-stale-")
+        old = os.environ.get("CTEMPO_HOME")
+        os.environ["CTEMPO_HOME"] = home
+        try:
+            cfg = config.load()
+            st = Store()
+            now = MON + 2 * H
+            R = int(MON + 4 * H)
+            for t, used, sid in ((now - 600, 95, "idle"), (now - 590, 95, "a"), (now - 300, 1, "a"), (now - 240, 2, "a")):
+                r, rej, k = ingest.parse_payload({"rate_limits": {"five_hour": {"used_percentage": used, "resets_at": R}}}, t)
+                ingest.record(st, r, t, "statusline", sid, cfg, rej, k)
+            st.close()
+            raw = json.dumps({"session_id": "idle", "rate_limits": {"five_hour": {"used_percentage": 95, "resets_at": R}}}).encode()
+            opts = statusline.parse_args([])
+            v5, vw, readings = statusline.compute(raw, cfg, opts, now)
+            self.assertEqual(v5["used"], 2)
+            self.assertNotEqual(v5["verdict"], "maxed")
+        finally:
+            if old is None:
+                os.environ.pop("CTEMPO_HOME", None)
+            else:
+                os.environ["CTEMPO_HOME"] = old
+            shutil.rmtree(home, ignore_errors=True)
+
+
 class Render(unittest.TestCase):
     def setUp(self):
         utc()

@@ -67,7 +67,13 @@ old value; with parallel sessions, that stale value interleaves with a busy
 session's fresh ones (ccpool saw 76% of rows sharing timestamps). A reading is
 FRESH when it differs from what the same session reported before; otherwise it
 is a HEARTBEAT: it proves time passed, never moves the series, never raises a
-window's max, and cannot trigger a reset. Analysis uses the running max of
+window's max, never rolls a window over, does not update `last_seen`, and
+cannot trigger a reset. A session's very first reading counts as fresh,
+except that it cannot be an anomaly: when the statusLine is installed, every
+open session re-renders at once with whatever it last saw, and two idle ones
+would otherwise fake a drop reset (found in review). The line shows the
+level as judged and stored; the raw reading is used only when the write
+failed (an idle session's stale pre-reset value once showed "maxed"). Analysis uses the running max of
 fresh readings per window instance (usage is monotone within a window).
 
 **D-07. Write throttle and dedupe.** A fresh reading identical to the last
@@ -80,7 +86,8 @@ written only on change or once a day.
 the same window: the epoch wobbles by seconds between renders (ccpool,
 claumon). A later `resets_at` rolls over (the old instance closes with
 `unused_at_close = 100 - max_used`). Instances whose reset time passed close
-as `expired` at their reset time. Window start is `resets_at - 5 h` or
+as `expired` at their reset time; a reading whose `resets_at` is not in the
+future is rejected (no grace, so the two rules agree). Window start is `resets_at - 5 h` or
 `- 7 d`.
 
 **D-09. Guards.** `used_percentage` must be a finite number in [0, 105]:
@@ -92,7 +99,7 @@ length plus 15 min (5h) or 1 h (7d). Each rejection is counted in `meta`
 (`ctempo doctor` shows them). Booleans are not numbers.
 
 **D-10. Reset detection.** Besides a later `resets_at`: a fresh reading at
-least 15 points below the window's max is an ANOMALY; two consecutive fresh
+least 15 points below the window's max (15 included) is an ANOMALY; two consecutive fresh
 anomalies (default `reset.drop_samples = 2`) are a reset, the new instance
 starts at the first one. This is ccpace's rule; ccpace observed a real 100 to 0
 reset with an unchanged `resets_at`. Every low in the run must itself be 15
@@ -105,13 +112,16 @@ window, closed by it, is reopened instead of being split in two.
 
 **D-11. Burn rate.** Least-squares slope of the running max over the trailing
 20 minutes (brief), with two anchors: the window's value at the start of the
-fit window (if known) and the current reading at "now" (if not already a
+fit window, if it was read within 5 minutes before that edge (an older value
+would squeeze usage from an unobserved gap into 20 minutes: 128 %/h and a
+false "dry" in review), and the current reading at "now" (if not already a
 stored row). Heartbeats are points too. Effect: a burst that stopped 15
 minutes ago keeps lowering the slope as flat points accumulate, and drops out
 after 20 minutes; idle gives exactly 0. ccpool fits only the samples and ends
 at the last one, so an old burst keeps a positive slope. Needs 3 points
-spanning 5 minutes; otherwise the window average (`used / elapsed`) is used and
-marked `~` on the line. Slopes below 0.05 %/h count as idle.
+spanning 5 minutes; otherwise the average since the previous reading (at
+least 5 minutes back), else the window average (`used / elapsed`, the window
+opened at 0); both are marked `~` on the line. Slopes below 0.05 %/h count as idle.
 
 **D-12. Allowed rate, multiplier, projection.** As in the brief: allowed =
 (target - used) / hours to reset; multiplier = allowed / current; projection
@@ -140,7 +150,8 @@ cut at local hour boundaries, so DST days with 23 or 25 hours are handled.
   informative prior (transcripts, override), `0.25` for the uniform one so a
   few observations can outweigh "I know nothing". `M` is the decay-weighted
   peak of recent closed weekly windows that were observed in their last day
-  (an unobserved tail understates the peak, claumon's weak spot); without
+  (by the last fresh reading, not by heartbeats; an unobserved tail
+understates the peak, claumon's weak spot); without
   those, the unweighted ratio `sum(m) / sum(p)` over observed bins.
   Unweighted because busy hours are observed with more confidence (short gaps),
   which inflated the weighted ratio from 40 to 106 in a test.

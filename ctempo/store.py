@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS windows(
   start_ts REAL NOT NULL,        -- reset_ts minus the window length, or the drop time
   reset_ts INTEGER NOT NULL,     -- resets_at as first seen for this instance
   first_seen REAL NOT NULL,
-  last_seen REAL NOT NULL,
+  last_seen REAL NOT NULL,       -- last FRESH reading (heartbeats prove nothing)
   last_used REAL NOT NULL,
   max_used REAL NOT NULL,        -- usage is monotone within an instance
   closed_at REAL,                -- NULL while open
@@ -183,8 +183,13 @@ class Store:
     def set_first_seen(self, wid, ts):
         self.db.execute("UPDATE windows SET first_seen=? WHERE id=?", (ts, wid))
 
-    def seen_instance(self, wid, now):
-        self.db.execute("UPDATE windows SET last_seen=? WHERE id=?", (now, wid))
+    def state_at(self, wid, t):
+        """(running max, time of the latest sample) at or before t, or (None, None)."""
+        row = self.db.execute(
+            "SELECT MAX(used_pct), MAX(ts) FROM samples WHERE window_id=? AND flag!=? AND ts<=?",
+            (wid, ANOMALY, t),
+        ).fetchone()
+        return (row[0], row[1]) if row and row[1] is not None else (None, None)
 
     def close_instance(self, wid, closed_at, reason):
         self.db.execute(

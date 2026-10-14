@@ -201,13 +201,14 @@ def typical_week(store, now, half_life_s, weeks=8):
     """Decay-weighted mean peak of recent closed weekly windows that were
     observed during their last day (an unobserved tail understates the peak)."""
     rows = store.db.execute(
-        "SELECT reset_ts, max_used, last_seen FROM windows WHERE window=? AND closed_at IS NOT NULL "
+        "SELECT reset_ts, max_used, (SELECT MAX(ts) FROM samples s WHERE s.window_id=w.id AND s.flag=?) "
+        "FROM windows w WHERE window=? AND closed_at IS NOT NULL "
         "AND close_reason IN ('expired', 'rollover') AND reset_ts > ? AND reset_ts <= ?",
-        (SEVEN_DAY, now - weeks * 7 * 86400, now),
+        (FRESH, SEVEN_DAY, now - weeks * 7 * 86400, now),
     ).fetchall()
     num = den = 0.0
     for reset, peak, seen in rows:
-        if seen < reset - 86400:
+        if seen is None or seen < reset - 86400:
             continue
         a = 0.5 ** ((now - reset) / half_life_s)
         num += a * peak
