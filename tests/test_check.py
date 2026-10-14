@@ -4,6 +4,7 @@ import unittest
 
 from ctempo import commands
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
+from ctempo.store import HEARTBEAT
 
 from .helpers import MON, H, D, TempHome
 
@@ -86,6 +87,62 @@ class Check(TempHome):
         self.assertFalse(res["five_hour"]["harvestable"])
         self.assertFalse(res["ok"])
         self.assertTrue(any("tight" in r for r in res["reasons"]))
+
+    def test_heartbeats_do_not_make_old_data_fresh(self):
+        # Review 4 (runtime-ui#2): an open idle session re-renders its last
+        # reading every 60 s. Those heartbeats say nothing about the level, so
+        # a level last read 3 hours ago is 3 hours old, not 1 minute.
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 40 * M)
+        r7 = int(MON + 7 * D)
+        for i in range(11):  # work from 4 h to 3 h ago: 5h 0 -> 30%
+            self.feed(now - 4 * H + i * 6 * M, five=(3 * i, r5), week=(20, r7))
+        for i in range(179, -1, -1):  # then idle, re-rendering every minute
+            self.feed(now - i * M, five=(30, r5), week=(20, r7))
+        beats = self.st.db.execute("SELECT COUNT(*) FROM samples WHERE flag=?", (HEARTBEAT,)).fetchone()[0]
+        self.assertGreaterEqual(beats, 360)  # 180 per window
+        res = self.result(now)
+        self.assertTrue(res["stale"])
+        self.assertFalse(res["ok"])
+        self.assertAlmostEqual(res["data_age_s"], 3 * H)
+        self.assertIn("no fresh reading in the last 30m", res["reasons"])
+
+    def test_unknown_exchange_rate_prices_5h_leftover_at_its_maximum(self):
+        # Review 4 (runtime-ui#3): until the exchange rate is published (the
+        # 5h side must rise 50 points), a 5h leftover was priced at 0 weekly
+        # points. Here the week ends near 99%, and spending the 65 points left
+        # in the 5h window costs about 5 weekly points at the rate seen so far.
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 45 * M)
+        r7 = int(now + 4 * H)
+        t0 = now - 3.5 * H
+        for k in range(26):  # 5h 10 -> 35%, week 95 -> 97%, then idle for 1 h
+            self.feed(t0 + k * 6 * M, five=(10 + k, r5), week=(95 + 2 * k // 25, r7))
+        res = self.result(now, max_age="2h")
+        self.assertIsNone(res["exchange_rate"])
+        self.assertTrue(res["exchange_rate_assumed"])
+        self.assertAlmostEqual(res["five_hour"]["projected_unused"], 65)
+        self.assertIsNone(res["seven_day"]["dry_at"])
+        self.assertLess(res["seven_day"]["projected"], 100)
+        self.assertAlmostEqual(res["weekly_cost_of_5h_leftover"], 32.5)  # 65 points at 50 per full 5h window
+        self.assertFalse(res["five_hour"]["harvestable"])
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("tight" in r for r in res["reasons"]), res["reasons"])
+
+    def test_known_exchange_rate_is_not_flagged_as_assumed(self):
+        # Review 4 (runtime-ui#3): once published (50 paired 5h points, 3
+        # weekly), the observed rate prices the leftover: 3 per 50 is 6 per window.
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 45 * M)
+        r7 = int(MON + 7 * D)
+        t0 = now - 4 * H
+        for k in range(51):  # 5h 0 -> 50%, week 20 -> 23%, then idle for 1 h
+            self.feed(t0 + k * 3.6 * M, five=(k, r5), week=(20 + 3 * k // 50, r7))
+        res = self.result(now, max_age="2h")
+        self.assertAlmostEqual(res["exchange_rate"], 6.0)
+        self.assertFalse(res["exchange_rate_assumed"])
+        self.assertAlmostEqual(res["weekly_cost_of_5h_leftover"], 3.0)  # 50 points left at 6 per window
+        self.assertTrue(res["five_hour"]["harvestable"])
 
 
 if __name__ == "__main__":

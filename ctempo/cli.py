@@ -30,7 +30,7 @@ def build_parser():
     s = sub.add_parser("check", help="exit 0 when there is spare quota to harvest now (JSON on stdout)")
     s.add_argument("--min-free", type=float, default=None, help="points of projected surplus required (default from config)")
     s.add_argument("--tail", default=None, help="how close to the reset counts as the tail, e.g. 5h=60m,week=2d")
-    s.add_argument("--max-age", default="30m", help="newest sample must be at most this old (default 30m)")
+    s.add_argument("--max-age", default="30m", help="newest fresh reading must be at most this old; heartbeats do not count (default 30m)")
 
     s = sub.add_parser("bootstrap", help="build the profile prior from ~/.claude/projects transcripts")
     s.add_argument("--days", type=float, default=None)

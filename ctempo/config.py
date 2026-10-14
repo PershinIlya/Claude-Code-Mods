@@ -1,7 +1,8 @@
 """Paths and configuration.
 
-Everything lives under CTEMPO_HOME (default ~/.claude-tempo). The config file
-is optional: missing keys fall back to DEFAULTS, unknown keys are kept so a
+Everything lives under CTEMPO_HOME (default ~/.claude-tempo; `~` is expanded
+and a relative value is taken from the home directory). The config file is
+optional: missing keys fall back to DEFAULTS, unknown keys are kept so a
 newer config does not break an older ctempo.
 """
 
@@ -79,7 +80,13 @@ DEFAULTS = {
 
 
 def home():
-    return os.environ.get("CTEMPO_HOME") or os.path.join(os.path.expanduser("~"), ".claude-tempo")
+    value = os.environ.get("CTEMPO_HOME")
+    if not value:
+        return os.path.join(os.path.expanduser("~"), ".claude-tempo")
+    # Claude Code copies settings.json `env` values as written: expand `~`
+    # here, and take a relative path from the home directory, never from the
+    # session's cwd (each project would get a database of its own).
+    return os.path.join(os.path.expanduser("~"), os.path.expanduser(value))
 
 
 def db_path():

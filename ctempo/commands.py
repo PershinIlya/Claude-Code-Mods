@@ -11,7 +11,7 @@ import time
 
 from . import config, pace, profile, render, weekly
 from .config import FIVE_HOUR, SEVEN_DAY
-from .store import Store
+from .store import HEARTBEAT, Store
 
 
 def _open(create=False):
@@ -154,8 +154,7 @@ def cmd_report(args, cfg):
         ppw = weekly.exchange_rate(st, now, max(28, args.days))[0]
         out = {"days": args.days, "exchange_rate": ppw}
         for w in (SEVEN_DAY, FIVE_HOUR):
-            rows = [i for i in st.instances(w, since=since) if i["closed_at"] is not None]
-            out[w] = rows
+            out[w] = _closed(st, w, since)
         if args.json:
             print(json.dumps(out, indent=2))
             return 0
@@ -192,10 +191,17 @@ def cmd_report(args, cfg):
     return 0
 
 
+def _closed(st, window, since):
+    """Window instances that really ended. One closed by a 'shift' was opened
+    by a bogus later resets_at and superseded by the real window (D-10): it
+    never ended, and its "unused" points never expired."""
+    return [i for i in st.instances(window, since=since) if i["closed_at"] is not None and i["close_reason"] != "shift"]
+
+
 def _note(i, ppw):
     notes = []
-    if i["close_reason"] in ("drop", "shift"):
-        notes.append("reset detected by %s" % i["close_reason"])
+    if i["close_reason"] == "drop":
+        notes.append("reset detected by drop")
     if i["last_seen"] < i["reset_ts"] - 3600 and i["close_reason"] != "drop":
         notes.append("last seen %s before reset" % dur(i["reset_ts"] - i["last_seen"]))
     if ppw and i["unused_at_close"]:
@@ -266,7 +272,7 @@ def _surplus(st, cfg, w, now):
     awake_blocks = sorted(b for b in blocks if b[0] > 1.5 / 168)[:3]
     if awake_blocks:
         print("Lightest awake blocks: " + ", ".join("%s %02d-%02d" % (profile.DAYS[d], h, h + 3) for _, d, h in awake_blocks))
-    closed = [i for i in st.instances(SEVEN_DAY, since=now - 56 * 86400) if i["closed_at"] is not None]
+    closed = _closed(st, SEVEN_DAY, now - 56 * 86400)
     if not closed:
         print("Surplus by day before reset: needs at least one closed weekly window.")
         return
@@ -310,10 +316,17 @@ def parse_tail(spec, cfg):
     return tail
 
 
+# The weekly price of a 5h leftover while the exchange rate is not known yet:
+# its clamp maximum (D-23), so a tight week still blocks the harvest.
+ASSUMED_EXCHANGE_RATE = 50.0
+
+
 def check_result(st, cfg, now, min_free, tail, max_age):
     v5, vw, _ = views(st, cfg, now)
     ppw = weekly.exchange_rate(st, now)[0]
-    last = st.db.execute("SELECT MAX(ts) FROM samples").fetchone()[0]
+    # Data age counts readings that carry information: a heartbeat repeats an
+    # old one (D-06), so an idle open session must not make old data look new.
+    last = st.db.execute("SELECT MAX(ts) FROM samples WHERE flag != ?", (HEARTBEAT,)).fetchone()[0]
     age = (now - last) if last else None
     reasons = []
     f = {"present": v5.get("present", False)}
@@ -339,10 +352,11 @@ def check_result(st, cfg, now, min_free, tail, max_age):
 
     stale = age is None or age > max_age
     if stale:
-        reasons.append("no sample in the last %s" % dur(max_age) if age is not None else "no samples at all")
+        reasons.append("no fresh reading in the last %s" % dur(max_age) if age is not None else "no fresh readings at all")
     week_cost = None
-    if f["present"] and ppw:
-        week_cost = (f["projected_unused"] or 0) * ppw / 100.0
+    assumed = f["present"] and ppw is None
+    if f["present"]:
+        week_cost = (f["projected_unused"] or 0) * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
     week_ok = (not k["present"]) or (
         k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= config.target(cfg, SEVEN_DAY)
     )
@@ -350,7 +364,8 @@ def check_result(st, cfg, now, min_free, tail, max_age):
         f["present"] and f["in_tail"] and (f["projected_unused"] or 0) >= min_free and f["free_now"] >= min_free and week_ok
     )
     if f["present"] and f["in_tail"] and not week_ok:
-        reasons.append("5h leftover would eat into a weekly budget that is already tight")
+        reasons.append("5h leftover would eat into a weekly budget that is already tight" + (
+            " (exchange rate not known yet: priced at %.0f weekly points per 5h window)" % ASSUMED_EXCHANGE_RATE if assumed else ""))
     # Harvesting weekly surplus must not starve your own 5h window: it needs
     # room now and at the current burn rate.
     five_room = f["free_now"] >= min_free and (not f["present"] or (f["projected_unused"] or 0) >= min_free)
@@ -373,6 +388,7 @@ def check_result(st, cfg, now, min_free, tail, max_age):
         "five_hour": f,
         "seven_day": k,
         "exchange_rate": ppw,
+        "exchange_rate_assumed": assumed,
         "weekly_cost_of_5h_leftover": week_cost,
         "params": {"min_free": min_free, "tail_5h_s": tail[FIVE_HOUR], "tail_week_s": tail[SEVEN_DAY], "max_age_s": max_age},
     }

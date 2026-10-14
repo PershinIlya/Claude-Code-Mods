@@ -185,6 +185,42 @@ test('an empty CTEMPO_HOME counts as unset, and the CLI gets the same home', asy
   expect((runs[0]?.init as { env?: Record<string, string> } | undefined)?.env).toEqual({ CTEMPO_HOME: '/home/u/.claude-tempo' })
 })
 
+// Review 4: settings.json env reaches the mod as written, so a `~` or a
+// relative CTEMPO_HOME would otherwise be read from the session's cwd.
+test('expands a leading ~ in CTEMPO_HOME and passes the result to the CLI', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: '~/.ctempo-moved' } })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(reads[0]).toBe('/home/u/.ctempo-moved/runtime.json')
+  expect((runs[0]?.init as { env?: Record<string, string> } | undefined)?.env).toEqual({ CTEMPO_HOME: '/home/u/.ctempo-moved' })
+})
+
+test('takes a relative CTEMPO_HOME from HOME, never from the session cwd', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: 'data/ctempo' } })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(reads[0]).toBe('/home/u/data/ctempo/runtime.json')
+  expect((runs[0]?.init as { env?: Record<string, string> } | undefined)?.env).toEqual({ CTEMPO_HOME: '/home/u/data/ctempo' })
+})
+
+test('uses an absolute CTEMPO_HOME as is, even without HOME', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { CTEMPO_HOME: '/srv/ctempo' } })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(reads[0]).toBe('/srv/ctempo/runtime.json')
+  expect((runs[0]?.init as { env?: Record<string, string> } | undefined)?.env).toEqual({ CTEMPO_HOME: '/srv/ctempo' })
+})
+
+test("asks for an absolute path when CTEMPO_HOME names another user's ~", async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: '~other/ctempo' } })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(reads.length).toBe(0)
+  expect(runs.length).toBe(0)
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: /absolute path/ })).toBeDefined()
+})
+
 test('follows mod.refresh_s from the CLI', async ($, on) => {
   const { runs, clock } = stub(on, { run: () => ran(JSON.stringify({ ...CLI, refresh_s: 300 })) })
   await $.session.start(start('desktop'))
