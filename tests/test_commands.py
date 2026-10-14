@@ -1,5 +1,8 @@
 """Smoke tests: every command runs on seeded data without a traceback."""
 
+import argparse
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -8,6 +11,11 @@ import sys
 import tempfile
 import time
 import unittest
+
+from ctempo import commands
+from ctempo.config import SEVEN_DAY
+
+from .helpers import D, TempHome
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
@@ -82,6 +90,40 @@ class Commands(unittest.TestCase):
     def test_bootstrap_without_transcripts(self):
         out = self.run_cmd("bootstrap", "--root", os.path.join(self.home, "none"), "--dry-run", ok=(1,))
         self.assertIn("No usable messages", out)
+
+
+class ShiftedWindow(TempHome):
+    """Review 4 (spec-docs#2): one reading with a bogus later resets_at opens a
+    window that the real resets_at then closes as 'shift' (D-10). That window
+    never ended, so report and profile must not count its unused points."""
+
+    def setUp(self):
+        super().setUp()
+        now = time.time()
+        r7 = int(now + 3 * D)
+        self.feed(now - 1800, week=(40, r7))
+        self.feed(now - 1500, week=(41, r7 + 7200))  # bogus later reset: rollover
+        self.feed(now - 1200, week=(42, r7))  # the real reset again: anomaly
+        self.feed(now - 900, week=(43, r7))  # sustained: shift, the real week reopens
+        closed = [(i["close_reason"], i["unused_at_close"]) for i in self.windows(SEVEN_DAY) if i["closed_at"] is not None]
+        self.assertEqual(closed, [("shift", 59.0)])
+
+    def call(self, fn, **args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(fn(argparse.Namespace(**args), self.cfg), 0)
+        return out.getvalue()
+
+    def test_report_leaves_out_a_shift_closure(self):
+        self.assertEqual(json.loads(self.call(commands.cmd_report, days=30, json=True, verbose=False))[SEVEN_DAY], [])
+        out = self.call(commands.cmd_report, days=30, json=False, verbose=True)
+        self.assertIn("Weekly windows closed: 0", out)
+        self.assertIn("no weekly window has closed yet", out)
+
+    def test_profile_leaves_out_a_shift_closure(self):
+        out = self.call(commands.cmd_profile, rebuild=False, json=False)
+        self.assertIn("needs at least one closed weekly window", out)
+        self.assertNotIn("Points vs pace", out)
 
 
 if __name__ == "__main__":

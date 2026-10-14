@@ -375,5 +375,42 @@ class Render(unittest.TestCase):
         self.assertTrue(render.use_color(self.cfg, {}))
 
 
+class TildeHome(unittest.TestCase):
+    """Review 4 (runtime-ui#0): Claude Code copies settings.json `env` values
+    as written, so CTEMPO_HOME can arrive as "~/..." or as a relative path. It
+    must resolve under the user's home, never under each session's cwd."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ctempo-tilde-")
+        self.user = os.path.join(self.dir, "home")
+        self.cwd = os.path.join(self.dir, "project")
+        os.makedirs(self.user)
+        os.makedirs(self.cwd)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_home_expands_tilde_and_takes_relative_paths_from_home(self):
+        from unittest import mock
+
+        cases = (("~/.ctempo-moved", os.path.join(self.user, ".ctempo-moved")), ("~", self.user),
+                 ("data/ctempo", os.path.join(self.user, "data", "ctempo")), ("/srv/ctempo", "/srv/ctempo"),
+                 ("", os.path.join(self.user, ".claude-tempo")))
+        for value, want in cases:
+            with mock.patch.dict(os.environ, {"HOME": self.user, "CTEMPO_HOME": value}):
+                self.assertEqual(config.home(), want, value)
+
+    def test_statusline_with_tilde_home_writes_under_home_not_cwd(self):
+        now = time.time()
+        payload = {"session_id": "s", "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": int(now + 2 * H)}}}
+        env = dict(os.environ, HOME=self.user, CTEMPO_HOME="~/.ctempo-moved", TZ="UTC",
+                   CLAUDE_CONFIG_DIR=os.path.join(self.dir, "claude"))
+        p = subprocess.run([sys.executable, "-I", "-S", ENTRY, "statusline"], input=json.dumps(payload).encode(),
+                           capture_output=True, env=env, cwd=self.cwd, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.user, ".ctempo-moved", "tempo.db")))
+        self.assertEqual(os.listdir(self.cwd), [])  # no directory literally named "~" in the project
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -52,15 +52,23 @@ let periodMs = REFRESH_MS
 // A refresh asked for while one runs: the newest limits win, null = re-read.
 let queued: readonly SessionRateLimit[] | null | undefined
 
-// The same rule as the CLI: an empty CTEMPO_HOME counts as unset.
+// The same rules as the CLI: an empty CTEMPO_HOME counts as unset, a leading
+// `~` is HOME, and a relative path is taken from HOME, never from the
+// session's cwd (Claude Code copies settings.json env values as written).
+function resolveHome(given: string | undefined, userHome: string | undefined): string {
+  if (given?.startsWith('/')) return given
+  if (given?.startsWith('~') && given !== '~' && !given.startsWith('~/')) {
+    throw new Error(`CTEMPO_HOME ${given}: only ~ and ~/ are expanded; use an absolute path`)
+  }
+  if (!userHome) throw new Error('HOME is unset: set CTEMPO_HOME to an absolute path, or run `ctempo install --apply`')
+  if (!given) return `${userHome}/.claude-tempo`
+  const rest = given.replace(/^~\/?/, '')
+  return rest ? `${userHome}/${rest}` : userHome
+}
+
 async function loadRuntime($: EngineInterface): Promise<Runtime> {
   if (runtime !== null) return runtime
-  let home = await $.env.get('CTEMPO_HOME')
-  if (!home) {
-    const userHome = await $.env.get('HOME')
-    if (!userHome) throw new Error('HOME is unset: set CTEMPO_HOME, or run `ctempo install --apply`')
-    home = `${userHome}/.claude-tempo`
-  }
+  const home = resolveHome(await $.env.get('CTEMPO_HOME'), await $.env.get('HOME'))
   const parsed = JSON.parse(await $.fs.read(`${home}/runtime.json`)) as Partial<Runtime>
   if (typeof parsed.python !== 'string' || typeof parsed.entry !== 'string') {
     throw new Error('runtime.json has no python/entry; run `ctempo install --apply`')
