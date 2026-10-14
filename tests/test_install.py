@@ -44,6 +44,10 @@ def plugin_cli(user):
     return run
 
 
+def claude_missing(cmd, env=None):
+    return 127, "", "claude not found on PATH"
+
+
 def args(settings, **kw):
     a = dict(apply=False, settings=settings, no_mod=True, python=sys.executable, replace=False, bin_dir=None,
              no_bootstrap=True)
@@ -420,8 +424,12 @@ class Install(unittest.TestCase):
         self.assertEqual(json.loads(install.read_text(proj)), {"model": "sonnet"})
 
     def _user_file(self, text):
-        with open(self.path, "w", encoding="utf-8") as f:
-            f.write(text)
+        if text is None:  # no user file
+            if os.path.exists(self.path):
+                os.remove(self.path)
+        else:
+            with open(self.path, "w", encoding="utf-8") as f:
+                f.write(text)
         return mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir})  # self.path is the user file
 
     def test_retry_after_failed_plugin_uninstall_is_byte_identical(self):
@@ -506,6 +514,182 @@ class Install(unittest.TestCase):
         self.run_cmd(install.install, args(self.path, apply=True))
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertFalse(os.path.exists(self.path))
+
+    # -- fourth review ---------------------------------------------------------------
+    def _reset(self):
+        """A clean slate between subtests: no install.json, no backups."""
+        shutil.rmtree(self.home, ignore_errors=True)
+        for n in os.listdir(self.dir):
+            if ".ctempo-backup-" in n:
+                os.remove(os.path.join(self.dir, n))
+
+    def _proj(self):
+        proj = os.path.join(self.dir, "proj-settings.json")
+        with open(proj, "w") as f:
+            f.write('{"model": "sonnet"}')
+        return proj
+
+    def _user_text(self):
+        return install.read_text(self.path) if os.path.exists(self.path) else None
+
+    def _steps(self, proj, *steps):
+        """Run i(nstall) / u(ninstall) with the mod on the U(ser) file, the P(roject)
+        file or * (no --settings); "-nomod" adds --no-mod, "-fail" makes claude exit 127."""
+        rcs = []
+        for s in steps:
+            fn = install.install if s[0] == "i" else install.uninstall
+            target = {"U": self.path, "P": proj, "*": None}[s[1]]
+            cli = claude_missing if s.endswith("-fail") else plugin_cli(self.path)
+            with mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), mock.patch.object(install, "run_claude", cli):
+                rc, out = self.run_cmd(fn, args(target, apply=True, no_mod=s.endswith("-nomod")))
+            rcs.append(rc)
+        return rcs
+
+    def test_user_file_without_a_record_of_its_own_comes_back_from_the_mod_snapshot(self):
+        # Review 4 (install#0): a retry without --settings after a failed project
+        # uninstall, a full uninstall after `--no-mod`, and a stray uninstall of the
+        # user file all reach the user file with no record of its own. Its baseline
+        # is the snapshot taken before the plugin CLI first wrote there.
+        proj = self._proj()
+        for steps in (("iP", "uP-fail", "u*"), ("iP", "uP-nomod", "u*"), ("iP", "uU", "u*")):
+            for before in (IRREGULAR, None):
+                with self.subTest(steps=steps, before=before):
+                    self._reset()
+                    with self._user_file(before):
+                        rcs = self._steps(proj, *steps)
+                    self.assertEqual(rcs[-1], 0)
+                    self.assertEqual(self._user_text(), before)  # None: the file the plugin CLI created is gone
+                    self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+                    self.assertEqual(install.load_state().get("records"), {})
+
+    def test_installing_into_the_user_file_after_the_mod_keeps_the_pristine_baseline(self):
+        # Review 4 (install#1): the user file already holds the plugin CLI's keys, so
+        # its baseline is its kept record, else the mod's snapshot, not the file as it is.
+        proj = self._proj()
+        for steps in (("iP", "iU", "uU", "uP"), ("iP", "iU", "uP", "uU"),
+                      ("iU", "uU-nomod", "iU", "uU"), ("iU", "uU-fail", "iU", "uU")):
+            for before in (IRREGULAR, None):
+                with self.subTest(steps=steps, before=before):
+                    self._reset()
+                    with self._user_file(before):
+                        rcs = self._steps(proj, *steps)
+                    self.assertEqual(rcs[-1], 0)
+                    self.assertEqual(self._user_text(), before)
+                    self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+                    self.assertEqual(install.load_state().get("records"), {})
+
+    def test_command_edited_inside_compose_is_the_one_uninstall_restores(self):
+        # Review 4 (install#2): settings.json shows what runs (D-17), so a command the
+        # user put in --compose is the original now, also after a reinstall or --replace.
+        s = dict(SETTINGS, statusLine={"type": "command", "command": "~/.claude/statusline-old.sh", "padding": 0})
+        newer = "npx -y ccstatusline@latest"
+        for then in (None, {}, {"replace": True}):
+            with self.subTest(then=then):
+                self._reset()
+                self.write(s)
+                self.run_cmd(install.install, args(self.path, apply=True))
+                obj = json.loads(self.read())
+                obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                if then is not None:
+                    rc, out = self.run_cmd(install.install, args(self.path, apply=True, **then))
+                    self.assertIn("REPLACE" if then else "already runs ctempo", out)
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                after = json.loads(self.read())
+                self.assertEqual(after.pop("statusLine"), {"type": "command", "command": newer, "padding": 0})
+                self.assertEqual(after, SETTINGS)
+
+    def test_plugin_commands_run_by_hand_are_undone_by_uninstall(self):
+        # Review 4 (install#3): claude was not on PATH at install, so the user ran the
+        # plugin commands. Uninstall undoes them, and keeps the mod record and
+        # runtime.json (exit 1) while claude is still missing.
+        cli = plugin_cli(self.path)
+        calls = []
+
+        def recording(cmd, env=None):
+            calls.append(cmd)
+            return cli(cmd)
+
+        runtime = os.path.join(self.home, "runtime.json")
+        with self._user_file(IRREGULAR):
+            with mock.patch.object(install, "claude_bin", lambda: None), mock.patch.object(install, "run_claude", claude_missing):
+                rc, out = self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
+                self.assertIn("run these yourself", out)
+                for c in install.mod_commands(install.repo_root()):
+                    cli(c)  # the user, by hand
+                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                self.assertEqual(rc, 1, out)
+                self.assertIn("still installed", out)
+                self.assertTrue(os.path.exists(runtime))
+            with mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), mock.patch.object(install, "run_claude", recording):
+                rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls, install.unmod_commands())
+        self.assertEqual(self.read(), IRREGULAR)
+        self.assertFalse(os.path.exists(runtime))
+        self.assertNotIn("mod", install.load_state())
+
+    def test_plugin_commands_never_run_by_hand_do_not_block_uninstall(self):
+        # Review 4 (install#3): claude still missing and no trace of the mod in the
+        # user file: the printed commands never ran, so there is nothing to undo.
+        proj = self._proj()
+        for target in (self.path, proj):
+            with self.subTest(target=target):
+                self._reset()
+                with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: None), \
+                        mock.patch.object(install, "run_claude", claude_missing):
+                    self.run_cmd(install.install, args(target, no_mod=False))
+                    self.assertFalse(os.path.exists(self.home))  # the dry run writes nothing
+                    self.run_cmd(install.install, args(target, apply=True, no_mod=False))
+                    rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                self.assertEqual(rc, 0, out)
+                self.assertIn("Uninstalled.", out)
+                self.assertEqual(self.read(), IRREGULAR)
+                self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+                state = install.load_state()
+                self.assertEqual(state.get("records"), {})
+                self.assertNotIn("mod", state)
+                self.assertFalse(os.path.exists(os.path.join(self.home, "runtime.json")))
+
+    def test_blank_settings_file_comes_back_byte_identical(self):
+        # Review 4 (install#4): install reads a blank file as {}; restore must read
+        # its backup the same way, or the file comes back as "{}".
+        for text in ("", "\n", "  \n", "\r\n"):
+            for mod in (False, True):
+                with self.subTest(text=text, mod=mod):
+                    self._reset()
+                    with self._user_file(text):
+                        rcs = self._steps(None, "iU" + ("" if mod else "-nomod"), "u*" + ("" if mod else "-nomod"))
+                    self.assertEqual(rcs, [0, 0])
+                    with open(self.path, "rb") as f:
+                        self.assertEqual(f.read(), text.encode("utf-8"))
+
+    def test_version_1_uninstalled_state_still_gets_a_user_file_snapshot(self):
+        # Review 4 (install#5): version 1's uninstall left installed false and a "mod"
+        # entry with no user-file snapshot. The spent record must not be the user
+        # file's baseline, and the entry must not stop install from taking the snapshot.
+        proj = self._proj()
+        v1_text = '{"model": "opus"}\n'  # the user file when version 1 installed; edited since
+        backup = os.path.realpath(self.path) + ".ctempo-backup-20261001-090000"
+        with open(backup, "w") as f:
+            f.write(v1_text)
+        os.makedirs(self.home)
+        with open(install.state_path(), "w") as f:  # what c016f98's uninstall left
+            json.dump({"installed": False, "settings_path": self.path, "had_file": True, "backup_path": backup,
+                       "original_sha256": install.sha(v1_text), "had_statusLine": False, "original_statusLine": None,
+                       "had_keys": {k: False for k in install.PLUGIN_KEYS}, "python": sys.executable,
+                       "entry": install.entry_path(), "written_statusLine": None,
+                       "mod": {"marketplace": install.MARKETPLACE, "plugin": install.PLUGIN_ID, "root": install.repo_root()}}, f)
+        with self._user_file(IRREGULAR):
+            rcs = self._steps(proj, "iP", "uP")
+        self.assertEqual(rcs, [0, 0])
+        self.assertEqual(self.read(), IRREGULAR)
+        self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+        state = install.load_state()
+        self.assertEqual(state.get("records"), {})
+        self.assertNotIn("mod", state)
 
     def test_probe_and_command_quoting(self):
         ok, ver, sq, ms, note = install.probe(sys.executable)
