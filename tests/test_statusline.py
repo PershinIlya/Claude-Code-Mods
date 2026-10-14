@@ -1,5 +1,6 @@
 """The statusline as Claude Code runs it: a subprocess fed a payload on stdin."""
 
+import io
 import json
 import os
 import re
@@ -92,6 +93,64 @@ class Statusline(unittest.TestCase):
         self.assertEqual(cfg["future_key"], 1)
         p, _ = run(self.p, self.home)
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
+
+    def test_non_utf8_stdout_encoding_still_prints(self):
+        e = dict(os.environ, CTEMPO_HOME=self.home, TZ="UTC", PYTHONIOENCODING="latin-1")
+        e.pop("NO_COLOR", None)
+        p = subprocess.run([sys.executable, "-S", ENTRY, "statusline"], input=json.dumps(self.p).encode(),
+                           capture_output=True, env=e, timeout=30)
+        out = p.stdout.decode("utf-8")
+        self.assertIn("×", out)
+        self.assertTrue(ANSI.sub("", out).startswith("5h 42%"))
+
+    def test_bad_columns_keeps_the_composed_line(self):
+        for cols in ("abc", "80.0", "-5", ""):
+            p, _ = run(self.p, self.home, args=["--compose", "printf theirs"], env={"COLUMNS": cols})
+            self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("theirs"), (cols, p.stdout))
+
+    def test_invalid_config_values_are_dropped_or_clamped(self):
+        with open(os.path.join(self.home, "config.json"), "w") as f:
+            json.dump({"profile": {"override": {"work_days": ["Mon", "Tue"], "wake_hours": [8, 23]}, "half_life_days": 0},
+                       "compose": {"command": True, "timeout_ms": 1e9}, "display": {"max_width": 3, "symbols": "emoji"},
+                       "target_5h": float("inf") if False else 100}, f)
+        cfg = config.load(os.path.join(self.home, "config.json"))
+        self.assertIsNone(cfg["profile"]["override"])
+        self.assertEqual(cfg["profile"]["half_life_days"], 0.5)
+        self.assertIsNone(cfg["compose"]["command"])
+        self.assertEqual(cfg["compose"]["timeout_ms"], 10000)
+        self.assertEqual(cfg["display"]["max_width"], 20)
+        self.assertEqual(cfg["display"]["symbols"], "unicode")
+        p, _ = run(self.p, self.home)
+        line = ANSI.sub("", p.stdout.decode()).strip()
+        self.assertTrue(line.startswith("5h 42%"), line)  # full math, not the bare fallback
+        self.assertLessEqual(len(line), 20)
+        self.assertNotIn("error", line)
+
+    def test_pathological_config_falls_back_to_defaults(self):
+        with open(os.path.join(self.home, "config.json"), "w") as f:
+            f.write("[" * 200000 + "]" * 200000)
+        self.assertEqual(config.load(os.path.join(self.home, "config.json")), config.DEFAULTS)
+        p, _ = run(self.p, self.home)
+        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
+
+    def test_error_json_still_tells_the_mod_where_to_draw(self):
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        from ctempo import statusline
+
+        class Out:
+            def __init__(self):
+                self.buffer = io.BytesIO()
+
+        o = Out()
+        with mock.patch.dict(os.environ, {"CTEMPO_HOME": self.home}), mock.patch.object(render, "plain", side_effect=RuntimeError("x")), \
+                mock.patch.object(sys, "stdout", o), mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(self.p).encode()))):
+            statusline.main(["--format", "json"])
+        d = json.loads(o.buffer.getvalue())
+        self.assertFalse(d["ok"])
+        self.assertEqual(d["surfaces"], ["desktop"])
+        self.assertEqual(d["refresh_s"], 60)
 
     def test_epoch_leak_payload_is_not_shown(self):
         self.p["rate_limits"]["seven_day"]["used_percentage"] = 1783720704
