@@ -28,7 +28,6 @@ from .store import ANOMALY, FRESH, HEARTBEAT
 
 RESET_JITTER = 300  # seconds; ccpool's resetJitter
 MAX_PCT = 105.0
-EXPIRY_GRACE = 5  # seconds of clock skew tolerated around resets_at
 FUTURE_SLACK = {config.FIVE_HOUR: 900, config.SEVEN_DAY: 3600}
 MIN_EPOCH = 1.5e9  # 2017; anything earlier is not a real reset time
 
@@ -77,7 +76,7 @@ def sanitize(window, used, resets_at, now):
         return None, "reset_missing"
     if r < MIN_EPOCH:
         return None, "reset_bad_epoch"
-    if r <= now - EXPIRY_GRACE:
+    if r <= now:  # Claude Code drops a window once resets_at passes; so do we
         return None, "expired"
     if r > now + DURATION[window] + FUTURE_SLACK[window]:
         return None, "reset_too_far"
@@ -156,7 +155,8 @@ def _same(a_used, a_reset, b_used, b_reset):
 def _record_one(store, w, used, reset, now, source, session_id, cfg):
     reader = session_id or ("~" + source)
     prev = store.reader_get(reader, w)
-    fresh = prev is None or not _same(prev[0], prev[1], used, reset)
+    first_seen = prev is None
+    fresh = first_seen or not _same(prev[0], prev[1], used, reset)
     if fresh or prev is None or now - prev[2] > 86400:
         store.reader_set(reader, w, used, reset, now)
 
@@ -168,6 +168,10 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
         return "new_window"
 
     if reset > inst["reset_ts"] + RESET_JITTER:
+        if not fresh:
+            # A heartbeat repeats a reading already judged; after a bogus
+            # later reset was undone, it must not redo the rollover.
+            return "stale"
         # The window rolled over (or reset early): close and open the next one.
         store.close_instance(inst["id"], min(now, inst["reset_ts"]), "rollover")
         inst = store.new_instance(w, reset - DURATION[w], reset, now, used)
@@ -175,10 +179,13 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
         return "rollover"
 
     shifted = reset < inst["reset_ts"] - RESET_JITTER
-    dropped = used < inst["max_used"] - drop_pts
+    dropped = used <= inst["max_used"] - drop_pts
     if shifted or dropped:
-        if not fresh:
-            return "stale"  # an idle session re-reporting an old window
+        if not fresh or first_seen:
+            # An idle session re-reporting an old window, or one ctempo has
+            # never heard from (e.g. every open session re-renders when the
+            # statusLine is installed): its first word cannot count as news.
+            return "stale"
         return _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
 
     if not fresh and used > inst["max_used"]:
@@ -201,8 +208,8 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
         store.touch_instance(inst["id"], now, max(used, inst["max_used"]))
         return "dup" if dup else "fresh"
     if last is None or now - last[0] >= cfg["write_min_interval_s"]:
+        # last_seen is not touched: a heartbeat says nothing about the level.
         store.add_sample(now, w, used, reset, source, session_id, HEARTBEAT, inst["id"])
-        store.seen_instance(inst["id"], now)
         return "heartbeat"
     return "throttled"
 

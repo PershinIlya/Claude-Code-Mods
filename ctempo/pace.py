@@ -8,6 +8,7 @@ from .config import FIVE_HOUR
 from .store import FRESH
 
 IDLE_RATE = 0.05  # %/h; below this a fitted slope counts as idle
+ANCHOR_S = 300.0  # a reading this close before the fit window can anchor it
 
 
 def lsq_slope(points):
@@ -79,12 +80,16 @@ def five_hour(store, now, cfg, reading=None):
              target=tgt, window_id=inst["id"])
 
     # Trailing least-squares rate over the running max. The window's value
-    # just before the fit window anchors its left edge, and "now" its right
+    # just before the fit window anchors its left edge, but only when it was
+    # read within ANCHOR_S of that edge (an older value would pour usage from
+    # an unobserved gap into the last 20 minutes); "now" anchors the right
     # edge, so a burst that stopped long ago fades out as time passes.
     win_s = float(cfg["rate_window_min"]) * 60.0
     since = now - win_s
     rows = store.instance_series(inst["id"], since=since)
-    before = store.max_at(inst["id"], since)
+    before, before_ts = store.state_at(inst["id"], since)
+    if before_ts is not None and since - before_ts > ANCHOR_S:
+        before = None
     series = running_series(rows, before)
     points = []
     if before is not None and (not series or series[0][0] > since + 1):
@@ -95,14 +100,22 @@ def five_hour(store, now, cfg, reading=None):
         points.append((now, used))
         real += 1
     span = (now - series[0][0]) if series else 0.0
+    min_span = float(cfg["rate_min_span_min"]) * 60
     rate, source = None, None
-    if real >= int(cfg["rate_min_samples"]) and span >= float(cfg["rate_min_span_min"]) * 60:
+    if real >= int(cfg["rate_min_samples"]) and span >= min_span:
         s = lsq_slope(points)
         if s is not None:
             rate, source = max(0.0, s), "lsq"
     if rate is None:
+        # Not enough recent readings: the average since the last reading
+        # before now (what changed since we last looked), else since the
+        # window opened (it opened at 0).
+        prev, prev_ts = store.state_at(inst["id"], now - 60)
+        if prev_ts is not None and now - prev_ts >= min_span:
+            rate, source = max(0.0, used - prev) / ((now - prev_ts) / 3600.0), "since_last"
+    if rate is None:
         elapsed = now - max(inst["start_ts"], reset - config.DURATION[FIVE_HOUR])
-        if elapsed >= float(cfg["rate_min_span_min"]) * 60:
+        if elapsed >= min_span:
             rate, source = used / (elapsed / 3600.0), "window_avg"
     v["rate"] = rate
     v["rate_source"] = source

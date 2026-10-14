@@ -90,7 +90,9 @@ def _print_5h(v):
     if v.get("rate") is None:
         print("  burn rate      unknown (fewer than 3 readings over 5 minutes)")
     else:
-        how = {"lsq": "least squares over the last %s" % "20 min", "window_avg": "window average (too few recent readings)"}
+        how = {"lsq": "least squares over the last 20 min",
+               "since_last": "average since the previous reading (too few recent readings)",
+               "window_avg": "window average (too few recent readings)"}
         print("  burn rate      %5.1f %%/h  %s" % (v["rate"], how.get(v["rate_source"], "")))
     print("  allowed rate   %5.1f %%/h  = (%.0f - %.1f) / %.2f h" % (v["allowed"], t, v["used"], v["remaining_h"]))
     if v.get("multiplier") is not None:

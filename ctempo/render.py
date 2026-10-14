@@ -83,7 +83,7 @@ def five_hour_parts(v, s):
     elif verdict == "unknown":
         parts.append((s["le"] + rate(v["allowed"]) + "%/h", False))
     else:
-        approx = "~" if v.get("rate_source") == "window_avg" else ""
+        approx = "~" if v.get("rate_source") in ("window_avg", "since_last") else ""
         parts.append((approx + s["x"] + mult(v["multiplier"]) + _glyph(verdict, s), False))
         if v.get("cap_ts"):
             parts.append(("dry " + hm(v["cap_ts"]), False))
