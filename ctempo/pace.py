@@ -211,7 +211,8 @@ def severity(v, cfg):
     time, or at or above a target below 100 whatever the verdict (idle
     included). At target 100 slow down always runs dry.
     opportunity: in the tail with at least min_free points projected to
-    expire; never while the leftover is unknown (no rate yet).
+    expire; never while the leftover is unknown (no rate yet), whatever
+    min_free (taken as 0, it passed min_free 0).
     """
     if not v.get("present"):
         return "dim"
@@ -220,6 +221,7 @@ def severity(v, cfg):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
-    if v.get("in_tail") and (v.get("unused_at_reset") or 0) >= float(cfg["min_free"]):
+    unused = v.get("unused_at_reset")
+    if v.get("in_tail") and unused is not None and unused >= float(cfg["min_free"]):
         return "opportunity"
     return "dim"

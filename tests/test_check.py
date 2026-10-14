@@ -1,7 +1,12 @@
 """`ctempo check`: the scavenger's go / no-go."""
 
+import argparse
+import contextlib
+import io
+import json
 import os
 import unittest
+from unittest import mock
 
 from ctempo import commands
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
@@ -138,6 +143,128 @@ class Check(TempHome):
                 self.assertFalse(k["harvestable"])  # the 5h room test fails too
                 self.assertEqual(res["reasons"], ["5h burn rate not known yet"])
         self.assertEqual(unknown, 12)  # 14:11:00 to 14:14:40, one render every 20 s
+
+    def test_no_5h_rate_yet_is_no_go_whatever_min_free(self):
+        # Review 6 (E-display-commands-weekly#0, X-integration#0): the same late
+        # start with min_free 0. The unknown leftover (None) was compared as
+        # `None or 0`, and 0 >= 0: the 5h window counted as harvestable, and
+        # its reason formatted None as a number (TypeError, no JSON). Below 0
+        # (--min-free was not clamped) the same; far above 100 nothing is
+        # harvestable either.
+        T = MON + 3 * D
+        r5 = int(T + 15 * H)
+        r7 = int(T + D + 14 * H)
+        t0 = T + 14 * H + 10 * M
+        self.known("s1")
+        for i in range(25, 0, -1):
+            self.feed(t0 - i * H, week=(40, r7))
+        unknown = 0
+        for ts in self.late_start(t0, 80, 2, 60, r5, week=(40, r7), renders=20):
+            for min_free in (0, 0.0, -5, 1e9):
+                res = self.result(ts, min_free=min_free)
+                f, k = res["five_hour"], res["seven_day"]
+                if f["verdict"] == "unknown":
+                    unknown += 1
+                    self.assertFalse(res["ok"], (min_free, ts - t0, res["reasons"]))
+                    self.assertIsNone(f["projected_unused"])
+                    self.assertFalse(f["harvestable"], min_free)
+                    self.assertFalse(k["harvestable"], min_free)
+                    self.assertEqual(res["reasons"], ["5h burn rate not known yet"], min_free)
+        self.assertEqual(unknown, 12 * 4)
+
+    def test_weekly_harvest_waits_for_the_5h_rate_with_min_free_0(self):
+        # Review 6 (X-integration#0): the week ends tomorrow (in its tail) with
+        # 60 points to expire, and a new 5h window opens. For its first 5
+        # minutes there is no rate (D-11), so the weekly harvest's 5h room test
+        # must fail (D-20); with min_free 0 it passed on `None or 0`.
+        T = MON + 3 * D + 23 * H
+        r7 = int(T + D)
+        r5 = int(T + 5 * H)
+        self.known("s1")
+        for i in range(25, 0, -1):
+            self.feed(T - i * H, week=(40, r7))  # an idle week at 40%
+        seen = set()
+        for j in range(1, 25):  # 2% from 30 s in, re-rendered every 20 s
+            ts = T + 10 + 20 * j
+            self.feed(ts, five=(2, r5), week=(40, r7))
+            res = self.result(ts, min_free=0)
+            f, k = res["five_hour"], res["seven_day"]
+            seen.add(f["verdict"])
+            self.assertTrue(k["in_tail"])
+            if f["verdict"] == "unknown":
+                self.assertFalse(k["harvestable"], ts - T)
+                self.assertFalse(res["ok"], ts - T)
+                self.assertEqual(res["reasons"], ["5h burn rate not known yet"])
+            else:  # the rate is known: the 5h window has room, so go
+                self.assertTrue(k["harvestable"], (ts - T, res["reasons"]))
+                self.assertTrue(res["ok"], ts - T)
+        self.assertIn("unknown", seen)
+        self.assertGreater(len(seen), 1)  # and the rate comes in later
+
+    def test_check_command_prints_json_with_min_free_0(self):
+        # Review 6 (E-display-commands-weekly#0): `ctempo check --min-free 0`
+        # in the late start raised a TypeError and printed nothing, while D-20
+        # promises JSON on stdout either way. --min-free is now clamped to the
+        # config's range (0 to 100), and nan or inf is an error.
+        T = MON + 3 * D
+        r5 = int(T + 15 * H)
+        t0 = T + 14 * H + 10 * M
+        self.known("s1")
+        ts = list(self.late_start(t0, 80, 2, 60, r5, renders=4))[-1]  # 14:11, 82%: no rate yet
+
+        def check(min_free):
+            out = io.StringIO()
+            args = argparse.Namespace(tail=None, max_age="30m", min_free=min_free)
+            with mock.patch.object(commands.time, "time", return_value=ts), contextlib.redirect_stdout(out):
+                code = commands.cmd_check(args, self.cfg)
+            return code, json.loads(out.getvalue())
+
+        for given, used in ((0.0, 0.0), (-5.0, 0.0), (250.0, 100.0), (None, 10.0)):
+            code, res = check(given)
+            self.assertEqual(code, 1, given)
+            self.assertFalse(res["ok"])
+            self.assertEqual(res["five_hour"]["verdict"], "unknown")
+            self.assertEqual(repr(res["params"]["min_free"]), repr(used), given)
+            self.assertIn("5h burn rate not known yet", res["reasons"])
+        for bad in (float("nan"), float("inf")):
+            code, res = check(bad)
+            self.assertEqual(code, 1)
+            self.assertFalse(res["ok"])
+            self.assertIn("--min-free", res["error"])
+
+    def test_tight_week_reason_prices_nothing_while_the_5h_rate_is_unknown(self):
+        # Review 6 (E-display-commands-weekly#2): with no 5h rate the leftover
+        # is unknown and the weekly cost null (D-20), but the tight week reason
+        # still said "priced at 50 weekly points per 5h window" and the JSON
+        # said exchange_rate_assumed. The week runs dry on its own here (1
+        # point an hour at 90% on Friday), and the exchange rate is not known.
+        r7 = int(MON + 7 * D)
+        now = MON + 4 * D
+        self.known("s1")
+        for i in range(30, -1, -1):
+            self.feed(now - i * H, week=(90 - i, r7))
+        t0 = now + 10 * M
+        r5 = int(t0 + 50 * M)
+        states = set()
+        for ts in self.late_start(t0, 80, 1, 60, r5, week=(90, r7), renders=24):
+            res = self.result(ts)
+            self.assertIsNone(res["exchange_rate"])
+            self.assertIsNotNone(res["seven_day"]["dry_at"])
+            self.assertFalse(res["ok"])
+            tight = [r for r in res["reasons"] if "already tight" in r]
+            self.assertEqual(len(tight), 1, res["reasons"])  # true either way: the week runs dry
+            if res["five_hour"]["verdict"] == "unknown":
+                states.add("unknown")
+                self.assertIsNone(res["weekly_cost_of_5h_leftover"])
+                self.assertFalse(res["exchange_rate_assumed"])  # nothing was priced
+                self.assertNotIn("priced at", tight[0])
+                self.assertIn("5h burn rate not known yet", res["reasons"])
+            else:
+                states.add("known")
+                self.assertIsNotNone(res["weekly_cost_of_5h_leftover"])
+                self.assertTrue(res["exchange_rate_assumed"])
+                self.assertIn("priced at 50 weekly points per 5h window", tight[0])
+        self.assertEqual(states, {"unknown", "known"})
 
     def test_no_5h_rate_yet_is_no_go_from_a_new_session(self):
         # Review 5 (C-commands-config-mod#0, X-integration#0): the same from a
