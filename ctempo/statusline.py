@@ -141,10 +141,11 @@ def maybe_learn(st, prof, now, cfg):
     return prof
 
 
-def bare_line(readings, now):
+def bare_line(readings, now, cfg=None):
     """Fallback without the database: levels and reset times only."""
-    from .render import dhm, hm, pct
+    from .render import dhm, fit, hm, pct, plain, symbols
 
+    cfg = cfg or config.DEFAULTS
     parts = []
     if config.FIVE_HOUR in readings:
         u, r = readings[config.FIVE_HOUR]
@@ -152,7 +153,7 @@ def bare_line(readings, now):
     if config.SEVEN_DAY in readings:
         u, r = readings[config.SEVEN_DAY]
         parts.append("wk %s @%s" % (pct(u), dhm(r)))
-    return " · ".join(parts) or "ctempo: no data"
+    return plain(fit([(symbols(cfg)["sep"].join(parts) or "ctempo: no data", "dim")], cfg))
 
 
 class Composer:
@@ -257,7 +258,7 @@ def main(argv):
         try:
             def segs_of(v5, vw):
                 if not v5.get("present") and not vw.get("present"):
-                    return [("ctempo: waiting for usage data", "dim")]
+                    return render.fit([("ctempo: waiting for usage data", "dim")], cfg)
                 return render.segments(v5, vw, cfg)
 
             v5, vw, readings = compute(raw, cfg, opts, now, lambda a, b: render.plain(segs_of(a, b)))
@@ -271,7 +272,7 @@ def main(argv):
                     readings = ingest.parse_payload(json.loads(raw or b"{}"), now)[0]
                 except Exception:
                     readings = {}
-            segs = [(bare_line(readings, now), "dim")]
+            segs = [(bare_line(readings, now, cfg), "dim")]
             v5 = vw = {}
         if opts["format"] == "json":
             out = json.dumps(

@@ -150,9 +150,11 @@ def weekly(store, now, cfg, reading=None, prof=None):
 
 
 def _severity(v, cfg):
-    if v["verdict"] == "maxed" or v.get("dry_ts") is not None:
+    # The 5h tiers (pace.severity): red needs a dry time and a slow down verdict.
+    dry = v.get("dry_ts") is not None
+    if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
         return "alert"
-    if v["verdict"] == "slow_down":
+    if dry or v["verdict"] == "slow_down":
         return "warn"
     if v.get("in_tail") and v.get("expire", 0) >= float(cfg["min_free"]):
         return "opportunity"

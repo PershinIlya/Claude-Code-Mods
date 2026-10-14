@@ -198,6 +198,124 @@ class FiveHour(TempHome):
         self.assertAlmostEqual(v["rate"], 30.0, delta=1.0)
         self.assertEqual(v["rate_source"], "lsq")
 
+    def test_a_late_start_from_a_new_session_waits_for_data(self):
+        # Review 4: the same late start from a new session. Its 10:50 reading is
+        # FIRST and lies under the ramp (1.92 at 10:50), so the first real point
+        # is 10:52. At 10:56 only 4 minutes follow it: no rate yet, instead of a
+        # ramp-diluted "lsq" speed up; at 10:58 the fit is 30 %/h.
+        start = self.t - 56 * M  # now is 10:56
+        r = int(start + 5 * H)
+        for i, lvl in enumerate((1, 2, 3, 4)):
+            self.feed(start + (50 + 2 * i) * M, five=(lvl, r))
+        v = self.view()
+        self.assertIsNone(v["rate"])
+        self.assertEqual(v["verdict"], "unknown")
+        self.t = start + 58 * M
+        self.feed(self.t, five=(5, r))
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 30.0, places=6)
+        self.assertEqual(v["rate_source"], "lsq")
+
+    def renders_from_a_late_start(self, rate):
+        """A new session works from 10:50 in a 10:00 window at `rate` %/h, in
+        whole percents, with a render every 20 s for 40 minutes."""
+        r = int(self.t + 5 * H)  # self.t is 10:00
+        out = []
+        for k in range(0, 40 * 60 + 1, 20):
+            ts = self.t + 50 * M + k
+            self.feed(ts, five=(int(1 + rate * k / H), r))
+            out.append((ts, pace.five_hour(self.st, ts, self.cfg)))
+        return out
+
+    def test_steady_work_at_the_start_of_a_window_never_reads_idle(self):
+        # Review 4: at 9 %/h the fit jumped to the first reading 5 minutes after
+        # it, with no data after it yet, and read idle while work went on.
+        idle = [ts - self.t for ts, v in self.renders_from_a_late_start(9) if v["verdict"] == "idle"]
+        self.assertEqual(idle, [])
+
+    def test_the_start_of_a_window_never_flips_from_speed_up_to_slow_down(self):
+        # Review 4: at 30 %/h (allowed is about 24 %/h) renders said "x4.5 speed
+        # up" without the ~ marker, then "x0.8 slow down, dry" with no new data.
+        out = self.renders_from_a_late_start(30)
+        lsq_up = [ts - self.t for ts, v in out if v["verdict"] == "speed_up" and v["rate_source"] == "lsq"]
+        self.assertEqual(lsq_up, [])
+        verdicts = [v["verdict"] for _, v in out]
+        first_down = verdicts.index("slow_down")
+        self.assertEqual(set(verdicts[first_down:]), {"slow_down"})
+        self.assertAlmostEqual(out[-1][1]["rate"], 30.0, delta=1.0)
+
+    def test_one_reading_fades_out_over_the_fit_window(self):
+        # Review 4: a single reading gave the window average for 5 minutes, then
+        # read idle at once. It now fades out over the 20-minute fit window.
+        t0 = self.t
+        r = int(t0 + 3 * H)  # window started 2 h ago, at 0
+        self.feed(t0, five=(30, r))
+        # +5 min: the fit spans -15..+5 min through 26.25 (on the ramp), 30, 30:
+        # Sxy = 43.75, Sxx = 650/3 (minutes), slope 21/104 per minute = 315/26 %/h.
+        self.t = t0 + 5 * M
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 315.0 / 26.0)
+        self.assertEqual(v["rate_source"], "interpolated")
+        self.assertEqual(v["verdict"], "speed_up")
+        # +10 min: 27.5, 30, 30 at -10, 0, +10 min: 25 / 200 per minute = 7.5 %/h.
+        self.t = t0 + 10 * M
+        self.assertAlmostEqual(self.view()["rate"], 7.5)
+        # +20 min: no spend is left in the fit window.
+        self.t = t0 + 20 * M
+        self.assertEqual(self.view()["verdict"], "idle")
+
+    def test_a_first_reading_off_the_path_is_no_sample(self):
+        # Review 4: s2's stale first 35 lies under the path; counting it made a
+        # fit of two readings look well sampled (no ~ marker).
+        self.known("s1")
+        self.feed(self.t - 20 * M, five=(40, self.R))
+        self.feed(self.t - 10 * M, five=(35, self.R), sid="s2")
+        self.feed(self.t, five=(50, self.R))
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 30.0, places=6)  # 10 points in 20 minutes
+        self.assertEqual(v["rate_source"], "interpolated")
+
+    def test_a_first_reading_on_the_path_is_a_sample(self):
+        # Review 4: s2's first 47 lifts the path (45 there), so it is a point of
+        # it and counts: 40, 47, 50 at -20, -10, 0 min is a 30 %/h fit.
+        self.known("s1")
+        self.feed(self.t - 20 * M, five=(40, self.R))
+        self.feed(self.t - 10 * M, five=(47, self.R), sid="s2")
+        self.feed(self.t, five=(50, self.R))
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 30.0, places=6)
+        self.assertEqual(v["rate_source"], "lsq")
+
+    def test_a_mild_overshoot_is_yellow_not_red(self):
+        # Review 4: at target 100 every slow down also runs dry, so yellow never
+        # showed. 27 %/h at 50% with 2 h left: allowed 25 %/h, multiplier 25/27
+        # = 0.93 (on pace), 100% at +50/27 h, before the reset: yellow.
+        self.known("s1")
+        for i, lvl in enumerate((41, 45.5, 50)):
+            self.feed(self.t - (20 - 10 * i) * M, five=(lvl, self.R))
+        v = self.view()
+        self.assertAlmostEqual(v["rate"], 27.0, places=6)
+        self.assertEqual(v["rate_source"], "lsq")
+        self.assertEqual(v["verdict"], "on_pace")
+        self.assertAlmostEqual(v["cap_ts"], self.t + 50.0 / 27.0 * H)
+        self.assertEqual(v["severity"], "warn")
+
+    def test_severity_tiers(self):
+        # Review 4: red is maxed, or a dry time with a slow down verdict; a dry
+        # time with an on pace verdict, or slow down without a dry time (a
+        # target below 100), is yellow.
+        base = dict(present=True, cap_ts=None, in_tail=False, unused_at_reset=0)
+        cases = [
+            (dict(verdict="maxed"), "alert"),
+            (dict(verdict="slow_down", cap_ts=self.t), "alert"),
+            (dict(verdict="on_pace", cap_ts=self.t), "warn"),
+            (dict(verdict="slow_down"), "warn"),
+            (dict(verdict="on_pace"), "dim"),
+            (dict(verdict="idle", in_tail=True, unused_at_reset=20), "opportunity"),
+        ]
+        for kw, tone in cases:
+            self.assertEqual(pace.severity(dict(base, **kw), self.cfg), tone, kw)
+
     def test_short_rate_window_still_gives_a_rate(self):
         # Review #2: rate_window_min below rate_min_span_min used to give no rate.
         self.cfg["rate_window_min"] = 4

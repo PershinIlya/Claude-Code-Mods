@@ -60,10 +60,13 @@ class TempHome(unittest.TestCase):
         return ingest.record(self.st, readings, now, source, sid, self.cfg, rejects, kinds)
 
     def known(self, *sids):
-        """Mark sessions as already heard from, so their next reading is timed (not FIRST)."""
+        """Mark sessions as already heard from, so their next reading is timed (not FIRST).
+
+        The row is dated far ahead: the first ingest prunes reader rows older
+        than 7 days, which dropped a ts of 0 for every session not yet heard."""
         for sid in sids:
             for w in (config.FIVE_HOUR, config.SEVEN_DAY):
-                self.st.reader_set(sid, w, -1.0, 0, 0)
+                self.st.reader_set(sid, w, -1.0, 0, 1e12)
 
     def rows(self, window):
         return self.st.db.execute(

@@ -1,17 +1,18 @@
 """The compact line, as ANSI text or as tone-tagged segments for the mod.
 
-  5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×0.8▼ →96% @Thu 09:00
+  5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00
 
 Tones: dim (fine), opportunity (green: spare quota about to expire),
-warn (yellow: above target pace), alert (red: runs dry before reset).
+warn (yellow: runs dry before the reset but on pace, or slow down against a
+target below 100), alert (red: runs dry with a slow down verdict, or maxed).
 """
 
 import os
 import time
 
 SYMBOLS = {
-    "unicode": {"x": "×", "up": "▲", "down": "▼", "to": "→", "le": "≤", "sep": " · ", "pm": "±"},
-    "ascii": {"x": "x", "up": "^", "down": "v", "to": "->", "le": "<=", "sep": " | ", "pm": "+"},
+    "unicode": {"x": "×", "up": "▲", "down": "▼", "to": "→", "le": "≤", "sep": " · ", "pm": "±", "cut": "…"},
+    "ascii": {"x": "x", "up": "^", "down": "v", "to": "->", "le": "<=", "sep": " | ", "pm": "+", "cut": "..."},
 }
 ANSI = {
     "dim": "\033[2m",
@@ -21,6 +22,10 @@ ANSI = {
     "alert": "\033[1;31m",
 }
 RESET = "\033[0m"
+
+
+def symbols(cfg):
+    return SYMBOLS.get(cfg["display"].get("symbols"), SYMBOLS["unicode"])
 
 
 def use_color(cfg, env=None):
@@ -117,7 +122,7 @@ def weekly_parts(v, s):
 
 def segments(v5, vw, cfg, width=None):
     """[(text, tone)] fitted to the width; separators are tagged 'dim'."""
-    s = SYMBOLS.get(cfg["display"].get("symbols"), SYMBOLS["unicode"])
+    s = symbols(cfg)
     width = int(width or cfg["display"].get("max_width", 80))
     p5, pw = five_hour_parts(v5, s), weekly_parts(vw, s)
     # Drop optional parts, least useful first, until the line fits.
@@ -137,10 +142,24 @@ def segments(v5, vw, cfg, width=None):
             dropped.add((0 if parts is p5 else 1, idx))
             a, b = build()
     segs = [(a, v5.get("severity") or "dim"), (s["sep"], "dim"), (b, vw.get("severity") or "dim")]
-    total = sum(len(t) for t, _ in segs)
-    if total > width:
-        segs = [(t[: max(0, width - 1)] + "…", "dim") for t in ["".join(t for t, _ in segs)]]
-    return segs
+    return fit(segs, cfg, width)
+
+
+def fit(segs, cfg, width=None):
+    """Cut [(text, tone)] to the width as a last resort: the segment that
+    overflows ends in an ellipsis and keeps its tone, the rest is dropped."""
+    width = int(width or cfg["display"].get("max_width", 80))
+    if sum(len(t) for t, _ in segs) <= width:
+        return segs
+    cut = symbols(cfg)["cut"]
+    out, room = [], max(0, width - len(cut))
+    for text, tone in segs:
+        if len(text) > room:
+            out.append((text[:room] + cut, tone))
+            break
+        out.append((text, tone))
+        room -= len(text)
+    return out
 
 
 def to_ansi(segs, color):

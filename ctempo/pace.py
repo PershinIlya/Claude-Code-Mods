@@ -84,17 +84,6 @@ def level_path(fresh, start_ts, used, now, first=()):
             else:
                 path.append((now, y1 + slope * (now - t1), True))
     return path
-    if len(path) >= 2 and not path[-2][2]:  # a step between two readings, not the ramp from 0
-        (t0, y0, _), (t1, y1, _) = path[-2], path[-1]
-        quantum = min(1.0, max(0.1, min(steps))) if steps else 1.0
-        if t1 > t0 and y1 > y0 and now > t1:
-            slope = (y1 - y0) / (t1 - t0)
-            t_ext = t1 + quantum / slope
-            if t_ext < now:
-                path.append((t_ext, y1 + quantum, True))
-            else:
-                path.append((now, y1 + slope * (now - t1), True))
-    return path
 
 
 def level_at(path, t):
@@ -147,8 +136,10 @@ def five_hour(store, now, cfg, reading=None):
     # between readings (spend in an unobserved gap is spread over it, not
     # squeezed into the moment we looked); see level_path for both ends. The
     # rate is the least-squares slope of that path over the trailing window,
-    # which never reaches back past the window's first real reading once
-    # there is enough real data (the 0-at-start ramp would dilute it).
+    # which never reaches back past the window's first real reading once a
+    # second one follows it (the 0-at-start ramp would dilute it; there is no
+    # rate until min_span follows the first). A single reading keeps reaching
+    # back: the window average, which fades out over the fit window.
     win_s = float(cfg["rate_window_min"]) * 60.0
     min_span = min(float(cfg["rate_min_span_min"]) * 60, win_s)
     fresh = store.fresh_levels(inst["id"])
@@ -156,7 +147,7 @@ def five_hour(store, now, cfg, reading=None):
     path = level_path(fresh, inst["start_ts"], used, now, first)
     real_pts = [p for p in path if not p[2]]
     since = max(now - win_s, inst["start_ts"])
-    if real_pts and since < real_pts[0][0] and now - real_pts[0][0] >= min_span:
+    if len(real_pts) >= 2 and since < real_pts[0][0]:
         since = real_pts[0][0]
     rate, source, inside = None, None, []
     if now - since >= min_span:
@@ -165,7 +156,9 @@ def five_hour(store, now, cfg, reading=None):
         s = lsq_slope(points)
         if s is not None:
             # A fit carried by fewer than rate_min_samples readings is marked ~.
-            real = sorted(ts for ts, _ in fresh + first if since <= ts <= now)
+            # A FIRST reading counts only where it is a point of the path.
+            on_path = [(ts, u) for ts, u in first if (ts, u, False) in path]
+            real = sorted(ts for ts, _ in fresh + on_path if since <= ts <= now)
             enough = len(real) >= int(cfg["rate_min_samples"]) and now - real[0] >= min_span
             rate, source = max(0.0, s), "lsq" if enough else "interpolated"
     v["rate"] = rate
@@ -200,12 +193,18 @@ def five_hour(store, now, cfg, reading=None):
 
 
 def severity(v, cfg):
-    """dim (fine), opportunity (spare quota about to expire), warn, alert."""
+    """dim (fine), opportunity (spare quota about to expire), warn, alert.
+
+    alert: maxed, or it runs dry before the reset with a slow down verdict.
+    warn: a milder overshoot (dry, but on pace), or slow down without a dry
+    time (a target below 100). At target 100 slow down always runs dry.
+    """
     if not v.get("present"):
         return "dim"
-    if v["verdict"] == "maxed" or v.get("cap_ts") is not None:
+    dry = v.get("cap_ts") is not None
+    if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
         return "alert"
-    if v["verdict"] == "slow_down":
+    if dry or v["verdict"] == "slow_down":
         return "warn"
     if v.get("in_tail") and v.get("unused_at_reset", 0) >= float(cfg["min_free"]):
         return "opportunity"

@@ -69,6 +69,35 @@ class Weekly(TempHome):
         self.assertEqual(v["severity"], "alert")
         self.assertAlmostEqual(v["multiplier"], 10 / 72, places=6)
 
+    def test_a_mild_overshoot_is_yellow_not_red(self):
+        # Review 4: at target 100 every slow down also runs dry, so yellow never
+        # showed. 1 %/h (intensity 1.68) at 30% with 72 h left: 72 points to
+        # come, multiplier 70/72 = 0.97 (on pace), dry after 70 h: yellow.
+        now = MON + 4 * D
+        R = int(now + 3 * D)
+        for h in range(30, -1, -1):
+            self.feed(now - h * H, week=(30 - h, R))
+        v = self.view(now)
+        self.assertAlmostEqual(v["intensity"], 1.68, places=6)
+        self.assertAlmostEqual(v["multiplier"], 70 / 72, places=6)
+        self.assertEqual(v["verdict"], "on_pace")
+        self.assertAlmostEqual(v["dry_ts"], now + 70 * H, places=3)
+        self.assertEqual(v["severity"], "warn")
+
+    def test_severity_tiers(self):
+        # Review 4: the same tiers as the 5h window, with dry_ts.
+        base = dict(dry_ts=None, in_tail=False, expire=0)
+        cases = [
+            (dict(verdict="maxed"), "alert"),
+            (dict(verdict="slow_down", dry_ts=MON), "alert"),
+            (dict(verdict="on_pace", dry_ts=MON), "warn"),
+            (dict(verdict="slow_down"), "warn"),
+            (dict(verdict="on_pace"), "dim"),
+            (dict(verdict="speed_up", in_tail=True, expire=20), "opportunity"),
+        ]
+        for kw, tone in cases:
+            self.assertEqual(weekly._severity(dict(base, **kw), self.cfg), tone, kw)
+
     def test_lookback_crosses_a_reset(self):
         now = MON + 3 * D
         r_prev = int(now - 6 * H)

@@ -80,6 +80,30 @@ class Statusline(unittest.TestCase):
         self.assertTrue(plain.startswith("5h 42% @"), plain)
         self.assertNotIn(b"Traceback", p.stdout + p.stderr)
 
+    def test_bare_line_follows_the_display_settings(self):
+        # Review 4: with a broken database the bare line joined with " · " and
+        # was never fitted: "5h 42% @HH:MM · wk 32% @Ddd HH:MM" is 33 columns.
+        with open(os.path.join(self.home, "config.json"), "w") as f:
+            json.dump({"display": {"symbols": "ascii", "max_width": 24}}, f)
+        with open(os.path.join(self.home, "tempo.db"), "wb") as f:
+            f.write(b"not a database " * 100)
+        for args in ((), ("--format", "json")):
+            p, _ = run(self.p, self.home, args=args)
+            out = p.stdout.decode().strip()
+            line = json.loads(out)["line"] if args else ANSI.sub("", out)
+            self.assertTrue(line.startswith("5h 42% @"), line)
+            self.assertEqual(line[13:], " | wk 32...")  # 21 columns kept, then "..."
+            self.assertLessEqual(len(line), 24)
+
+    def test_waiting_line_follows_the_display_settings(self):
+        # Review 4: "ctempo: waiting for usage data" (30 columns) ignored max_width.
+        no_limits = {"session_id": "abc"}
+        for symbols, want in (("unicode", "ctempo: waiting for usa…"), ("ascii", "ctempo: waiting for u...")):
+            with open(os.path.join(self.home, "config.json"), "w") as f:
+                json.dump({"display": {"symbols": symbols, "max_width": 24}}, f)
+            p, _ = run(no_limits, self.home, env={"NO_COLOR": "1"})
+            self.assertEqual(p.stdout.decode("utf-8"), want + "\n")
+
     def test_bad_config_types_fall_back_to_defaults(self):
         with open(os.path.join(self.home, "config.json"), "w") as f:
             json.dump({"verdict": 5, "display": {"max_width": "wide", "symbols": "ascii"}, "reset": None,
@@ -257,6 +281,7 @@ class Render(unittest.TestCase):
         return v
 
     def vw(self, **kw):
+        # Slow down without a dry time: a target_week below 100 (yellow).
         v = dict(present=True, used=48.0, reset_ts=MON + 3 * D + 9 * H, verdict="slow_down", multiplier=0.8,
                  projected=96.0, dry_ts=None, delta=3.2, severity="warn")
         v.update(kw)
@@ -266,7 +291,10 @@ class Render(unittest.TestCase):
         return render.plain(render.segments(v5, vw, cfg or self.cfg))
 
     def test_reference_line(self):
-        self.assertEqual(self.line(self.v5(), self.vw()), "5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×0.8▼ →96% @Thu 09:00")
+        # Review 4: the README line, in a state the default targets can reach
+        # (x0.8 at target 100 runs dry; x1.1 projects 48 + 52 / 1.1 = 95).
+        vw = self.vw(verdict="on_pace", multiplier=1.1, projected=95.0, severity="dim")
+        self.assertEqual(self.line(self.v5(), vw), "5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00")
 
     def test_dry_idle_and_fallbacks(self):
         s = self.line(self.v5(verdict="slow_down", multiplier=0.6, cap_ts=MON + 12 * H + 40 * 60),
@@ -291,6 +319,46 @@ class Render(unittest.TestCase):
         s2 = self.line(self.v5(), self.vw(), cfg)
         self.assertNotEqual(s, s2)
         self.assertTrue(all(ord(c) < 128 for c in s2), s2)
+
+    def test_last_resort_cut_keeps_each_tone(self):
+        # Review 4: when the required parts alone overflow, the cut made the
+        # whole line one dim segment, so both red windows lost their color.
+        # Required: 22 + 3 + 26 = 51 columns; 40 leaves 39 (unicode) or 37
+        # (ascii) before the ellipsis.
+        cfg = config.load(os.devnull)
+        cfg["display"]["max_width"] = 40
+        v5 = self.v5(verdict="slow_down", multiplier=0.6, cap_ts=MON + 12 * H + 40 * 60, severity="alert")
+        vw = self.vw(dry_ts=MON + 2 * D + 14 * H, severity="alert")
+        self.assertEqual(render.segments(v5, vw, cfg),
+                         [("5h 62% ×0.6▼ dry 12:40", "alert"), (" · ", "dim"), ("wk 48% ×0.8▼ d…", "alert")])
+        cfg["display"]["symbols"] = "ascii"
+        self.assertEqual(render.segments(v5, vw, cfg),
+                         [("5h 62% x0.6v dry 12:40", "alert"), (" | ", "dim"), ("wk 48% x0.8v...", "alert")])
+
+    def test_ascii_cut_stays_ascii_and_within_width(self):
+        # Review 4: the cut appended "…" in ascii mode too.
+        long5 = self.v5(verdict="slow_down", multiplier=0.06, cap_ts=MON + 12 * H, used=99.7, severity="alert")
+        longw = self.vw(dry_ts=MON + 2 * D + 14 * H, delta=-88.0, multiplier=12.0)
+        for symbols in ("unicode", "ascii"):
+            for width in range(20, 81):
+                cfg = config.load(os.devnull)
+                cfg["display"].update(symbols=symbols, max_width=width)
+                segs = render.segments(long5, longw, cfg)
+                line = render.plain(segs)
+                self.assertLessEqual(len(line), width, (symbols, line))
+                self.assertEqual(segs[0][1], "alert", (symbols, segs))
+                if symbols == "ascii":
+                    self.assertTrue(all(ord(c) < 128 for c in line), line)
+
+    def test_bare_line_uses_the_symbols_and_fits(self):
+        # Review 4: 13 + 3 + 17 = 33 columns; 32 keeps 29, then "...".
+        from ctempo import statusline
+
+        cfg = config.load(os.devnull)
+        cfg["display"].update(symbols="ascii", max_width=32)
+        readings = {config.FIVE_HOUR: (40, MON + 16 * H + 600), config.SEVEN_DAY: (30, MON + 5 * D + 14 * H + 600)}
+        self.assertEqual(statusline.bare_line(readings, MON, cfg), "5h 40% @16:10 | wk 30% @Sat 1...")
+        self.assertEqual(statusline.bare_line(readings, MON, self.cfg), "5h 40% @16:10 · wk 30% @Sat 14:10")
 
     def test_formatting_helpers(self):
         self.assertEqual(render.pct(99.6), "99%")
