@@ -337,6 +337,126 @@ class Check(TempHome):
         self.assertFalse(res["seven_day"]["harvestable"])
         self.assertFalse(res["ok"])
 
+    def fresh_store(self, name):
+        self.st.close()
+        self.st = Store(os.path.join(self.dir, name))
+
+    def test_spare_5h_quota_is_measured_against_its_target(self):
+        # Review 7 (checks-colors#1, integration#0): with target_5h 90 ("90
+        # keeps a 10-point reserve"), check measured the 5h leftover against
+        # 100. Idle at 90 (or 92, min_free 5) in the tail, the line was yellow
+        # and check said go on ~10% (~8%); idle at 84 the line was green and
+        # check harvested ~16%, ending at 100. Spare is now max(0, 90 -
+        # projected), on the line and in check alike.
+        self.cfg["target_5h"] = 90
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 40 * M)
+        r7 = int(MON + 7 * D)
+        cases = ((92, 5, "warn", 0, False), (90, 10, "warn", 0, False), (84, 10, "dim", 6, False),
+                 (60, 10, "opportunity", 30, True))
+        for used, min_free, tone, spare, go in cases:
+            with self.subTest(used=used, min_free=min_free):
+                self.fresh_store("t5-%d.db" % used)
+                self.cfg["min_free"] = min_free
+                for i in range(0, 21, 2):  # idle for 20 minutes
+                    self.feed(now - (20 - i) * M, five=(used, r5), week=(20, r7))
+                res = self.result(now, min_free=min_free)
+                f = res["five_hour"]
+                self.assertEqual(f["harvestable"], go, res["reasons"])
+                self.assertEqual(res["ok"], go)
+                self.assertEqual(commands.views(self.st, self.cfg, now)[0]["severity"], tone)
+                self.assertEqual(f["target"], 90)
+                self.assertAlmostEqual(f["projected_unused"], 100 - used)  # still out of 100
+                self.assertAlmostEqual(f["spare"], spare)
+                if used >= 90:
+                    self.assertIn("5h window is at or above its 90% target", res["reasons"])
+                if go:
+                    self.assertIn("5h window ends in 40m with ~30% projected unused below its 90% target", res["reasons"])
+                    self.assertAlmostEqual(res["weekly_cost_of_5h_leftover"], 15)  # 30 points at 50 per window
+
+    def test_a_5h_window_that_should_slow_down_is_not_harvested(self):
+        # Review 7 (checks-colors#1): target_5h 80, 75% at 15 %/h with 40
+        # minutes left: projected 85, slow down (yellow ▼), yet check said go
+        # on its ~15% projected unused.
+        self.cfg["target_5h"] = 80
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 40 * M)
+        self.known("s1")
+        for i in range(21):
+            self.feed(now - (20 - i) * M, five=(70 + 0.25 * i, r5), week=(20, int(MON + 7 * D)))
+        res = self.result(now)
+        f = res["five_hour"]
+        self.assertEqual(f["verdict"], "slow_down")
+        self.assertAlmostEqual(f["projected"], 85, delta=0.5)
+        self.assertFalse(f["harvestable"])
+        self.assertFalse(res["ok"])
+        self.assertEqual(commands.views(self.st, self.cfg, now)[0]["severity"], "warn")
+        self.assertEqual(f["spare"], 0)
+        self.assertIn("5h window is spending faster than its 80% target allows (slow down)", res["reasons"])
+
+    def week_in_its_tail(self, levels, five=None):
+        """A week that reads `levels` (oldest first) hour by hour up to now,
+        one day before its reset; `five` adds a 5h reading now."""
+        r7 = int(MON + 7 * D)
+        now = r7 - D
+        self.known("s1")
+        for i, lvl in enumerate(levels):
+            self.feed(now - (len(levels) - 1 - i) * H, week=(lvl, r7))
+        if five is not None:
+            self.feed(now, five=(five[0], int(now + five[1])), week=(levels[-1], r7))
+        return now
+
+    def test_spare_weekly_quota_is_measured_against_its_target(self):
+        # Review 7 (checks-colors#1, integration#0): target_week 90. Idle at
+        # 92 (yellow) with min_free 5, check said go on ~8% to expire; idle at
+        # 85, it refused a 5h leftover as "already tight" and said go on the
+        # week's ~15% in the same JSON, which takes the week to 100.
+        self.cfg["target_week"] = 90
+        cases = ((92, 5, "warn", 0, False), (85, 10, "dim", 5, False), (85, 5, "opportunity", 5, True),
+                 (70, 10, "opportunity", 20, True))
+        for used, min_free, tone, spare, go in cases:
+            with self.subTest(used=used, min_free=min_free):
+                self.fresh_store("tw-%d-%d.db" % (used, min_free))
+                self.cfg["min_free"] = min_free
+                now = self.week_in_its_tail([used] * 26, five=(5, 4 * H))
+                res = self.result(now, min_free=min_free)
+                k = res["seven_day"]
+                self.assertEqual(k["harvestable"], go, res["reasons"])
+                self.assertEqual(res["ok"], go)
+                self.assertEqual(commands.views(self.st, self.cfg, now)[1]["severity"], tone)
+                self.assertAlmostEqual(k["projected_unused"], 100 - used)
+                self.assertAlmostEqual(k["spare"], spare)
+                if used >= 90:
+                    self.assertIn("weekly window is at or above its 90% target", res["reasons"])
+                if go:
+                    self.assertIn("weekly window ends in 1d 00h with ~%d%% projected to expire below its 90%% target"
+                                  % spare, res["reasons"])
+        # The week at 85 with the 5h window in its tail: no go on either.
+        self.fresh_store("tw-tail.db")
+        self.cfg["min_free"] = 10
+        now = self.week_in_its_tail([85] * 26, five=(30, 40 * M))
+        res = self.result(now)
+        self.assertFalse(res["five_hour"]["harvestable"])
+        self.assertFalse(res["seven_day"]["harvestable"])
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("already tight" in r for r in res["reasons"]), res["reasons"])
+
+    def test_a_week_that_should_slow_down_is_not_harvested(self):
+        # Review 7 (integration#0): target_week 85, half a point an hour, 75%
+        # one day before the reset: projected 87, slow down (yellow ▼), yet
+        # check said go on the week's ~13% to expire.
+        self.cfg["target_week"] = 85
+        now = self.week_in_its_tail([75 - 0.5 * h for h in range(30, -1, -1)], five=(5, 4 * H))
+        res = self.result(now)
+        k = res["seven_day"]
+        self.assertEqual(k["verdict"], "slow_down")
+        self.assertAlmostEqual(k["projected"], 87, delta=0.5)
+        self.assertFalse(k["harvestable"])
+        self.assertFalse(res["ok"])
+        self.assertEqual(commands.views(self.st, self.cfg, now)[1]["severity"], "warn")
+        self.assertEqual(k["spare"], 0)
+        self.assertIn("weekly window is spending faster than its 85% target allows (slow down)", res["reasons"])
+
     def test_bad_durations_are_errors(self):
         # Review 6 follow-up: --max-age nan made every age "fresh".
         for bad in ("nan", "inf", "-5m", "nanm"):

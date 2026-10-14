@@ -210,6 +210,13 @@ def spare(points, min_free):
     return points is not None and points > 0 and points >= float(min_free)
 
 
+def below_target(points, target):
+    """Of `points` free out of 100 (now, or projected at the reset), the part
+    below the window's target: max(0, target - level). A target below 100
+    keeps a reserve, and the reserve is never spare. None stays None."""
+    return None if points is None else max(0.0, points - (100.0 - target))
+
+
 def severity(v, cfg):
     """dim (fine), opportunity (spare quota about to expire), warn, alert.
 
@@ -218,8 +225,9 @@ def severity(v, cfg):
     time, or at or above a target below 100 whatever the verdict (idle
     included). At target 100 slow down always runs dry.
     opportunity: in the tail with at least min_free points projected to
-    expire; never while the leftover is unknown (no rate yet), whatever
-    min_free (taken as 0, it passed min_free 0).
+    expire below the target (the leftover above it is the reserve the
+    target keeps); never while the leftover is unknown (no rate yet),
+    whatever min_free (taken as 0, it passed min_free 0).
     """
     if not v.get("present"):
         return "dim"
@@ -228,6 +236,6 @@ def severity(v, cfg):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
-    if v.get("in_tail") and spare(v.get("unused_at_reset"), cfg["min_free"]):
+    if v.get("in_tail") and spare(below_target(v.get("unused_at_reset"), v.get("target", 100.0)), cfg["min_free"]):
         return "opportunity"
     return "dim"

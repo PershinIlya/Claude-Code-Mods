@@ -8,6 +8,7 @@ open): the line still renders from what is already stored.
 import json
 import os
 import sqlite3
+import time
 
 from . import config
 
@@ -77,6 +78,7 @@ class Store:
         d = os.path.dirname(self.path)
         if d:
             os.makedirs(d, exist_ok=True)
+        self.timeout_ms = timeout_ms
         self.db = sqlite3.connect(self.path, timeout=timeout_ms / 1000.0, isolation_level=None)
         self.db.execute("PRAGMA busy_timeout=%d" % int(timeout_ms))
         if self.db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
@@ -84,7 +86,19 @@ class Store:
         self.db.execute("PRAGMA synchronous=NORMAL")
 
     def _migrate(self):
-        self.db.execute("PRAGMA journal_mode=WAL")
+        # Several openers of a new file (every open session re-renders at
+        # install) race to switch it to WAL, and SQLite answers the losers
+        # "locked" at once, without the busy timeout: wait it out here. WAL
+        # is persistent, so the winner's switch holds for everyone.
+        deadline = time.monotonic() + self.timeout_ms / 1000.0
+        while True:
+            try:
+                self.db.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
         self.db.executescript(SCHEMA)
         self.db.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
 

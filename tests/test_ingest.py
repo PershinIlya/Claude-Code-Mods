@@ -1,6 +1,6 @@
 import unittest
 
-from ctempo import ingest
+from ctempo import ingest, pace
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
 from ctempo.store import ANOMALY, FIRST, FRESH, HEARTBEAT
 
@@ -183,6 +183,34 @@ class Record(TempHome):
             self.assertEqual(self.feed(t + 240 + k * 61, five=(12, bogus), sid="b")[FIVE_HOUR], "stale")
         opened = [i for i in self.windows(FIVE_HOUR) if i["closed_at"] is None]
         self.assertEqual([i["reset_ts"] for i in opened], [self.R5])
+
+    def test_bogus_later_reset_is_undone_by_one_reading_from_its_session(self):
+        # Review 7 (integration#1): one bogus later resets_at rolled the window
+        # over at once, but undoing it took two fresh readings with the real
+        # one. A maxed (or idle) session repeats its real reading only as
+        # heartbeats, so the second never came: the line kept the bogus reset
+        # time past the real reset, and `report` counted the window twice.
+        for i in range(10):  # session a works the 00:00-05:00 window up to 100%
+            self.feed(MON + i * 600, five=(10 * (i + 1), self.R5), sid="a")
+        t = MON + 2 * H
+        bogus = self.R5 + int(H)
+        self.assertEqual(self.feed(t, five=(100, bogus), sid="a")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(t + 60, five=(100, self.R5), sid="a")[FIVE_HOUR], "reset_reopen")
+        for k in range(5):  # maxed: the same reading again and again
+            self.feed(t + 120 + k * 61, five=(100, self.R5), sid="a")
+        opened = [i for i in self.windows(FIVE_HOUR) if i["closed_at"] is None]
+        self.assertEqual([(i["reset_ts"], i["max_used"]) for i in opened], [(self.R5, 100)])
+        self.assertEqual(pace.five_hour(self.st, t + 600, self.cfg)["reset_ts"], self.R5)
+        self.feed(self.R5 + 600, five=(3, self.R5 + int(5 * H)), sid="a")  # the next window
+        ended = [i for i in self.windows(FIVE_HOUR) if i["close_reason"] in ("expired", "rollover")]
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in ended], [(self.R5, "expired")])
+        self.assertEqual([i["close_reason"] for i in self.windows(FIVE_HOUR) if i["reset_ts"] == bogus], ["shift"])
+        # Undoing a later resets_at that another session reported still needs
+        # drop_samples: this one may lag a real early reset.
+        r = self.R5 + int(5 * H)
+        self.assertEqual(self.feed(self.R5 + 700, five=(5, r + 600), sid="b")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(self.R5 + 800, five=(6, r), sid="a")[FIVE_HOUR], "anomaly")
+        self.assertEqual(self.feed(self.R5 + 900, five=(7, r), sid="a")[FIVE_HOUR], "reset_reopen")
 
     def test_first_words_of_unknown_sessions_cannot_fake_a_reset(self):
         # ctempo is installed while three sessions are open: every one

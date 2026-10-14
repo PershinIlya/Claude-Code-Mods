@@ -362,13 +362,29 @@ def parse_min_free(value, cfg):
 ASSUMED_EXCHANGE_RATE = 50.0
 
 
+def _held(name, v):
+    """Why a window has nothing to harvest whatever its leftover, or None: at
+    or above a target below 100, or spending faster than its target allows
+    (slow down). The line shows both yellow or red (D-16)."""
+    if pace.over_target(v):
+        return "%s window is at or above its %.0f%% target" % (name, v["target"])
+    if v["verdict"] == "slow_down":
+        return "%s window is spending faster than its %.0f%% target allows (slow down)" % (name, v["target"])
+    return None
+
+
+def _below(target):
+    return " below its %.0f%% target" % target if target < 100.0 else ""
+
+
 def check_result(st, cfg, now, min_free, tail, max_age):
     v5, vw, _ = views(st, cfg, now)
     ppw = weekly.exchange_rate(st, now)[0]
     last = last_reading(st)
     age = (now - last) if last else None
     reasons = []
-    f = {"present": v5.get("present", False)}
+    tgt5, tgtw = config.target(cfg, FIVE_HOUR), config.target(cfg, SEVEN_DAY)
+    f = {"present": v5.get("present", False), "target": tgt5}
     if f["present"]:
         f.update(
             used=v5["used"], resets_at=v5["reset_ts"], seconds_to_reset=v5["reset_ts"] - now,
@@ -378,7 +394,7 @@ def check_result(st, cfg, now, min_free, tail, max_age):
         )
     else:
         f.update(free_now=100.0, in_tail=False, projected_unused=None, verdict="fresh")
-    k = {"present": vw.get("present", False)}
+    k = {"present": vw.get("present", False), "target": tgtw}
     if k["present"]:
         k.update(
             used=vw["used"], resets_at=vw["reset_ts"], seconds_to_reset=vw["reset_ts"] - now,
@@ -388,6 +404,15 @@ def check_result(st, cfg, now, min_free, tail, max_age):
         )
     else:
         k.update(free_now=100.0, in_tail=False, projected_unused=None, verdict="fresh")
+    # What is spare is measured against each window's target, not 100, as on
+    # the line (green): a target below 100 keeps a reserve. `spare` is the
+    # projected unused below the target, and the 5h room now is what is left
+    # below it (projected_unused and free_now stay out of 100).
+    f["spare"] = pace.below_target(f["projected_unused"], tgt5)
+    k["spare"] = pace.below_target(k["projected_unused"], tgtw)
+    room5 = pace.below_target(f["free_now"], tgt5)
+    held5 = _held("5h", v5) if f["present"] else None
+    heldw = _held("weekly", vw) if k["present"] else None
 
     stale = age is None or age > max_age
     if stale:
@@ -396,33 +421,36 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     # null), so neither harvest may count on it, whatever min_free (taken as
     # `None or 0`, it passed min_free 0), and nothing is priced in weekly points.
     rate_unknown = f["present"] and f["projected_unused"] is None
-    leftover_ok = pace.spare(f["projected_unused"], min_free)
+    leftover_ok = pace.spare(f["spare"], min_free)
     week_cost = None
     if f["present"] and not rate_unknown:
-        week_cost = f["projected_unused"] * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
+        week_cost = f["spare"] * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
     assumed = week_cost is not None and ppw is None
     # Without a cost (no 5h window, or no rate yet) this asks whether the
     # week is tight on its own.
-    week_ok = (not k["present"]) or (
-        k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= config.target(cfg, SEVEN_DAY)
-    )
-    f["harvestable"] = bool(f["present"] and f["in_tail"] and leftover_ok and pace.spare(f["free_now"], min_free) and week_ok)
+    week_ok = (not k["present"]) or (k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= tgtw)
+    f["harvestable"] = bool(f["present"] and f["in_tail"] and not held5 and leftover_ok
+                            and pace.spare(room5, min_free) and week_ok)
+    if f["in_tail"] and held5:
+        reasons.append(held5)
     if f["present"] and f["in_tail"] and not week_ok:
         reasons.append("5h leftover would eat into a weekly budget that is already tight" + (
             " (exchange rate not known yet: priced at %.0f weekly points per 5h window)" % ASSUMED_EXCHANGE_RATE if assumed else ""))
     # Harvesting weekly surplus must not starve your own 5h window: it needs
     # room now and at the current burn rate.
-    five_room = pace.spare(f["free_now"], min_free) and (not f["present"] or leftover_ok)
-    week_surplus = k["present"] and k["in_tail"] and pace.spare(k["projected_unused"], min_free)
+    five_room = pace.spare(room5, min_free) and (not f["present"] or leftover_ok)
+    week_surplus = k["present"] and k["in_tail"] and not heldw and pace.spare(k["spare"], min_free)
     k["harvestable"] = bool(week_surplus and five_room)
+    if k["in_tail"] and heldw:
+        reasons.append(heldw)
     if rate_unknown and (f["in_tail"] or week_surplus):
         reasons.append("5h burn rate not known yet")
     elif week_surplus and not five_room:
         reasons.append("weekly surplus is there, but the 5h window has no room at the current burn")
     if f["harvestable"]:
-        reasons.append("5h window ends in %s with ~%.0f%% projected unused" % (dur(f["seconds_to_reset"]), f["projected_unused"]))
+        reasons.append("5h window ends in %s with ~%.0f%% projected unused%s" % (dur(f["seconds_to_reset"]), f["spare"], _below(tgt5)))
     if k["harvestable"]:
-        reasons.append("weekly window ends in %s with ~%.0f%% projected to expire" % (dur(k["seconds_to_reset"]), k["projected_unused"]))
+        reasons.append("weekly window ends in %s with ~%.0f%% projected to expire%s" % (dur(k["seconds_to_reset"]), k["spare"], _below(tgtw)))
     if not (f["harvestable"] or k["harvestable"]) and not reasons:
         reasons.append("no window is in its tail with at least %.0f%% to spare" % min_free)
     ok = (f["harvestable"] or k["harvestable"]) and not stale
