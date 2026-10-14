@@ -28,6 +28,7 @@ MARKETPLACE = "claude-tempo"
 PLUGIN = "ctempo"
 PLUGIN_ID = PLUGIN + "@" + MARKETPLACE
 PLUGIN_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
+OWN_ENTRY = {"enabledPlugins": PLUGIN_ID, "extraKnownMarketplaces": MARKETPLACE}
 LAUNCHER_MARK = "# ctempo launcher"
 
 
@@ -311,6 +312,12 @@ def unmod_commands():
     ]
 
 
+def _user_keys(obj):
+    """Which plugin keys the settings hold of their own: one that holds only
+    ctempo's entry is the plugin CLI's (its commands were run by hand)."""
+    return {k: k in obj and not (isinstance(obj[k], dict) and list(obj[k]) == [OWN_ENTRY[k]]) for k in PLUGIN_KEYS}
+
+
 # -- launcher ------------------------------------------------------------------------
 def launcher_text(python, entry):
     return '#!/bin/sh\n%s\nexec %s -I -S %s "$@"\n' % (LAUNCHER_MARK, shlex.quote(python), shlex.quote(entry))
@@ -527,7 +534,7 @@ def install(args, out=print):
                    "backup_path": backup, "original_sha256": sha(raw), "pristine": pristine}
             rec.update(_statusline_part(obj, spath))
         elif rec is None or not rec.get("installed"):
-            rec = {"settings_path": spath, "had_file": raw is not None, "had_keys": {k: (k in obj) for k in PLUGIN_KEYS}}
+            rec = {"settings_path": spath, "had_file": raw is not None, "had_keys": _user_keys(obj)}
             rec.update(_statusline_part(obj, spath))
             rec.update(backup_path=backup, original_sha256=sha(raw) if raw is not None else None)
         elif not cur_ours:
@@ -539,7 +546,9 @@ def install(args, out=print):
             rec["had_file"] = raw is not None
             if raw is None:
                 rec["had_keys"] = {k: False for k in PLUGIN_KEYS}
-        else:
+        elif rec.get("had_statusLine") is None:  # no usable record: a backup, else --compose
+            rec.update(_statusline_part(obj, spath))
+        if cur_ours:
             rec = _with_compose(rec, current)  # a repin or --replace must not lose an edited --compose
         rec.update(installed=True, written_statusLine=want)
         records[spath] = rec
@@ -576,22 +585,31 @@ def install(args, out=print):
         if use_mod:
             m = state.get("mod") or {}
             # No snapshot yet (or an early mod entry without one), or a manual mod
-            # whose commands never ran: the user file may have changed since.
+            # (the plugin CLI never wrote for it): the user file may have changed since.
             if not m.get("user_settings") or (m.get("manual") and claude_bin() and not _cli_wrote(m)):
                 # The plugin CLI edits the user settings file: remember
                 # which plugin keys it had, so uninstall can tidy up there.
+                # The mod is manual until ctempo sees the plugin CLI write there.
                 us = settings_path(None)
                 try:
                     uobj, uraw, _ = read_settings(us)
                 except ValueError:
                     uobj, uraw = {}, None
                 state["mod"] = {"user_settings": us, "had_file": uraw is not None,
-                                "had_keys": {k: (k in uobj) for k in PLUGIN_KEYS}}
+                                "had_keys": _user_keys(uobj), "manual": True}
                 if uraw is not None and os.path.realpath(us) != os.path.realpath(spath):
                     try:
                         state["mod"].update(backup_path=make_backup(us), original_sha256=sha(uraw))
                     except OSError:
                         pass  # uninstall then tidies by keys instead of bytes
+                _, urec = find_record(state, us)
+                if urec is not None and not urec.get("installed"):
+                    # Kept from before this snapshot, and the plugin CLI has not
+                    # written there since: the snapshot is the newer baseline.
+                    _drop_records(state, os.path.realpath(us))
+            _forget_keys(state["mod"])
+            us = state["mod"]["user_settings"]
+            before = _peek(us)
             if claude_bin():
                 for c in mod_commands(root):
                     code, so, se = run_claude(c)
@@ -599,12 +617,12 @@ def install(args, out=print):
                     out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
                     if code != 0 and "already" not in (so + se).lower():
                         rc = 1
-                state["mod"].pop("manual", None)
             else:
                 # The user may run the commands printed above: record the mod
                 # anyway, so uninstall undoes them.
                 out("  claude not on PATH: mod not installed")
-                state["mod"]["manual"] = True
+            if _peek(us) != before or _mod_listed(us):
+                state["mod"].pop("manual", None)  # the plugin CLI has written there
             state["mod"].update(marketplace=MARKETPLACE, plugin=PLUGIN_ID, root=root)
     finally:
         save_state(state)
@@ -640,6 +658,15 @@ def _done(code, so, se):
         or "not installed" in text
 
 
+def _peek(path):
+    """The file's bytes, or None when there is no such file."""
+    try:
+        with open(os.path.realpath(path), "rb") as f:
+            return f.read()
+    except (OSError, TypeError):
+        return None
+
+
 def _mod_listed(us):
     """Whether the user settings file names the mod or its marketplace (True when it cannot tell)."""
     if not us:
@@ -650,6 +677,17 @@ def _mod_listed(us):
         return True
     ep, km = obj.get("enabledPlugins"), obj.get("extraKnownMarketplaces")
     return (isinstance(ep, dict) and PLUGIN_ID in ep) or (isinstance(km, dict) and MARKETPLACE in km)
+
+
+def _forget_keys(mod):
+    """A plugin key the user file does not hold of its own now (the user deleted
+    or blanked the file since) is not the user's: tidy it away once empty."""
+    try:
+        now = _user_keys(read_settings(mod["user_settings"])[0])
+    except (KeyError, TypeError, OSError, ValueError):
+        return
+    if mod.get("had_keys"):
+        mod["had_keys"] = {k: bool(had) and now.get(k, False) for k, had in mod["had_keys"].items()}
 
 
 def _cli_wrote(mod):
@@ -670,13 +708,13 @@ def _tidy_user_settings(state, mod, skip_real, touched=True):
     backup's bytes when nothing else changed there, else drop empty keys.
     When the plugin CLI never wrote there, only the file's kept record goes."""
     us = mod.get("user_settings")
-    if not us or os.path.realpath(us) == skip_real or not os.path.exists(os.path.realpath(us)):
+    if not us or os.path.realpath(us) == skip_real:
         return None
     key, rec = find_record(state, us)
     if rec is not None and rec.get("installed"):
         return None  # ctempo's statusLine is still there: its own uninstall restores the file
-    if not touched:
-        _drop_records(state, os.path.realpath(us))
+    if not touched or not os.path.exists(os.path.realpath(us)):
+        _drop_records(state, os.path.realpath(us))  # the mod goes, and so does the file's kept record
         return None
     # Its own record (a statusLine uninstalled earlier, kept for this), else
     # the snapshot taken before the plugin CLI first wrote to it.
@@ -724,7 +762,11 @@ def uninstall(args, out=print):
     rec.setdefault("settings_path", spath)
     real = os.path.realpath(spath)
     mod = state.get("mod") or {}
-    if mod.get("had_keys") and os.path.realpath(mod.get("user_settings") or "") == real:
+    us = mod.get("user_settings")
+    if mod.get("manual") and _mod_listed(us):
+        mod.pop("manual")  # the user ran the printed commands: the plugin CLI has written there
+    _forget_keys(mod)
+    if mod.get("had_keys") and os.path.realpath(us or "") == real:
         # This is the file the plugin CLI edits: its record of plugin keys counts.
         hk = dict(rec.get("had_keys") or {})
         for k, had in mod["had_keys"].items():
@@ -749,12 +791,13 @@ def uninstall(args, out=print):
     # With claude not on PATH and no trace of the mod in the user file (the
     # commands never ran or failed, or the user undid them by hand), whatever
     # the record says, there is nothing to undo.
-    never_ran = bool(cmds) and not claude_bin() and not _mod_listed(mod.get("user_settings"))
-    # Install left the commands to the user, who never ran them: the plugin CLI
-    # never wrote to the user file, so it is not ours to tidy.
+    never_ran = bool(cmds) and not claude_bin() and not _mod_listed(us)
+    # The plugin CLI never wrote to the user file (install left the commands to
+    # the user, who never ran them, or they timed out), so it is not ours to
+    # rewrite, unless the commands below write there.
     untouched = bool(cmds and mod.get("manual")) and not _cli_wrote(mod)
     if never_ran:
-        out("  (claude is not on PATH and %s lists no ctempo mod: nothing to undo)" % mod.get("user_settings"))
+        out("  (claude is not on PATH and %s lists no ctempo mod: nothing to undo)" % us)
     cur = obj.get("statusLine") if obj else None
     ours = isinstance(cur, dict) and is_ours(cur.get("command"))
     if obj is not None and not ours:
@@ -770,16 +813,19 @@ def uninstall(args, out=print):
         out("DRY RUN: nothing was written. Re-run with --apply to uninstall.")
         return 0
     mod_ok = True
+    before = _peek(us)
     for c in [] if never_ran else cmds:
         code, so, se = run_claude(c)
         msg = (so.strip() or se.strip()).splitlines()
         out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
         mod_ok = mod_ok and _done(code, so, se)
-    if obj is not None:
-        obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten it
+    untouched = untouched and _peek(us) == before
+    if os.path.exists(real):
+        obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten (or created) it
         cur = obj.get("statusLine")
         ours = isinstance(cur, dict) and is_ours(cur.get("command"))
-        if ours or (cmds and mod_ok):
+        mine = not (untouched and os.path.realpath(us) == real)  # not the user file the plugin CLI never wrote to
+        if ours or (cmds and mod_ok and mine):
             new_obj, new_raw = restore(obj, raw, fmt, rec if (mod_ok or not cmds) else dict(rec, had_keys={}))
             if new_raw is None:
                 os.remove(real)
@@ -845,7 +891,7 @@ def restore(obj, raw, fmt, rec):
         if not had and k in new and new[k] in ({}, []):
             new.pop(k)
     pristine = rec.get("pristine") or {}
-    if (rec.get("had_file") is False or pristine.get("had_file") is False) and not new:
+    if rec.get("had_file") is False and not new:
         return new, None
     # Byte-exact when nothing else changed: hand back the backup's bytes (the
     # file before this install, else the one before the mod).
@@ -862,6 +908,8 @@ def restore(obj, raw, fmt, rec):
                 return new, orig_bytes
         except (OSError, ValueError):
             pass
+    if pristine.get("had_file") is False and not new:  # no file before the mod, nor one to come back to
+        return new, None
     if new == obj and raw is not None:
         return new, raw
     return new, dumps(new, fmt)

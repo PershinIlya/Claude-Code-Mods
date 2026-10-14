@@ -24,12 +24,16 @@ SETTINGS = {
 # Hand-formatted: no serializer writes it back like this, so only a restore
 # from the backup's bytes gives it back.
 IRREGULAR = '{\n  "model": "opus",\n  "env": {"FOO": "b\u00e4r"},\n    "permissions": {"allow": ["Bash(git status)"], "deny": []}\n}\n\n'
+# A user file that lists another plugin: both plugin keys exist before ctempo.
+WITH_PLUGINS = ('{\n  "model": "opus",\n  "enabledPlugins": {"other@mkt": true},\n'
+                '  "extraKnownMarketplaces": {"mkt": {"source": {"source": "github", "repo": "a/b"}}}\n}\n')
 
 
 def plugin_cli(user):
     """A fake `claude plugin` that edits the user settings file the way the real one does."""
     def run(cmd, env=None):
-        obj = json.loads(install.read_text(user)) if os.path.exists(user) else {}
+        text = install.read_text(user) if os.path.exists(user) else ""
+        obj = json.loads(text) if text.strip() else {}  # a blank file is {}
         if cmd[:2] == ["plugin", "install"]:
             obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
         elif cmd[:3] == ["plugin", "marketplace", "add"]:
@@ -46,6 +50,17 @@ def plugin_cli(user):
 
 def claude_missing(cmd, env=None):
     return 127, "", "claude not found on PATH"
+
+
+def claude_hangs(cmd, env=None):
+    return 124, "", "claude %s timed out after 120 s" % " ".join(cmd[:3])
+
+
+def nothing_installed(cmd, env=None):
+    """The plugin CLI with nothing to remove: it says so and writes nothing."""
+    if cmd[:2] == ["plugin", "uninstall"]:
+        return 1, "", 'Plugin "%s" not found in installed plugins' % install.PLUGIN_ID
+    return 1, "", "Marketplace '%s' not found" % install.MARKETPLACE
 
 
 def args(settings, **kw):
@@ -535,12 +550,20 @@ class Install(unittest.TestCase):
     def _steps(self, proj, *steps):
         """Run i(nstall) / u(ninstall) with the mod on the U(ser) file, the P(roject)
         file or * (no --settings); "-nomod" adds --no-mod, "-fail" makes claude exit 127,
-        "-nobin" takes claude off PATH."""
+        "-hang" makes it time out (124), "-none" makes it find nothing to remove, "-nobin"
+        takes claude off PATH. "mod-by-hand" / "unmod-by-hand": the user runs the plugin
+        commands (no exit code is recorded for those)."""
         rcs = []
         for s in steps:
+            if s.endswith("-by-hand"):
+                cli = plugin_cli(self.path)
+                for c in install.mod_commands(install.repo_root()) if s == "mod-by-hand" else install.unmod_commands():
+                    cli(c)
+                continue
             fn = install.install if s[0] == "i" else install.uninstall
             target = {"U": self.path, "P": proj, "*": None}[s[1]]
-            cli = claude_missing if s.endswith(("-fail", "-nobin")) else plugin_cli(self.path)
+            cli = {"-fail": claude_missing, "-nobin": claude_missing, "-hang": claude_hangs,
+                   "-none": nothing_installed}.get(s[2:]) or plugin_cli(self.path)
             exe = None if s.endswith("-nobin") else "/bin/claude"
             with mock.patch.object(install, "claude_bin", lambda: exe), mock.patch.object(install, "run_claude", cli):
                 rc, out = self.run_cmd(fn, args(target, apply=True, no_mod=s.endswith("-nomod")))
@@ -863,6 +886,221 @@ class Install(unittest.TestCase):
                 rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
                 self.assertEqual(rc, 0, out)
                 self.assertEqual(json.loads(self.read()), {})
+
+    # -- sixth review ----------------------------------------------------------------
+    def _assert_clean(self, proj):
+        self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+        state = install.load_state()
+        self.assertEqual(state.get("records"), {})
+        self.assertNotIn("mod", state)
+
+    def test_user_file_the_plugin_cli_rewrote_comes_back_although_its_plugin_keys_existed(self):
+        # Review 6 (F-install#0): the user file lists another plugin, so both plugin keys were
+        # there before ctempo. Once ctempo has seen the mod listed there (a failed uninstall
+        # after the user ran the printed commands, or a repin without claude after the plugin
+        # CLI installed it), the plugin CLI has written there, whatever comes next: after the
+        # user removes the plugin by hand, uninstall still gives the file back byte for byte.
+        proj = self._proj()
+        for steps in (("iP-nobin", "mod-by-hand", "uP-nobin", "unmod-by-hand", "uP-nobin"),
+                      ("iP-nobin", "mod-by-hand", "uP-nobin", "unmod-by-hand", "uP"),
+                      ("iP", "iP-nobin", "unmod-by-hand", "uP-nobin"),
+                      ("iP", "iP-nobin", "unmod-by-hand", "uP"),
+                      ("iP", "iP-nobin", "unmod-by-hand", "iP", "uP")):
+            with self.subTest(steps=steps):
+                self._reset()
+                with self._user_file(WITH_PLUGINS):
+                    rcs = self._steps(proj, *steps)
+                self.assertEqual(rcs[-1], 0)
+                self.assertEqual(self._user_text(), WITH_PLUGINS)
+                self._assert_clean(proj)
+
+    def test_user_file_the_plugin_cli_never_wrote_to_is_never_rewritten(self):
+        # Review 6 (F-install#1): the plugin CLI never wrote to the user file (claude was off
+        # PATH, or the install commands timed out), and the user reformatted it since (or
+        # created it). No uninstall rewrites it: not one that reaches it as its own target
+        # (after a --no-mod uninstall, or a rerun after claude hung), not one that finds
+        # claude back with nothing to remove, not one after install commands that timed out.
+        proj = self._proj()
+        reformatted = json.dumps(json.loads(IRREGULAR), indent=4, ensure_ascii=False)  # same JSON
+        for before, now, first, last in ((IRREGULAR, reformatted, ("iP-nobin", "uP-nomod"), ("u*-nobin",)),
+                                         (IRREGULAR, reformatted, ("iP-nobin", "uP-nomod"), ("u*-none",)),
+                                         (IRREGULAR, reformatted, ("iP-nobin",), ("uP-hang", "u*-nobin")),
+                                         (IRREGULAR, reformatted, ("iP-nobin",), ("uP-hang", "u*-none")),
+                                         (IRREGULAR, reformatted, ("iP-hang",), ("uP-nobin",)),
+                                         (IRREGULAR, reformatted, ("iP-hang",), ("uP-none",)),
+                                         (None, "{}", ("iP-nobin", "uP-nomod"), ("u*-nobin",))):
+            with self.subTest(before=before is not None, steps=first + ("edit",) + last):
+                self._reset()
+                with self._user_file(before):
+                    self._steps(proj, *first)
+                    with open(self.path, "w", encoding="utf-8") as f:
+                        f.write(now)
+                    rcs = self._steps(proj, *last)
+                self.assertEqual(rcs[-1], 0)
+                self.assertEqual(self._user_text(), now)
+                self._assert_clean(proj)
+
+    def test_full_uninstall_without_a_user_file_leaves_no_record_of_it(self):
+        # Review 6 (F-install#2): no user file, ctempo installed into it and into a project
+        # file, then everything uninstalled. The user file's kept record must go with the mod,
+        # or a later install cycle takes it as that file's baseline from before the mod and
+        # loses the byte-for-byte restore. Install also drops such a record left by older code.
+        proj = self._proj()
+        for first in (("iP-nobin", "iU-nobin", "uU-nobin", "uP-nobin"), ("iP-hang", "uU-nobin", "uP-nobin"), None):
+            with self.subTest(first=first):
+                self._reset()
+                with self._user_file(None):
+                    if first is None:  # what the code before this fix left behind
+                        install.save_state({"records": {self.path: {
+                            "settings_path": self.path, "had_file": False, "installed": False,
+                            "had_keys": {k: False for k in install.PLUGIN_KEYS}}}})
+                    else:
+                        rcs = self._steps(proj, *first)
+                        self.assertEqual(rcs[-1], 0)
+                        self._assert_clean(proj)
+                    with open(self.path, "w", encoding="utf-8") as f:
+                        f.write(IRREGULAR)
+                    rcs = self._steps(proj, "iP", "iU", "uU", "uP")
+                self.assertEqual(rcs, [0, 0, 0, 0])
+                self.assertEqual(self._user_text(), IRREGULAR)
+                self._assert_clean(proj)
+
+    def test_fresh_user_file_snapshot_replaces_its_kept_record(self):
+        # Review 6 (F-install#3): ctempo went into the user file and out again while a manual
+        # mod stayed for the project file, so the user file has a kept record. The user then
+        # edited (or created) it, and an install with claude on PATH runs the plugin commands
+        # for the first time. The snapshot taken then is the newer baseline from before the
+        # plugin CLI, so the file comes back as it was right before them.
+        proj = self._proj()
+        edits = (("key", IRREGULAR, lambda t: t.replace("{\n", '{\n  "sandbox": {"enabled": true},\n', 1)),
+                 ("reformat", IRREGULAR, lambda t: json.dumps(json.loads(t), indent=4, ensure_ascii=False)),
+                 ("create {}", None, lambda t: "{}\n"),
+                 ("create", None, lambda t: IRREGULAR))
+        for name, before, edit in edits:
+            for last in ("uP", "u*"):
+                with self.subTest(edit=name, last=last):
+                    self._reset()
+                    with self._user_file(before):
+                        self._steps(proj, "iU-nobin", "iP-nobin", "uU-nobin")
+                        edited = edit(self._user_text())
+                        with open(self.path, "w", encoding="utf-8") as f:
+                            f.write(edited)
+                        rcs = self._steps(proj, "iP", last)
+                    self.assertEqual(rcs, [0, 0])
+                    self.assertEqual(self._user_text(), edited)
+                    self._assert_clean(proj)
+
+    def test_command_put_in_compose_survives_replace_after_the_record_is_lost(self):
+        # Review 6 (F-install#4): install.json is gone, and the user put or changed a command in
+        # ctempo's --compose. `install --replace` drops it from the statusLine, so the record it
+        # rebuilds must hold it ("kept in the backup and in install.json"), whether the newest
+        # backup from before ctempo shows no statusLine, another one, or there is no backup left.
+        newer = "npx -y ccstatusline@latest"
+        theirs = {"type": "command", "command": "~/old-line.sh"}
+        for start, backups in ((SETTINGS, True), (dict(SETTINGS, statusLine=theirs), True), (SETTINGS, False)):
+            with self.subTest(statusLine=start.get("statusLine"), backups=backups):
+                self._reset()
+                self.write(start)
+                self.run_cmd(install.install, args(self.path, apply=True))
+                shutil.rmtree(self.home)  # install.json gone
+                if not backups:  # and the backups: a repin rebuilds a record that knows nothing
+                    for n in os.listdir(self.dir):
+                        if ".ctempo-backup-" in n:
+                            os.remove(os.path.join(self.dir, n))
+                    self.run_cmd(install.install, args(self.path, apply=True))
+                obj = json.loads(self.read())
+                obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
+                obj["statusLine"]["padding"] = 0
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                rc, out = self.run_cmd(install.install, args(self.path, apply=True, replace=True))
+                self.assertIn("REPLACE", out)
+                self.assertIsNone(install.compose_of(json.loads(self.read())["statusLine"]["command"]))
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                after = json.loads(self.read())
+                self.assertEqual((after.pop("statusLine", None) or {}).get("command"), newer)
+                self.assertEqual(after, SETTINGS)
+
+    def test_user_file_created_after_the_mod_is_restored_not_deleted(self):
+        # Review 6 (F-install#5): there was no user file when the mod went in; the user then
+        # created one ('{}', or blank), and ctempo went into it and out again. The file right
+        # before that install is its first baseline, so it comes back; the snapshot from before
+        # the mod (no file) is only a fallback and must not get it deleted.
+        proj = self._proj()
+        for created in ("{}\n", "{}", ""):
+            for steps in (("iU-nobin", "uU-nobin"), ("iU-nobin", "uU-nobin", "uP-nobin"),
+                          ("iU", "uU", "uP"), ("iU", "uP", "uU")):
+                with self.subTest(created=created, steps=steps):
+                    self._reset()
+                    with self._user_file(None):
+                        self._steps(proj, "iP-nobin")
+                        with open(self.path, "w", encoding="utf-8") as f:
+                            f.write(created)
+                        rcs = self._steps(proj, *steps)
+                    self.assertEqual(rcs, [0] * len(steps))
+                    self.assertEqual(self._user_text(), created)
+
+    def test_user_file_the_plugin_cli_writes_during_uninstall_comes_back(self):
+        # Install fuzzer: the plugin CLI never wrote for a manual mod, but the reverse commands
+        # at uninstall rewrite the user file (or create it) although there is nothing to
+        # remove. Then it is the plugin CLI's doing, so the file comes back as it was (or goes).
+        proj = self._proj()
+        for before, steps in ((IRREGULAR, ("iP-nobin", "uP")), (IRREGULAR.replace("\n", "\r\n"), ("iP-nobin", "uP")),
+                              (None, ("iP-nobin", "uP")), (None, ("iU-hang", "uU-hang", "u*"))):
+            with self.subTest(before=before, steps=steps):
+                self._reset()
+                with self._user_file(before):
+                    rcs = self._steps(proj, *steps)
+                self.assertEqual(rcs[-1], 0)
+                if before is None:
+                    self.assertFalse(os.path.exists(self.path))
+                else:
+                    with open(self.path, "rb") as f:
+                        self.assertEqual(f.read(), before.encode("utf-8"))
+                self._assert_clean(proj)
+
+    def test_plugin_keys_gone_from_the_user_file_are_not_left_behind_empty(self):
+        # Install fuzzer: the user file listed another plugin, so both plugin keys were there at
+        # the snapshot. The user then blanked or deleted the file, and the plugin CLI wrote its
+        # keys again (a later install, or the printed commands run by hand): they are not the
+        # user's any more, so uninstall must not leave them behind as empty objects.
+        proj = self._proj()
+        for how in ("blank", "delete"):
+            for steps in (("iP", "edit", "iP", "uP"), ("iU", "edit", "iU", "uU"),
+                          ("iP-nobin", "edit", "mod-by-hand", "uP"),
+                          ("iP-nobin", "edit", "mod-by-hand", "iP-nobin", "unmod-by-hand", "uP")):
+                with self.subTest(how=how, steps=steps):
+                    self._reset()
+                    with self._user_file(WITH_PLUGINS):
+                        i = steps.index("edit")
+                        self._steps(proj, *steps[:i])
+                        if how == "blank":
+                            with open(self.path, "w") as f:
+                                f.write("")
+                        else:
+                            os.remove(self.path)
+                        rcs = self._steps(proj, *steps[i + 1:])
+                    self.assertEqual(rcs[-1], 0)
+                    text = self._user_text()
+                    self.assertEqual(json.loads(text) if text and text.strip() else {}, {})
+                    state = install.load_state()
+                    self.assertEqual(state.get("records"), {})
+                    self.assertNotIn("mod", state)
+
+    def test_plugin_keys_that_hold_only_ctempo_are_not_the_users(self):
+        # Install fuzzer: the user ran the plugin commands by hand before ctempo's snapshot of
+        # the user file, so its plugin keys hold nothing but ctempo's entries. They are the
+        # plugin CLI's, so uninstall removes them once empty.
+        proj = self._proj()
+        for steps in (("mod-by-hand", "iP", "uP"), ("mod-by-hand", "iU", "uU"), ("mod-by-hand", "iP-nobin", "uP")):
+            with self.subTest(steps=steps):
+                self._reset()
+                with self._user_file(IRREGULAR):
+                    rcs = self._steps(proj, *steps)
+                self.assertEqual(rcs[-1], 0)
+                self.assertEqual(json.loads(self._user_text()), json.loads(IRREGULAR))
+                self._assert_clean(proj)
 
     def test_probe_and_command_quoting(self):
         ok, ver, sq, ms, note = install.probe(sys.executable)
