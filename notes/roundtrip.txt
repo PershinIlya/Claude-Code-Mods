@@ -1,0 +1,86 @@
+### install --apply
+Interpreter candidates (python -I -S startup, best of 3):
+  * /usr/bin/python3                         Python 3.13, sqlite 3.45.1, 23 ms
+
+Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json
+  statusLine: compose: run your existing statusLine command and append ctempo's segment
+--- /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json (now)
++++ /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json (after)
+@@ -21,8 +21,9 @@
+   },
+   "statusLine": {
+     "type": "command",
+-    "command": "~/.claude/statusline.sh",
+-    "padding": 0
++    "command": "/usr/bin/python3 -I -S /home/user/Claude-Code-Mods/bin/ctempo statusline --compose '~/.claude/statusline.sh'",
++    "padding": 0,
++    "refreshInterval": 60
+   },
+   "env": {
+     "PYTHONDONTWRITEBYTECODE": "1"
+
+Mod (Desktop Code tab band), via the local marketplace in /home/user/Claude-Code-Mods:
+  claude plugin marketplace add /home/user/Claude-Code-Mods
+  claude plugin install ctempo@claude-tempo --scope user
+Runtime info for the mod: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/ct/runtime.json
+Wrote /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json (backup: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json.ctempo-backup-20261014-091330)
+  claude plugin marketplace add -> exit 0 Adding marketplace…√ Successfully added marketplace: claude-tempo (declared in user settings)
+  claude plugin install ctempo@claude-tempo -> exit 0 Installing plugin "ctempo@claude-tempo"...√ Successfully installed plugin: ctempo@claude-tempo (scope: user)
+Done. Restart Claude Code or run /reload-plugins to load the mod; the statusLine applies at once.
+
+### settings after install
+{
+  "env": {
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Read(~/Projects/**)"
+    ],
+    "deny": []
+  },
+  "model": "opusplan",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "afplay /System/Library/Sounds/Glass.aiff"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/usr/bin/python3 -I -S /home/user/Claude-Code-Mods/bin/ctempo statusline --compose '~/.claude/statusline.sh'",
+    "padding": 0,
+    "refreshInterval": 60
+  },
+  "extraKnownMarketplaces": {
+    "claude-tempo": {
+      "source": {
+        "source": "directory",
+        "path": "/home/user/Claude-Code-Mods"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "ctempo@claude-tempo": true
+  }
+}
+
+### uninstall --apply
+Settings: /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json
+  claude plugin uninstall ctempo@claude-tempo --scope user
+  claude plugin marketplace remove claude-tempo
+  claude plugin uninstall ctempo@claude-tempo -> exit 0 √ Successfully uninstalled plugin: ctempo (scope: user)
+  claude plugin marketplace remove -> exit 0 √ Successfully removed marketplace: claude-tempo
+Restored statusLine in /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json
+Uninstalled. Your data stays in /tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/ct (delete it yourself if you want).
+
+### compare
+settings.json == backup (/tmp/claude-0/-home-user-Claude-Code-Mods/8cc0d18f-b174-563b-a0d1-b8661eaa2ab4/scratchpad/rt.xUA2/.claude/settings.json.ctempo-backup-20261014-091330): byte-identical
+settings.json == original: byte-identical
