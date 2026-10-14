@@ -3,9 +3,11 @@
 Dry run by default; --apply writes. Edits exactly one key of settings.json
 (statusLine), keeps every other key and hook, keeps the file's indentation
 and trailing newline, backs it up with a timestamp before writing, and
-records what it did in ~/.claude-tempo/install.json so uninstall can put the
-original back. When the file has not changed since install apart from what
-install and the plugin CLI did, uninstall restores it byte for byte.
+records what it did in ~/.claude-tempo/install.json (one record per settings
+file) so uninstall can put the original back. The record is saved before the
+settings file is written. When the file has not changed since install apart
+from what install and the plugin CLI did, uninstall restores it byte for
+byte (line endings and mode included).
 """
 
 import difflib
@@ -15,6 +17,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -37,7 +40,8 @@ def entry_path():
 
 
 def settings_path(explicit=None):
-    return explicit or os.path.join(config.claude_dir(), "settings.json")
+    """Absolute path (a relative one would mean another file from another directory)."""
+    return os.path.abspath(os.path.expanduser(explicit or os.path.join(config.claude_dir(), "settings.json")))
 
 
 def state_path():
@@ -46,9 +50,10 @@ def state_path():
 
 # -- JSON with the file's own formatting ------------------------------------------
 class Fmt:
-    def __init__(self, indent=2, newline=False):
+    def __init__(self, indent=2, newline=False, eol="\n"):
         self.indent = indent
         self.newline = newline
+        self.eol = eol
 
 
 def detect_format(text):
@@ -57,23 +62,30 @@ def detect_format(text):
     if m:
         ws = m.group(1)
         indent = "\t" if ws.startswith("\t") else len(ws)
-    return Fmt(indent, text.endswith("\n"))
+    eol = "\r\n" if "\r\n" in text else "\n"
+    return Fmt(indent, text.endswith("\n"), eol)
 
 
 def dumps(obj, fmt):
-    s = json.dumps(obj, indent=fmt.indent, ensure_ascii=False)
-    return s + ("\n" if fmt.newline else "")
+    # JSON strings cannot hold raw newlines, so only structural ones change.
+    s = json.dumps(obj, indent=fmt.indent, ensure_ascii=False).replace("\n", fmt.eol)
+    return s + (fmt.eol if fmt.newline else "")
 
 
 def read_settings(path):
-    """(object, raw text or None, Fmt). Raises ValueError on a file we must not touch."""
+    """(object, raw text or None, Fmt). Raises ValueError on a file we must not touch.
+
+    Read with newline="" so CRLF files keep their bytes."""
     real = os.path.realpath(path)
     if os.path.islink(path) and not os.path.exists(real):
         raise ValueError("%s is a dangling symlink; refusing to touch it" % path)
     if not os.path.exists(real):
         return {}, None, Fmt(2, True)
-    with open(real, encoding="utf-8") as f:
-        raw = f.read()
+    try:
+        with open(real, encoding="utf-8", newline="") as f:
+            raw = f.read()
+    except UnicodeDecodeError:
+        raise ValueError("%s is not UTF-8; refusing to touch it" % path)
     if not raw.strip():
         return {}, raw, Fmt(2, True)
     try:
@@ -86,19 +98,55 @@ def read_settings(path):
 
 
 def read_text(path):
-    with open(path, encoding="utf-8", errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
         return f.read()
 
 
-def atomic_write(path, text):
+def _umask():
+    m = os.umask(0)
+    os.umask(m)
+    return m
+
+
+def atomic_write(path, data):
+    """Write str or bytes via a private tmp file and rename; keeps the mode."""
     real = os.path.realpath(path)
     os.makedirs(os.path.dirname(real) or ".", exist_ok=True)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    mode = stat.S_IMODE(os.stat(real).st_mode) if os.path.exists(real) else (0o666 & ~_umask())
     tmp = "%s.ctempo.%d.tmp" % (real, os.getpid())
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    if os.path.exists(real):
-        shutil.copymode(real, tmp)
-    os.replace(tmp, real)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def make_backup(path):
+    """Copy the file's bytes to a new, never-overwritten timestamped backup."""
+    real = os.path.realpath(path)
+    base = "%s.ctempo-backup-%s" % (real, time.strftime("%Y%m%d-%H%M%S"))
+    with open(real, "rb") as f:
+        data = f.read()
+    for i in range(1000):
+        name = base if i == 0 else "%s-%d" % (base, i)
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        shutil.copymode(real, name)
+        return name
+    raise OSError("could not create a unique backup next to %s" % real)
 
 
 def sha(text):
@@ -207,12 +255,15 @@ def compose_of(cmd):
 def plan_statusline(current, python, entry, replace=False, refresh=60):
     """New statusLine value and a note, or (None, note) when nothing changes."""
     if isinstance(current, dict) and is_ours(current.get("command")):
-        compose = compose_of(current["command"])
+        had = compose_of(current["command"])
+        compose = None if replace else had
         want = dict(current)
         want["command"] = our_command(python, entry, compose)
         want.setdefault("refreshInterval", refresh)
         if want == current:
             return None, "statusLine already runs ctempo"
+        if replace and had:
+            return want, "REPLACE: drop the composed statusLine command (kept in the backup and in install.json)"
         return want, "update ctempo's statusLine command (interpreter or path changed)"
     if isinstance(current, dict) and isinstance(current.get("command"), str) and current["command"].strip():
         if replace:
@@ -237,7 +288,12 @@ def run_claude(args, env=None):
     exe = claude_bin()
     if not exe:
         return 127, "", "claude not found on PATH"
-    r = subprocess.run([exe] + args, capture_output=True, text=True, env=env, timeout=120)
+    try:
+        r = subprocess.run([exe] + args, capture_output=True, text=True, env=env, timeout=120)
+    except subprocess.TimeoutExpired:
+        return 124, "", "claude %s timed out after 120 s" % " ".join(args[:3])
+    except OSError as e:
+        return 127, "", "could not run claude: %s" % e
     return r.returncode, r.stdout, r.stderr
 
 
@@ -262,6 +318,80 @@ def launcher_text(python, entry):
 
 def runtime_info(python, entry):
     return {"python": python, "entry": entry, "repo": repo_root(), "version": __version__, "written_at": time.time()}
+
+
+# -- install records ---------------------------------------------------------------
+STATE_VERSION = 2
+
+
+def load_state():
+    """{"version": 2, "records": {abs settings path: record}, ...globals}."""
+    try:
+        with open(state_path(), encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = None
+    if not isinstance(state, dict):
+        state = {}
+    if "records" not in state:  # version 1: one record at the top level
+        rec = {k: state[k] for k in ("settings_path", "had_file", "backup_path", "original_sha256", "had_statusLine",
+                                     "original_statusLine", "had_keys", "installed", "written_statusLine") if k in state}
+        path = rec.get("settings_path")
+        state = {k: v for k, v in state.items() if k not in rec}
+        state["records"] = {path: rec} if isinstance(path, str) and os.path.isabs(path) else {}
+    state["version"] = STATE_VERSION
+    return state
+
+
+def save_state(state):
+    os.makedirs(config.home(), exist_ok=True)
+    tmp = state_path() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, state_path())
+
+
+def installed_records(state):
+    return {p: r for p, r in state.get("records", {}).items() if r.get("installed")}
+
+
+def _original_from_backups(spath):
+    """The statusLine in the newest backup that predates ctempo, if any."""
+    real = os.path.realpath(spath)
+    folder = os.path.dirname(real) or "."
+    prefix = os.path.basename(real) + ".ctempo-backup-"
+    try:
+        names = sorted((n for n in os.listdir(folder) if n.startswith(prefix)), reverse=True)
+    except OSError:
+        return None
+    for n in names:
+        try:
+            obj = json.loads(read_text(os.path.join(folder, n)))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        sl = obj.get("statusLine")
+        if not (isinstance(sl, dict) and is_ours(sl.get("command"))):
+            return ("statusLine" in obj, sl)
+    return None
+
+
+def _statusline_part(obj, spath):
+    """What install should remember as the original statusLine."""
+    current = obj.get("statusLine")
+    if isinstance(current, dict) and is_ours(current.get("command")):
+        # Already ctempo's (install record lost, or repinned): never record
+        # ctempo itself as the original. Prefer a pre-ctempo backup, else
+        # what --compose says.
+        found = _original_from_backups(spath)
+        if found is not None:
+            return {"had_statusLine": found[0], "original_statusLine": found[1]}
+        comp = compose_of(current["command"])
+        if comp:
+            return {"had_statusLine": True, "original_statusLine": dict(current, command=comp)}
+        return {"had_statusLine": None, "original_statusLine": None}
+    return {"had_statusLine": "statusLine" in obj, "original_statusLine": current}
 
 
 # -- install / uninstall -------------------------------------------------------------
@@ -309,7 +439,7 @@ def install(args, out=print):
             out("  claude " + " ".join(shlex.quote(x) for x in c))
         if not claude_bin():
             out("  (claude is not on PATH: run these yourself later)")
-    bin_dir = os.path.expanduser(args.bin_dir) if args.bin_dir else None
+    bin_dir = os.path.abspath(os.path.expanduser(args.bin_dir)) if args.bin_dir else None
     if bin_dir:
         out("Launcher: %s/ctempo -> %s -I -S %s" % (bin_dir, python, entry))
     out("Runtime info for the mod: %s" % config.runtime_path())
@@ -320,57 +450,68 @@ def install(args, out=print):
         out("DRY RUN: nothing was written. Re-run with --apply to install.")
         return 0
 
-    # Apply.
-    state = load_state() or {}
+    # Apply. The record goes to disk before the settings file changes, so a
+    # crash at any later point still leaves uninstall what it needs.
+    state = load_state()
+    records = state.setdefault("records", {})
+    rec = records.get(spath)
+    cur_ours = isinstance(current, dict) and is_ours(current.get("command"))
     if want is not None:
-        backup = None
-        if raw is not None:
-            backup = "%s.ctempo-backup-%s" % (os.path.realpath(spath), time.strftime("%Y%m%d-%H%M%S"))
-            shutil.copy2(os.path.realpath(spath), backup)
-        if not state.get("installed") or state.get("settings_path") != spath:
-            state = {
-                "installed": True,
-                "settings_path": spath,
-                "had_file": raw is not None,
-                "backup_path": backup,
-                "original_sha256": sha(raw) if raw is not None else None,
-                "had_statusLine": "statusLine" in obj,
-                "original_statusLine": obj.get("statusLine"),
-                "had_keys": {k: (k in obj) for k in PLUGIN_KEYS},
-            }
+        backup = make_backup(spath) if raw is not None else None
+        if rec is None or not rec.get("installed"):
+            rec = {"settings_path": spath, "had_file": raw is not None, "had_keys": {k: (k in obj) for k in PLUGIN_KEYS}}
+            rec.update(_statusline_part(obj, spath))
+            rec.update(backup_path=backup, original_sha256=sha(raw) if raw is not None else None)
+        elif not cur_ours:
+            # The statusLine changed since the last install: that is now the
+            # original, and the backup just taken is the file to come back to.
+            rec.update(_statusline_part(obj, spath))
+            rec.update(backup_path=backup, original_sha256=sha(raw) if raw is not None else None)
+        rec.update(installed=True, written_statusLine=want)
+        records[spath] = rec
+        state.update(python=python, entry=entry)
+        save_state(state)
         atomic_write(spath, new_raw)
         out("Wrote %s%s" % (spath, (" (backup: %s)" % backup) if backup else ""))
-    state.update(
-        {"installed": True, "settings_path": spath, "python": python, "entry": entry, "written_statusLine": new_obj.get("statusLine")}
-    )
-    os.makedirs(config.home(), exist_ok=True)
-    with open(config.runtime_path(), "w", encoding="utf-8") as f:
-        json.dump(runtime_info(python, entry), f, indent=2)
-    config.write_defaults()
-    if bin_dir:
-        os.makedirs(bin_dir, exist_ok=True)
-        lp = os.path.join(bin_dir, "ctempo")
-        if not os.path.exists(lp) or LAUNCHER_MARK in read_text(lp):
-            with open(lp, "w", encoding="utf-8") as f:
-                f.write(launcher_text(python, entry))
-            os.chmod(lp, 0o755)
-            state["launcher"] = lp
-            out("Wrote launcher %s" % lp)
-        else:
-            out("Skipped launcher: %s exists and is not ours" % lp)
+    elif rec is None and cur_ours:
+        rec = {"settings_path": spath, "had_file": True, "had_keys": {}, "installed": True}
+        rec.update(_statusline_part(obj, spath))
+        records[spath] = rec
     rc = 0
-    if use_mod:
-        if claude_bin():
-            for c in mod_commands(root):
-                code, so, se = run_claude(c)
-                msg = (so.strip() or se.strip()).splitlines()
-                out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
-                if code != 0 and "already" not in (so + se).lower():
-                    rc = 1
-            state["mod"] = {"marketplace": MARKETPLACE, "plugin": PLUGIN_ID, "root": root}
-        else:
-            out("  claude not on PATH: mod not installed")
-    save_state(state)
+    try:
+        state.update(python=python, entry=entry)
+        os.makedirs(config.home(), exist_ok=True)
+        with open(config.runtime_path(), "w", encoding="utf-8") as f:
+            json.dump(runtime_info(python, entry), f, indent=2)
+        config.write_defaults()
+        if bin_dir:
+            lp = os.path.join(bin_dir, "ctempo")
+            try:
+                os.makedirs(bin_dir, exist_ok=True)
+                if not os.path.exists(lp) or LAUNCHER_MARK in read_text(lp):
+                    with open(lp, "w", encoding="utf-8") as f:
+                        f.write(launcher_text(python, entry))
+                    os.chmod(lp, 0o755)
+                    state["launcher"] = lp
+                    out("Wrote launcher %s" % lp)
+                else:
+                    out("Skipped launcher: %s exists and is not ours" % lp)
+            except OSError as e:
+                out("Skipped launcher: %s" % e)
+                rc = 1
+        if use_mod:
+            if claude_bin():
+                for c in mod_commands(root):
+                    code, so, se = run_claude(c)
+                    msg = (so.strip() or se.strip()).splitlines()
+                    out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
+                    if code != 0 and "already" not in (so + se).lower():
+                        rc = 1
+                state["mod"] = {"marketplace": MARKETPLACE, "plugin": PLUGIN_ID, "root": root}
+            else:
+                out("  claude not on PATH: mod not installed")
+    finally:
+        save_state(state)
     if not args.no_bootstrap:
         try:
             from . import transcripts
@@ -382,7 +523,8 @@ def install(args, out=print):
             finally:
                 st.close()
             if prior is not None:
-                out("Profile prior from transcripts: %d messages over %s days (no content kept)." % (stats["messages"], meta["days"]))
+                out("Profile prior from transcripts: %d messages over %s days, trusted %.0f%% (no content kept)." % (
+                    stats["messages"], meta["days"], 100 * meta["trust"]))
             else:
                 out("No transcripts in the last %s days: the profile starts uniform." % config.load()["profile"]["bootstrap_days"])
         except Exception as e:  # bootstrap is a bonus; never fail the install on it
@@ -393,26 +535,41 @@ def install(args, out=print):
 
 def uninstall(args, out=print):
     state = load_state()
-    spath = settings_path(args.settings or (state or {}).get("settings_path"))
-    try:
-        obj, raw, fmt = read_settings(spath)
-    except ValueError as e:
-        out("error: %s" % e)
-        return 1
-    if not state:
-        state = {}
-    mod = state.get("mod")
-    cmds = unmod_commands() if (mod and not args.no_mod) else []
-    out("Settings: %s" % spath)
+    records = state.setdefault("records", {})
+    if args.settings:
+        spath = settings_path(args.settings)
+    else:
+        live = installed_records(state)
+        if len(live) > 1:
+            out("error: ctempo is installed in several settings files; pass --settings one of:")
+            for p in sorted(live):
+                out("  " + p)
+            return 1
+        spath = next(iter(live)) if live else settings_path(None)
+    rec = records.get(spath) or {}
+    if not os.path.exists(os.path.realpath(spath)):
+        out("Settings: %s does not exist; nothing to restore there." % spath)
+        obj, raw, fmt = None, None, None
+    else:
+        try:
+            obj, raw, fmt = read_settings(spath)
+        except ValueError as e:
+            out("error: %s" % e)
+            return 1
+        out("Settings: %s" % spath)
+    others = [p for p in installed_records(state) if p != spath]
+    cmds = unmod_commands() if (state.get("mod") and not args.no_mod and not others) else []
     for c in cmds:
         out("  claude " + " ".join(c))
+    cur = obj.get("statusLine") if obj else None
+    ours = isinstance(cur, dict) and is_ours(cur.get("command"))
+    if obj is not None and not ours:
+        out("  statusLine is not ctempo's; it is left alone")
     if not args.apply:
-        new_obj, new_raw = restore(obj, raw, fmt, state)
-        cur = obj.get("statusLine")
-        if not is_ours((cur or {}).get("command") if isinstance(cur, dict) else None):
-            out("  statusLine is not ctempo's; it will be left alone")
-        d = diff(raw, new_raw, spath) if new_raw is not None else "  (file would be removed: it did not exist before install)\n"
-        out(d if d else "  (no change to statusLine)")
+        if obj is not None and ours:
+            new_obj, new_raw = restore(obj, raw, fmt, rec)
+            d = diff(raw, new_raw, spath) if new_raw is not None else "  (file would be removed: it did not exist before install)\n"
+            out(d if d else "  (no change)")
         if cmds:
             out("  (the plugin commands also remove enabledPlugins / extraKnownMarketplaces entries)")
         out("DRY RUN: nothing was written. Re-run with --apply to uninstall.")
@@ -421,72 +578,65 @@ def uninstall(args, out=print):
         code, so, se = run_claude(c)
         msg = (so.strip() or se.strip()).splitlines()
         out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
-    obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten it
-    new_obj, new_raw = restore(obj, raw, fmt, state)
-    if new_raw is None:
-        if raw is not None and os.path.exists(spath):
-            os.remove(os.path.realpath(spath))
-            out("Removed %s (it did not exist before install)" % spath)
-    elif new_raw != raw:
-        atomic_write(spath, new_raw)
-        out("Restored statusLine in %s" % spath)
-    lp = state.get("launcher")
-    if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
-        os.remove(lp)
-        out("Removed launcher %s" % lp)
-    if os.path.exists(config.runtime_path()):
-        os.remove(config.runtime_path())
-    state["installed"] = False
+    if obj is not None:
+        obj, raw, fmt = read_settings(spath)  # the plugin CLI may have rewritten it
+        cur = obj.get("statusLine")
+        ours = isinstance(cur, dict) and is_ours(cur.get("command"))
+        if ours or cmds:
+            new_obj, new_raw = restore(obj, raw, fmt, rec)
+            if new_raw is None:
+                os.remove(os.path.realpath(spath))
+                out("Removed %s (it did not exist before install)" % spath)
+            elif new_raw != raw:
+                atomic_write(spath, new_raw)
+                out("Restored %s" % spath)
+    records.pop(spath, None)
+    if not installed_records(state):
+        lp = state.pop("launcher", None)
+        if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
+            os.remove(lp)
+            out("Removed launcher %s" % lp)
+        if os.path.exists(config.runtime_path()):
+            os.remove(config.runtime_path())
+        if cmds:
+            state.pop("mod", None)
     save_state(state)
     out("Uninstalled. Your data stays in %s (delete it yourself if you want)." % config.home())
     return 0
 
 
-def restore(obj, raw, fmt, state):
-    """Settings with ctempo's statusLine undone. (obj, text) or (obj, None) to delete the file."""
+def restore(obj, raw, fmt, rec):
+    """Settings with ctempo's statusLine undone: (obj, text or bytes), or (obj, None) to delete the file."""
     new = dict(obj)
     cur = obj.get("statusLine")
     if isinstance(cur, dict) and is_ours(cur.get("command")):
-        if state.get("had_statusLine") is True:
-            new["statusLine"] = state.get("original_statusLine")
-        elif state.get("had_statusLine") is False:
+        orig = rec.get("original_statusLine")
+        orig_ours = isinstance(orig, dict) and is_ours(orig.get("command"))
+        if rec.get("had_statusLine") is True and not orig_ours:
+            new["statusLine"] = orig
+        elif rec.get("had_statusLine") is False:
             new.pop("statusLine", None)
-        else:  # no install record: undo what the command itself says
-            orig = compose_of(cur["command"])
-            if orig:
-                restored = dict(cur)
-                restored["command"] = orig
-                new["statusLine"] = restored
+        else:  # no usable record: undo what the command itself says
+            comp = compose_of(cur["command"])
+            if comp:
+                new["statusLine"] = dict(cur, command=comp)
             else:
                 new.pop("statusLine", None)
-    for k, had in (state.get("had_keys") or {}).items():
+    for k, had in (rec.get("had_keys") or {}).items():
         if not had and k in new and new[k] in ({}, []):
             new.pop(k)
-    if state.get("had_file") is False and not new:
+    if rec.get("had_file") is False and not new:
         return new, None
-    # Byte-exact when nothing else changed: hand back the original bytes.
-    backup = state.get("backup_path")
+    # Byte-exact when nothing else changed: hand back the backup's bytes.
+    backup = rec.get("backup_path")
     if backup and os.path.exists(backup):
-        orig_raw = read_text(backup)
         try:
-            if json.loads(orig_raw) == new and sha(orig_raw) == state.get("original_sha256"):
-                return new, orig_raw
-        except ValueError:
+            with open(backup, "rb") as f:
+                orig_bytes = f.read()
+            if json.loads(orig_bytes.decode("utf-8")) == new and hashlib.sha256(orig_bytes).hexdigest() == rec.get("original_sha256"):
+                return new, orig_bytes
+        except (OSError, ValueError):
             pass
     if new == obj and raw is not None:
         return new, raw
     return new, dumps(new, fmt)
-
-
-def load_state():
-    try:
-        with open(state_path(), encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return None
-
-
-def save_state(state):
-    os.makedirs(config.home(), exist_ok=True)
-    with open(state_path(), "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
