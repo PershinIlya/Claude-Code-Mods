@@ -323,6 +323,26 @@ class Check(TempHome):
         self.assertAlmostEqual(res["weekly_cost_of_5h_leftover"], 3.0)  # 50 points left at 6 per window
         self.assertTrue(res["five_hour"]["harvestable"])
 
+    def test_nothing_left_is_not_spare_with_min_free_0(self):
+        # Review 6 follow-up: at min_free 0, "at least min_free" passed a maxed
+        # 5h window (0 points free), so the weekly harvest said go into it.
+        now = MON + 6 * D + 10 * H
+        r5 = int(now + 40 * M)
+        r7 = int(now + D)  # the week is in its tail with 60 points to expire
+        self.known("s1")
+        for i in range(0, 21, 2):  # maxed for 20 minutes
+            self.feed(now - (20 - i) * M, five=(100, r5), week=(40, r7))
+        res = self.result(now, min_free=0)
+        self.assertFalse(res["five_hour"]["harvestable"])
+        self.assertFalse(res["seven_day"]["harvestable"])
+        self.assertFalse(res["ok"])
+
+    def test_bad_durations_are_errors(self):
+        # Review 6 follow-up: --max-age nan made every age "fresh".
+        for bad in ("nan", "inf", "-5m", "nanm"):
+            with self.assertRaises(ValueError, msg=bad):
+                commands.parse_duration(bad)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1110,6 +1110,53 @@ class Install(unittest.TestCase):
         self.assertEqual(install.compose_of(cmd), "echo 'a b'")
         self.assertTrue(install.is_ours(cmd))
 
+    def test_tidy_leaves_an_invalid_user_file_alone(self):
+        # Review 6 follow-up: a user settings file that is not valid JSON made
+        # the tidy raise out of uninstall.
+        proj = os.path.join(self.dir, "proj-settings.json")
+        with open(proj, "w") as f:
+            f.write('{"model": "sonnet"}')
+        quiet = lambda cmd, env=None: (0, "ok", "")  # the plugin CLI, writing nothing
+        with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+            with open(self.path, "w") as f:
+                f.write('{"model": "opus",')  # the user broke it by hand
+            with mock.patch.object(install, "run_claude", quiet):
+                rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Left", out)
+        self.assertEqual(self.read(), '{"model": "opus",')
+
+    def test_snapshot_of_an_invalid_user_file(self):
+        # Review 6 follow-up: an invalid user file is not "absent": it exists,
+        # and its plugin keys are unknown, so none is ever removed.
+        proj = os.path.join(self.dir, "proj-settings.json")
+        with open(proj, "w") as f:
+            f.write('{"model": "sonnet"}')
+        quiet = lambda cmd, env=None: (0, "ok", "")
+        with self._user_file('{"oops"'), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                mock.patch.object(install, "run_claude", quiet):
+            self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
+            mod = install.load_state()["mod"]
+            self.assertTrue(mod["had_file"])
+            self.assertEqual(mod["had_keys"], {k: True for k in install.PLUGIN_KEYS})
+            rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), '{"oops"')
+
+    def test_backups_sort_by_time_then_sequence(self):
+        # Review 6 follow-up: names sorted as strings put "-9" after "-10".
+        self.write(SETTINGS)
+        for suffix, cmd in (("", "zero"), ("-9", "nine"), ("-10", "ten")):
+            with open(self.path + ".ctempo-backup-20261014-090000" + suffix, "w") as f:
+                f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": cmd})))
+        with open(self.path + ".ctempo-backup-20261013-235959-99", "w") as f:
+            f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "yesterday"})))
+        had, sl = install._original_from_backups(self.path)
+        self.assertTrue(had)
+        self.assertEqual(sl["command"], "ten")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -326,9 +326,10 @@ def _surplus(st, cfg, w, now):
 def parse_duration(s):
     s = s.strip().lower()
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
-    if s and s[-1] in units:
-        return float(s[:-1]) * units[s[-1]]
-    return float(s)
+    x = float(s[:-1]) * units[s[-1]] if s and s[-1] in units else float(s)
+    if not math.isfinite(x) or x < 0:  # nan would make every age "fresh"
+        raise ValueError("bad duration %r (want e.g. 30m, 2h, 2d)" % s)
+    return x
 
 
 def parse_tail(spec, cfg):
@@ -395,7 +396,7 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     # null), so neither harvest may count on it, whatever min_free (taken as
     # `None or 0`, it passed min_free 0), and nothing is priced in weekly points.
     rate_unknown = f["present"] and f["projected_unused"] is None
-    leftover_ok = f["projected_unused"] is not None and f["projected_unused"] >= min_free
+    leftover_ok = pace.spare(f["projected_unused"], min_free)
     week_cost = None
     if f["present"] and not rate_unknown:
         week_cost = f["projected_unused"] * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
@@ -405,14 +406,14 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     week_ok = (not k["present"]) or (
         k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= config.target(cfg, SEVEN_DAY)
     )
-    f["harvestable"] = bool(f["present"] and f["in_tail"] and leftover_ok and f["free_now"] >= min_free and week_ok)
+    f["harvestable"] = bool(f["present"] and f["in_tail"] and leftover_ok and pace.spare(f["free_now"], min_free) and week_ok)
     if f["present"] and f["in_tail"] and not week_ok:
         reasons.append("5h leftover would eat into a weekly budget that is already tight" + (
             " (exchange rate not known yet: priced at %.0f weekly points per 5h window)" % ASSUMED_EXCHANGE_RATE if assumed else ""))
     # Harvesting weekly surplus must not starve your own 5h window: it needs
     # room now and at the current burn rate.
-    five_room = f["free_now"] >= min_free and (not f["present"] or leftover_ok)
-    week_surplus = k["present"] and k["in_tail"] and k["projected_unused"] >= min_free
+    five_room = pace.spare(f["free_now"], min_free) and (not f["present"] or leftover_ok)
+    week_surplus = k["present"] and k["in_tail"] and pace.spare(k["projected_unused"], min_free)
     k["harvestable"] = bool(week_surplus and five_room)
     if rate_unknown and (f["in_tail"] or week_surplus):
         reasons.append("5h burn rate not known yet")

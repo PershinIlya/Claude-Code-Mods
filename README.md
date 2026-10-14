@@ -141,7 +141,7 @@ stays in `~/.claude-tempo/`; delete that folder yourself if you want it gone.
 | `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate, and the age of the last reading (heartbeats shown apart) |
 | `ctempo report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
 | `ctempo profile [--rebuild]` | hour-of-week heatmap, lightest awake blocks, points vs pace by day before reset |
-| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown) |
+| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
 | `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen |
@@ -160,7 +160,7 @@ leave out keeps its default):
 | `rate_window_min` | 20 | 5h least-squares window, minutes |
 | `verdict.speed_up`, `verdict.slow_down` | 1.2, 0.9 | multiplier thresholds |
 | `tail.five_hour_min`, `tail.seven_day_hours` | 60, 48 | "last stretch" of each window |
-| `min_free` | 10 | points about to expire that count as worth using (green, `check`) |
+| `min_free` | 10 | points about to expire that count as worth using (green, `check`); 0 to 100, and 0 still needs more than 0 points |
 | `profile.half_life_days` | 14 | how fast the profile forgets |
 | `profile.floor` | 0.15 | off-hour weight relative to a typical awake hour |
 | `profile.override` | null | `{"work_days": [0,1,2,3,4], "wake_hours": [8, 23], "off_day_factor": 0.3, "mode": "prior"}`; days are 0 = Monday; mode `replace` ignores learning |
@@ -206,7 +206,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 193 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 215 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
@@ -215,9 +215,13 @@ mid-series, two parallel sessions, missing windows, bogus `resets_at`, the
 epoch leak, a week with nights and weekends, DST) and checks the math against
 values computed by hand in the test comments. Install and uninstall run on
 throwaway settings files, including the byte-identical round trip (CRLF, mode,
-several settings files, a crash mid-install, a lost install record). Five
-adversarial review passes found 70 defects; each one has a regression test
-that fails on the code before its fix.
+several settings files, a crash mid-install, a lost install record). A
+model-based fuzzer runs 300 seeded random sequences of installs and uninstalls
+on two settings files, with claude working, missing or hanging and hand edits
+in between, and checks that nothing of ctempo is left, each file holds the
+user's JSON, and a file the user never edited comes back byte for byte. Six
+adversarial review passes (and the fuzzer) found 87 defects; each one has a
+regression test that fails on the code before its fix.
 
 ## Layout
 

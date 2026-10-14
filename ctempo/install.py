@@ -401,13 +401,20 @@ def installed_records(state):
     return out
 
 
+def _backup_order(name):
+    """Sort key of a backup name: its time, then its sequence number ("-10" after "-9")."""
+    m = re.search(r"-(\d{8})-(\d{6})(?:-(\d+))?$", name)
+    return (m.group(1), m.group(2), int(m.group(3) or 0)) if m else ("", "", 0)
+
+
 def _original_from_backups(spath):
     """The statusLine in the newest backup that predates ctempo, if any."""
     real = os.path.realpath(spath)
     folder = os.path.dirname(real) or "."
     prefix = os.path.basename(real) + ".ctempo-backup-"
     try:
-        names = sorted((n for n in os.listdir(folder) if n.startswith(prefix)), reverse=True)
+        names = sorted((n for n in os.listdir(folder) if n.startswith(prefix) and BACKUP_SUFFIX.search(n)),
+                       key=_backup_order, reverse=True)
     except OSError:
         return None
     for n in names:
@@ -593,10 +600,11 @@ def install(args, out=print):
                 us = settings_path(None)
                 try:
                     uobj, uraw, _ = read_settings(us)
-                except ValueError:
-                    uobj, uraw = {}, None
-                state["mod"] = {"user_settings": us, "had_file": uraw is not None,
-                                "had_keys": _user_keys(uobj), "manual": True}
+                    had_keys = _user_keys(uobj)
+                except ValueError:  # not valid JSON: it exists, and its keys are unknown, so never removed
+                    uobj, uraw, had_keys = {}, None, {k: True for k in PLUGIN_KEYS}
+                state["mod"] = {"user_settings": us, "had_file": uraw is not None or os.path.exists(os.path.realpath(us)),
+                                "had_keys": had_keys, "manual": True}
                 if uraw is not None and os.path.realpath(us) != os.path.realpath(spath):
                     try:
                         state["mod"].update(backup_path=make_backup(us), original_sha256=sha(uraw))
@@ -725,7 +733,11 @@ def _tidy_user_settings(state, mod, skip_real, touched=True):
     for k, had in (mod.get("had_keys") or {}).items():
         hk[k] = hk.get(k, had) and had
     base["had_keys"] = hk
-    obj, raw, fmt = read_settings(us)
+    try:
+        obj, raw, fmt = read_settings(us)
+    except ValueError as e:
+        _drop_records(state, os.path.realpath(us))
+        return "Left %s alone: %s" % (us, e)
     _, new_raw = restore(obj, raw, fmt, base)
     _drop_records(state, os.path.realpath(us))
     if new_raw is None:

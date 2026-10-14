@@ -432,6 +432,20 @@ class FiveHour(TempHome):
         self.assertEqual(v["allowed"], 0.0)
         self.assertEqual(v["severity"], "warn")
 
+class Spare(unittest.TestCase):
+    def test_spare_needs_some_points(self):
+        # Review 6 follow-up: with min_free 0, a leftover of 0 is not spare,
+        # and an unknown one never is.
+        self.assertTrue(pace.spare(5, 0))
+        self.assertTrue(pace.spare(10, 10))
+        self.assertFalse(pace.spare(9.9, 10))
+        self.assertFalse(pace.spare(0, 0))
+        self.assertFalse(pace.spare(None, 0))
+        cfg = {"min_free": 0}
+        v = {"present": True, "verdict": "on_pace", "in_tail": True, "unused_at_reset": 0.0, "target": 100.0, "used": 99.0}
+        self.assertEqual(pace.severity(v, cfg), "dim")
+        self.assertEqual(pace.severity(dict(v, unused_at_reset=1.0), cfg), "opportunity")
+
 
 if __name__ == "__main__":
     unittest.main()
