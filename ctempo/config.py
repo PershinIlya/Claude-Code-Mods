@@ -159,27 +159,27 @@ RANGES = {
 CHOICES = {("display", "symbols"): ("unicode", "ascii"), ("display", "color"): ("auto", "never", "always")}
 
 
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def _override(ov):
-    """A valid profile override, or None."""
+    """The profile override with each field checked on its own (a bad field
+    falls back to its default, the rest is kept); None if not a dict."""
     if not isinstance(ov, dict):
         return None
-    days = ov.get("work_days", [0, 1, 2, 3, 4])
-    wake = ov.get("wake_hours", [8, 23])
-    off = ov.get("off_day_factor", 0.5)
-    mode = ov.get("mode", "prior")
-    ok = (
-        isinstance(days, list)
-        and all(isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days)
-        and isinstance(wake, list)
-        and len(wake) == 2
-        and all(isinstance(h, int) and not isinstance(h, bool) and 0 <= h <= 24 for h in wake)
-        and isinstance(off, (int, float))
-        and not isinstance(off, bool)
-        and math.isfinite(off)
-        and 0 <= off <= 1
-        and mode in ("prior", "replace")
-    )
-    return {"work_days": days, "wake_hours": wake, "off_day_factor": float(off), "mode": mode} if ok else None
+    days = ov.get("work_days")
+    days = sorted({int(d) for d in days if _num(d) and int(d) == d and 0 <= d <= 6}) if isinstance(days, list) else []
+    wake = ov.get("wake_hours")
+    if isinstance(wake, list) and len(wake) == 2 and all(_num(h) for h in wake):
+        wake = [min(24, max(0, int(h))) for h in wake]
+    else:
+        wake = [8, 23]
+    off = ov.get("off_day_factor")
+    off = min(1.0, max(0.0, float(off))) if _num(off) else 0.5
+    mode = str(ov.get("mode", "prior")).lower()
+    return {"work_days": days or [0, 1, 2, 3, 4], "wake_hours": wake, "off_day_factor": off,
+            "mode": mode if mode in ("prior", "replace") else "prior"}
 
 
 def normalize(cfg):
@@ -199,7 +199,9 @@ def normalize(cfg):
     if not isinstance(cfg["compose"].get("separator"), str):
         cfg["compose"]["separator"] = "  "
     cfg["profile"]["override"] = _override(cfg["profile"].get("override"))
-    cfg["mod"]["surfaces"] = [x for x in cfg["mod"]["surfaces"] if isinstance(x, str)] or ["desktop"]
+    given = cfg["mod"]["surfaces"]
+    kept = [x for x in given if isinstance(x, str)]
+    cfg["mod"]["surfaces"] = kept if (kept or not given) else ["desktop"]  # [] means: draw nowhere
     return cfg
 
 

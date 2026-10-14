@@ -8,7 +8,6 @@ from .config import FIVE_HOUR
 from .store import FRESH
 
 IDLE_RATE = 0.05  # %/h; below this a fitted slope counts as idle
-ANCHOR_S = 300.0  # a reading this close before the fit window can anchor it
 
 
 def lsq_slope(points):
@@ -42,6 +41,31 @@ def running_series(rows, start_value=None):
             cur = used
         out.append((ts, cur))
     return out
+
+
+def level_path(fresh, start_ts, used, now):
+    """[(ts, level, synthetic)]: running max of fresh readings, starting at
+    0 at the window start, ending at the current level."""
+    path = []
+    run = None
+    for ts, u in fresh:
+        run = u if run is None else max(run, u)
+        path.append((ts, run, False))
+    if not path or path[0][0] > start_ts + 1:
+        path.insert(0, (start_ts, 0.0, True))
+    if path[-1][1] < used:  # the level is known now (no fresh row yet, or the write failed)
+        path.append((now, used, True))
+    return path
+
+
+def level_at(path, t):
+    """Piecewise-linear level at t; flat after the last point and before the first."""
+    if t <= path[0][0]:
+        return path[0][1]
+    for (t0, y0, _), (t1, y1, _) in zip(path, path[1:]):
+        if t <= t1:
+            return y0 if t1 <= t0 else y0 + (y1 - y0) * (t - t0) / (t1 - t0)
+    return path[-1][1]
 
 
 def verdict_for(mult, cfg):
@@ -79,49 +103,30 @@ def five_hour(store, now, cfg, reading=None):
     v.update(present=True, used=used, reset_ts=reset, start_ts=inst["start_ts"], remaining_h=rem_h,
              target=tgt, window_id=inst["id"])
 
-    # Trailing least-squares rate over the running max. The window's value
-    # just before the fit window anchors its left edge, but only when it was
-    # read within ANCHOR_S of that edge (an older value would pour usage from
-    # an unobserved gap into the last 20 minutes); "now" anchors the right
-    # edge, so a burst that stopped long ago fades out as time passes.
+    # The level path: fresh readings only (a heartbeat repeats a session's
+    # last API response and says nothing about the account's level), as a
+    # running max, through 0 at the window start, linear between readings
+    # (spend in an unobserved gap is spread over it, not squeezed into the
+    # moment we looked) and flat after the last one (no news = no spend,
+    # so a finished burst fades out). The rate is the least-squares slope of
+    # that path over the trailing window.
     win_s = float(cfg["rate_window_min"]) * 60.0
-    since = now - win_s
-    rows = store.instance_series(inst["id"], since=since)
-    before, before_ts = store.state_at(inst["id"], since)
-    if before_ts is not None and since - before_ts > ANCHOR_S:
-        before = None
-    series = running_series(rows, before)
-    points = []
-    if before is not None and (not series or series[0][0] > since + 1):
-        points.append((since, before))
-    points.extend(series)
-    real = len(series)
-    if not series or now - series[-1][0] > 1.0:  # the reading may already be stored at `now`
-        points.append((now, used))
-        real += 1
-    span = (now - series[0][0]) if series else 0.0
     min_span = float(cfg["rate_min_span_min"]) * 60
-    rate, source = None, None
-    if real >= int(cfg["rate_min_samples"]) and span >= min_span:
+    path = level_path(store.fresh_levels(inst["id"]), inst["start_ts"], used, now)
+    since = max(now - win_s, inst["start_ts"])
+    rate, source, inside = None, None, []
+    if now - since >= min_span:
+        inside = [p for p in path if since < p[0] < now]
+        points = [(since, level_at(path, since))] + [(t, y) for t, y, _ in inside] + [(now, level_at(path, now))]
         s = lsq_slope(points)
         if s is not None:
-            rate, source = max(0.0, s), "lsq"
-    if rate is None:
-        # Not enough recent readings: the average since the last reading
-        # before now (what changed since we last looked), else since the
-        # window opened (it opened at 0).
-        # The latest reading at least min_span old: a reading taken a minute
-        # ago must not hide the flat one from before an idle gap.
-        prev, prev_ts = store.state_at(inst["id"], now - min_span)
-        if prev_ts is not None:
-            rate, source = max(0.0, used - prev) / ((now - prev_ts) / 3600.0), "since_last"
-    if rate is None:
-        elapsed = now - max(inst["start_ts"], reset - config.DURATION[FIVE_HOUR])
-        if elapsed >= min_span:
-            rate, source = used / (elapsed / 3600.0), "window_avg"
+            # A fit carried by a few readings and interpolation is marked ~.
+            real = [p for p in path if since <= p[0] <= now and not p[2]]
+            enough = len(real) >= int(cfg["rate_min_samples"]) and now - real[0][0] >= min_span if real else False
+            rate, source = max(0.0, s), "lsq" if enough else "interpolated"
     v["rate"] = rate
     v["rate_source"] = source
-    v["rate_points"] = len(points)
+    v["rate_points"] = len(inside) + 2
 
     allowed = max(0.0, tgt - used) / rem_h if rem_h > 0 else 0.0
     v["allowed"] = allowed

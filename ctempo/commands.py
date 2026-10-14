@@ -88,11 +88,11 @@ def _print_5h(v, cfg):
     print("  used           %5.1f%%   (target %.0f%%)" % (v["used"], t))
     print("  resets         %s, in %s" % (render.hm(v["reset_ts"]), dur(v["reset_ts"] - time.time())))
     if v.get("rate") is None:
-        print("  burn rate      unknown (fewer than 3 readings over 5 minutes)")
+        print("  burn rate      unknown (the window opened less than %s min ago)" % cfg["rate_min_span_min"])
     else:
         how = {"lsq": "least squares over the last %s min" % cfg["rate_window_min"],
-               "since_last": "average since the previous reading (too few recent readings)",
-               "window_avg": "window average (too few recent readings)"}
+               "interpolated": "least squares over the last %s min, mostly interpolated between "
+                               "sparse readings" % cfg["rate_window_min"]}
         print("  burn rate      %5.1f %%/h  %s" % (v["rate"], how.get(v["rate_source"], "")))
     print("  allowed rate   %5.1f %%/h  = (%.0f - %.1f) / %.2f h" % (v["allowed"], t, v["used"], v["remaining_h"]))
     if v.get("multiplier") is not None:

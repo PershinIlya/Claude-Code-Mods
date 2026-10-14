@@ -271,6 +271,12 @@ class Store:
         q += " ORDER BY ts, id"
         return self.db.execute(q, args).fetchall()
 
+    def fresh_levels(self, wid):
+        """(ts, used) of an instance's fresh readings, in time order."""
+        return self.db.execute(
+            "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag=? ORDER BY ts, id", (wid, FRESH)
+        ).fetchall()
+
     def max_at(self, wid, t):
         row = self.db.execute(
             "SELECT MAX(used_pct) FROM samples WHERE window_id=? AND flag!=? AND ts<=?",
