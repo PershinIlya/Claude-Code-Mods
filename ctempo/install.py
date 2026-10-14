@@ -408,7 +408,10 @@ def _backup_order(name):
 
 
 def _original_from_backups(spath):
-    """The statusLine in the newest backup that predates ctempo, if any."""
+    """The statusLine in the newest backup that predates ctempo, if any. A command
+    in ctempo's --compose in a newer backup (the user put it there, and --replace
+    dropped it since) replaces its command, or is the statusLine when no backup
+    predates ctempo."""
     real = os.path.realpath(spath)
     folder = os.path.dirname(real) or "."
     prefix = os.path.basename(real) + ".ctempo-backup-"
@@ -417,6 +420,7 @@ def _original_from_backups(spath):
                        key=_backup_order, reverse=True)
     except OSError:
         return None
+    composed = None
     for n in names:
         try:
             text = read_text(os.path.join(folder, n))
@@ -427,7 +431,13 @@ def _original_from_backups(spath):
             continue
         sl = obj.get("statusLine")
         if not (isinstance(sl, dict) and is_ours(sl.get("command"))):
-            return ("statusLine" in obj, sl)
+            rec = _with_compose({"had_statusLine": "statusLine" in obj, "original_statusLine": sl}, composed)
+            return rec["had_statusLine"], rec["original_statusLine"]
+        if composed is None and compose_of(sl["command"]):
+            composed = sl
+    comp = compose_of(composed["command"]) if composed else None
+    if comp and not is_ours(comp):
+        return True, dict(composed, command=comp)
     return None
 
 
@@ -683,8 +693,27 @@ def _mod_listed(us):
         obj, _, _ = read_settings(us)
     except (OSError, ValueError):
         return True
+    return _lists_mod(obj)
+
+
+def _lists_mod(obj):
     ep, km = obj.get("enabledPlugins"), obj.get("extraKnownMarketplaces")
     return (isinstance(ep, dict) and PLUGIN_ID in ep) or (isinstance(km, dict) and MARKETPLACE in km)
+
+
+def _listed_mod():
+    """A mod record rebuilt from the user settings file when that lists the mod
+    or its marketplace, else None (also when the file cannot be read)."""
+    us = settings_path(None)
+    try:
+        obj, _, _ = read_settings(us)
+    except (OSError, ValueError):
+        return None
+    if not _lists_mod(obj):
+        return None
+    # No snapshot to restore bytes from: tidy by keys, where one that holds only
+    # ctempo's entry is the plugin CLI's.
+    return {"user_settings": us, "had_file": True, "had_keys": _user_keys(obj)}
 
 
 def _forget_keys(mod):
@@ -715,8 +744,8 @@ def _tidy_user_settings(state, mod, skip_real, touched=True):
     """Undo what the plugin CLI left in the user settings file: back to its
     backup's bytes when nothing else changed there, else drop empty keys.
     When the plugin CLI never wrote there, only the file's kept record goes."""
-    us = mod.get("user_settings")
-    if not us or os.path.realpath(us) == skip_real:
+    us = mod.get("user_settings") or settings_path(None)  # version 1 named none: the default one
+    if os.path.realpath(us) == skip_real:
         return None
     key, rec = find_record(state, us)
     if rec is not None and rec.get("installed"):
@@ -774,6 +803,12 @@ def uninstall(args, out=print):
     rec.setdefault("settings_path", spath)
     real = os.path.realpath(spath)
     mod = state.get("mod") or {}
+    rebuilt = None if mod else _listed_mod()
+    if rebuilt:
+        # install.json was lost (or this is another CTEMPO_HOME), but the user file
+        # still lists the mod: uninstall removes it all the same (--no-mod keeps it,
+        # and runtime.json with it).
+        mod = state["mod"] = rebuilt
     us = mod.get("user_settings")
     if mod.get("manual") and _mod_listed(us):
         mod.pop("manual")  # the user ran the printed commands: the plugin CLI has written there
@@ -798,6 +833,8 @@ def uninstall(args, out=print):
         out("Settings: %s" % spath)
     others = [p for p in installed_records(state) if os.path.realpath(p) != real]
     cmds = unmod_commands() if (mod and not args.no_mod and not others) else []
+    if rebuilt and cmds:
+        out("  (%s lists the ctempo mod, but %s has no record of it: uninstall removes it too)" % (us, state_path()))
     for c in cmds:
         out("  claude " + " ".join(c))
     # With claude not on PATH and no trace of the mod in the user file (the
@@ -850,7 +887,8 @@ def uninstall(args, out=print):
         if msg:
             out(msg)
     _drop_records(state, real)
-    if mod and not (cmds and mod_ok) and os.path.realpath(mod.get("user_settings") or "") == real:
+    # A mod record without user_settings (version 1) had its commands edit the default user file.
+    if mod and not (cmds and mod_ok) and os.path.realpath(mod.get("user_settings") or settings_path(None)) == real:
         # The plugin keys in this file outlive this run (the mod stays for
         # another settings file, or its commands failed): keep the record so
         # whoever removes the mod can bring the file back byte for byte.
@@ -862,14 +900,18 @@ def uninstall(args, out=print):
                 "Run `ctempo uninstall --apply` again with claude on PATH, or the commands above yourself.")
             rc = 1  # keep state["mod"] and runtime.json so a rerun retries
         else:
-            lp = state.pop("launcher", None)
-            if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
-                os.remove(lp)
-                out("Removed launcher %s" % lp)
-            if os.path.exists(config.runtime_path()):
-                os.remove(config.runtime_path())
             if cmds and mod_ok:
                 state.pop("mod", None)
+            if state.get("mod"):  # --no-mod: the mod stays, and it reads runtime.json
+                out("Kept the mod (--no-mod) and %s, which it reads; `ctempo uninstall --apply` removes both."
+                    % config.runtime_path())
+            else:
+                lp = state.pop("launcher", None)
+                if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
+                    os.remove(lp)
+                    out("Removed launcher %s" % lp)
+                if os.path.exists(config.runtime_path()):
+                    os.remove(config.runtime_path())
     save_state(state)
     if rc == 0:
         out("Uninstalled. Your data stays in %s (delete it yourself if you want)." % config.home())
@@ -883,6 +925,14 @@ def restore(obj, raw, fmt, rec):
     new = dict(obj)
     cur = obj.get("statusLine")
     if isinstance(cur, dict) and is_ours(cur.get("command")):
+        orig = rec.get("original_statusLine")
+        orig_ours = isinstance(orig, dict) and is_ours(orig.get("command"))
+        usable = rec.get("had_statusLine") is False or (rec.get("had_statusLine") is True and not orig_ours)
+        found = None if usable or not rec.get("settings_path") else _original_from_backups(rec["settings_path"])
+        if found is not None:
+            # No usable record: rebuild it as install would (a pre-ctempo backup), so
+            # a command the user put in --compose wins over the backup here too.
+            rec = dict(rec, had_statusLine=found[0], original_statusLine=found[1])
         rec = _with_compose(rec, cur)
         orig = rec.get("original_statusLine")
         orig_ours = isinstance(orig, dict) and is_ours(orig.get("command"))
@@ -890,12 +940,9 @@ def restore(obj, raw, fmt, rec):
             new["statusLine"] = orig
         elif rec.get("had_statusLine") is False:
             new.pop("statusLine", None)
-        else:  # no usable record: a pre-ctempo backup, else what the command says
+        else:  # no usable record and no backup from before ctempo: what the command says
             comp = compose_of(cur["command"])
-            found = _original_from_backups(rec.get("settings_path") or "") if rec.get("settings_path") else None
-            if found is not None and found[0]:
-                new["statusLine"] = found[1]
-            elif comp:
+            if comp:
                 new["statusLine"] = dict(cur, command=comp)
             else:
                 new.pop("statusLine", None)
