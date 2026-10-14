@@ -1,0 +1,158 @@
+"""Pace math for the 7-day window, driven by the hour-of-week profile.
+
+  E          = expected share of weekly spend still to come (now -> reset)
+  on_pace    = target * (1 - E)
+  delta      = used - on_pace                       (+ ahead, - behind)
+  intensity  = actual spend over the last N active hours
+               / (target * profile share of those hours)
+  projected  = used + intensity * target * E        (capped at 100)
+  multiplier = (target - used) / (intensity * target * E)
+
+`dry` is where the hour-by-hour walk at that intensity crosses 100%.
+"""
+
+from . import config, profile
+from .config import DURATION, FIVE_HOUR, SEVEN_DAY
+from .pace import current_used, verdict_for
+from .store import FRESH
+
+MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend
+MIN_WINDOW_SHARE = 0.02
+
+
+def spend_since(store, inst, t0, now, used):
+    """Points spent between t0 (or the earliest known point after it) and now.
+
+    Walks back into the previous weekly window when the lookback crosses a
+    reset. Returns (points, effective_start).
+    """
+    a = max(t0, inst["start_ts"])
+    if a <= inst["start_ts"]:
+        v0 = 0.0  # a weekly window starts empty
+    else:
+        v0 = store.max_at(inst["id"], a)
+        if v0 is None:
+            row = store.db.execute(
+                "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag=? ORDER BY ts LIMIT 1",
+                (inst["id"], FRESH),
+            ).fetchone()
+            if row is None:
+                return 0.0, now
+            a, v0 = row[0], row[1]
+    actual = max(0.0, used - v0)
+    if t0 < inst["start_ts"] and a <= inst["start_ts"]:
+        prev = store.db.execute(
+            "SELECT id, start_ts, max_used FROM windows WHERE window=? AND id!=? "
+            "AND ABS(reset_ts - ?) <= 3600 ORDER BY id DESC LIMIT 1",
+            (SEVEN_DAY, inst["id"], inst["start_ts"]),
+        ).fetchone()
+        if prev is not None:
+            a2 = max(t0, prev[1])
+            p0 = 0.0 if a2 <= prev[1] else store.max_at(prev[0], a2)
+            if p0 is not None:
+                actual += max(0.0, prev[2] - p0)
+                a = a2
+    return actual, a
+
+
+def exchange_rate(store, now, days=28):
+    """Weekly points per full 5-hour window, from paired readings.
+
+    thevibeworks' `pct_per_window`: accumulate the rise of both windows over
+    consecutive paired readings within the same instances; publish once the
+    5h side has risen at least 50 points and the weekly side 3.
+    """
+    rows = store.db.execute(
+        "SELECT ts, window, used_pct, window_id FROM samples WHERE flag=? AND ts>? ORDER BY ts, id",
+        (FRESH, now - days * 86400),
+    ).fetchall()
+    by_ts = {}
+    for ts, w, used, wid in rows:
+        by_ts.setdefault(round(ts, 3), {})[w] = (used, wid)
+    rf = rs = 0.0
+    prev = None
+    for ts in sorted(by_ts):
+        pair = by_ts[ts]
+        if FIVE_HOUR not in pair or SEVEN_DAY not in pair:
+            continue
+        if prev is not None:
+            (f0, fw0), (s0, sw0) = prev[FIVE_HOUR], prev[SEVEN_DAY]
+            (f1, fw1), (s1, sw1) = pair[FIVE_HOUR], pair[SEVEN_DAY]
+            if fw0 == fw1 and sw0 == sw1 and f1 > f0 and s1 >= s0:
+                rf += f1 - f0
+                rs += s1 - s0
+        prev = pair
+    if rf >= 50 and rs >= 3:
+        return max(1.0, min(50.0, rs / rf * 100.0)), rf, rs
+    return None, rf, rs
+
+
+def weekly(store, now, cfg, reading=None, prof=None):
+    v = {"window": SEVEN_DAY, "present": False}
+    inst = store.open_instance(SEVEN_DAY)
+    if inst is None or inst["reset_ts"] <= now:
+        v["verdict"] = "fresh"
+        v["severity"] = "dim"
+        return v
+    tgt = config.target(cfg, SEVEN_DAY)
+    used = current_used(store, inst, reading)
+    reset = inst["reset_ts"]
+    start = reset - DURATION[SEVEN_DAY]
+    prof = prof or profile.load(store)
+    hl = float(cfg["profile"]["half_life_days"]) * 86400
+    w, awake, info = prof.weights(now, cfg, profile.typical_week(store, now, hl))
+
+    elapsed = profile.share_between(w, start, now)
+    left = profile.share_between(w, now, reset)
+    total = elapsed + left or 1.0
+    E = left / total  # DST weeks have 167 or 169 local hours
+    elapsed = elapsed / total
+    on_pace = tgt * (1.0 - E)
+    v.update(present=True, used=used, reset_ts=reset, start_ts=start, remaining_h=(reset - now) / 3600.0,
+             target=tgt, window_id=inst["id"], E=E, on_pace=on_pace, delta=used - on_pace,
+             profile_source=info["source"], awake_hours=info["awake_hours"], weekly_typical=info["weekly_total"])
+
+    # Intensity over the last N awake hours (the lookback may cross a reset).
+    hours = float(cfg["profile"]["active_hours_lookback"])
+    t0 = profile.active_lookback(awake, now, hours, 7 * 86400)
+    actual, t_eff = spend_since(store, inst, t0, now, used)
+    share = profile.share_between(w, t_eff, now) / total
+    intensity, source = None, None
+    if share >= MIN_EXPECTED_SHARE and t_eff < now:
+        intensity, source = actual / (tgt * share), "recent"
+    elif elapsed >= MIN_WINDOW_SHARE:
+        intensity, source = used / (tgt * elapsed), "window"
+    elif info["weekly_total"]:
+        intensity, source = info["weekly_total"] / tgt, "typical"
+    else:
+        intensity, source = 1.0, "assumed"
+    v.update(intensity=intensity, intensity_source=source, lookback_start=t_eff,
+             lookback_actual=actual, lookback_expected=tgt * share)
+
+    remaining_spend = intensity * tgt * E
+    raw = used + remaining_spend
+    dry = None
+    if raw >= 100.0 and used < 100.0:
+        dry = profile.walk_to(w, now, reset, intensity * tgt / total, 100.0 - used)
+    mult = (tgt - used) / remaining_spend if remaining_spend > 1e-9 else None
+    v.update(projected=min(100.0, raw), projected_raw=raw, dry_ts=dry, multiplier=mult,
+             expire=max(0.0, 100.0 - min(100.0, raw)), unused_at_reset=max(0.0, 100.0 - min(100.0, raw)))
+    if used >= 100.0:
+        v["verdict"] = "maxed"
+    elif source == "recent" and actual <= 0:
+        v["verdict"] = "idle"
+    else:
+        v["verdict"] = verdict_for(mult, cfg)
+    v["in_tail"] = (reset - now) <= float(cfg["tail"]["seven_day_hours"]) * 3600
+    v["severity"] = _severity(v, cfg)
+    return v
+
+
+def _severity(v, cfg):
+    if v["verdict"] == "maxed" or v.get("dry_ts") is not None:
+        return "alert"
+    if v["verdict"] == "slow_down":
+        return "warn"
+    if v.get("in_tail") and v.get("expire", 0) >= float(cfg["min_free"]):
+        return "opportunity"
+    return "dim"
