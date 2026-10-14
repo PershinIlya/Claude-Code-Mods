@@ -116,40 +116,59 @@ def bare_line(readings, now):
     return " · ".join(parts) or "ctempo: no data"
 
 
-def start_compose(cmd, raw):
-    import subprocess
-    import threading
+class Composer:
+    """Runs the user's previous statusLine command in parallel with ours.
 
-    env = dict(os.environ)
-    env["CTEMPO_COMPOSED"] = "1"
-    p = subprocess.Popen(
-        cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env
-    )
+    communicate() runs in a thread so our own work overlaps with theirs; the
+    command gets its own process group so a timeout kills its children too.
+    """
 
-    def feed():
+    def __init__(self, cmd, raw, timeout):
+        import subprocess
+        import threading
+
+        env = dict(os.environ)
+        env["CTEMPO_COMPOSED"] = "1"
+        self.result = None
+        self.p = subprocess.Popen(
+            cmd,
+            shell=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
+        self.t = threading.Thread(target=self._run, args=(raw, timeout), daemon=True)
+        self.t.start()
+
+    def _run(self, raw, timeout):
         try:
-            p.stdin.write(raw)
-            p.stdin.close()
-        except OSError:
+            out, _ = self.p.communicate(input=raw, timeout=timeout)
+            self.result = (self.p.returncode, out)
+        except Exception:
             pass
 
-    threading.Thread(target=feed, daemon=True).start()
-    return p
+    def finish(self, deadline):
+        self.t.join(max(0.05, deadline - time.time()))
+        if self.result is None:
+            self._kill()
+            return None
+        rc, out = self.result
+        if rc != 0:
+            return None
+        return out.decode("utf-8", "replace").rstrip("\n")
 
+    def _kill(self):
+        import signal
 
-def finish_compose(p, deadline):
-    import subprocess
-
-    try:
-        out, _ = p.communicate(timeout=max(0.05, deadline - time.time()))
-    except subprocess.TimeoutExpired:
-        p.kill()
-        return None
-    except OSError:
-        return None
-    if p.returncode != 0:
-        return None
-    return out.decode("utf-8", "replace").rstrip("\n")
+        try:
+            os.killpg(self.p.pid, signal.SIGKILL)
+        except (OSError, AttributeError):
+            try:
+                self.p.kill()
+            except OSError:
+                pass
 
 
 def visible_len(s):
@@ -190,7 +209,7 @@ def main(argv):
             and not os.environ.get("CTEMPO_COMPOSED")
         ):
             try:
-                composer = start_compose(cmd, raw)
+                composer = Composer(cmd, raw, float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0)
             except OSError as e:
                 log_error(e, "compose")
         now = opts["now"] or time.time()
@@ -228,7 +247,7 @@ def main(argv):
             out = render.to_ansi(segs, color)
         if composer is not None:
             timeout = float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0
-            theirs = finish_compose(composer, t0 + timeout)
+            theirs = composer.finish(t0 + timeout)
             columns = int(os.environ.get("COLUMNS") or 0) or 200
             out = join_composed(theirs, out, cfg, columns)
     except Exception as e:
