@@ -1,5 +1,6 @@
 """Weekly math against hand-computed values."""
 
+import math
 import os
 import unittest
 
@@ -125,6 +126,65 @@ class Weekly(TempHome):
         prev = 10 * (18 * H - 60) / (24 * H - 60)
         self.assertAlmostEqual(v["lookback_actual"], prev + 5, places=6)
         self.assertAlmostEqual(v["intensity"], (prev + 5) / (100 * 24 / 168), places=6)
+
+    def test_a_capped_previous_week_is_no_expected_spend(self):
+        # Review 8 (long-horizon#0): a heavy user (Mon-Fri 9-17) hits 100% and
+        # is blocked until the Thursday 09:00 reset. Two hours after it, the
+        # lookback (from Monday 11:00) counted the blocked hours as expected
+        # spend that never happened: "on pace" for a user who caps again.
+        self.cfg["profile"]["override"] = dict(WORKWEEK)
+        R0 = int(MON + 3 * D + 9 * H)  # Thursday 09:00
+        now = R0 + 21 * D + 2 * H  # Thursday 11:00, three weeks on
+        t0 = MON + 21 * D + 11 * H  # 24 awake hours back: Thu 2, Wed 8, Tue 8, Mon 6
+        # 3.5 points an hour: 63% at the lookback start, 100% from Tuesday
+        # 13:45. 10 an hour: 100% from Friday 11:00, before the lookback.
+        for rate, level, cap in ((3.5, 63, R0 + 19 * D + 4 * H + 45 * 60), (10.0, 100, R0 + 15 * D + 2 * H)):
+            self.st.close()
+            self.st = Store(os.path.join(self.dir, "cap-%s.db" % rate))
+            self.known("s1")
+            reset = self.work(R0, now, R0 + int(7 * D), rate, hours=(9, 17))
+            v = self.view(now)
+            w, _, _ = profile.current_weights(self.st, profile.load(self.st), now, self.cfg)
+            self.assertEqual(v["lookback_start"], t0)
+            self.assertAlmostEqual(v["lookback_actual"], 100 - level + 2 * rate)
+            # Expected: the lookback until the cap, then the new window.
+            expected = profile.share_between(w, t0, max(t0, cap)) + profile.share_between(w, now - 2 * H, now)
+            self.assertAlmostEqual(v["lookback_expected"], 100 * expected, places=6)
+            self.assertEqual(v["intensity_source"], "recent")
+            # It caps again before the reset: slow down, with a dry time.
+            self.assertEqual(v["verdict"], "slow_down")
+            self.assertIsNotNone(v["dry_ts"])
+            self.assertLess(v["dry_ts"], reset)
+
+    def test_a_drop_reset_is_paced_from_the_drop(self):
+        # Review 8 (mod-and-texts#0): the weekly limit is reset early (42% to
+        # 0, resets_at unchanged, D-10) on Monday 12:00, and from then on the
+        # user spends exactly what lands on 100% at the Thursday 09:00 reset.
+        # On-pace and the 'window' fallback still measured from resets_at - 7 d:
+        # "x9+ ->2%" at first, then 38 points "behind" for days.
+        R0 = int(MON - 4 * D + 9 * H)  # Thursday 09:00, two weeks before
+        R = R0 + int(14 * D)
+        self.known("s1")
+        self.work(R0, MON + 7 * D + 12 * H, R0 + int(7 * D), 2.0)  # 90% a week, Mon-Fri 9-18
+        v = self.view(MON + 7 * D + 12 * H)
+        self.assertEqual((v["used"], v["start_ts"]), (42, R - 7 * D))
+        drop = MON + 7 * D + 12 * H
+        rate = 100 / ((R - drop) / H)  # around the clock: on pace from the drop
+        for k in range(1, 98):  # 0 at 12:15, then 1 at 12:45 confirms the reset
+            self.feed(drop + k * 900, week=(math.floor(rate * k / 4), R))
+            if k == 3:
+                v = self.view(drop + H)
+                self.assertEqual(v["start_ts"], drop + 900)  # the new window opened at 12:15
+                # 45 minutes is too new for the window to speak: the typical
+                # week (90%) stands in, not 1 point over 4 days.
+                self.assertEqual(v["intensity_source"], "typical")
+                self.assertAlmostEqual(v["intensity"], 0.9, places=6)
+        now = drop + 24 * H + 900  # Tuesday 12:15, a day into the new window
+        v = self.view(now)
+        span = (R - drop - 900) / H
+        self.assertAlmostEqual(v["on_pace"], 100 * 24 / span, places=6)
+        self.assertLess(abs(v["delta"]), 1.0)
+        self.assertEqual(v["verdict"], "on_pace")
 
     def test_bogus_shifted_window_is_not_taken_as_the_previous_week(self):
         R1 = int(MON + 7 * D)
