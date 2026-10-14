@@ -232,6 +232,7 @@ def main(argv):
     color = False
     out = ""
     composer = None
+    cfg = None
     try:
         opts = parse_args(argv)
         raw = b"" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.buffer.read()
@@ -249,7 +250,7 @@ def main(argv):
         ):
             try:
                 composer = Composer(cmd, raw, float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0)
-            except OSError as e:
+            except Exception as e:
                 log_error(e, "compose")
         now = opts["now"] or time.time()
         readings = {}
@@ -287,23 +288,50 @@ def main(argv):
             )
         else:
             out = render.to_ansi(segs, color)
-        if composer is not None:
-            timeout = float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0
-            theirs = composer.finish(t0 + timeout)
-            columns = int(os.environ.get("COLUMNS") or 0) or 200
-            out = join_composed(theirs, out, cfg, columns)
     except Exception as e:
         log_error(e)
         if opts.get("format") == "json":
-            out = json.dumps({"ok": False, "line": "ctempo: error", "segments": [{"text": "ctempo: error", "tone": "dim"}]})
+            mod = (cfg or config.DEFAULTS)["mod"]
+            out = json.dumps(
+                {"ok": False, "line": "ctempo: error", "segments": [{"text": "ctempo: error", "tone": "dim"}],
+                 "surfaces": mod.get("surfaces", ["desktop"]), "refresh_s": mod.get("refresh_s", 60)},
+                separators=(",", ":"),
+            )
         else:
             out = "ctempo: error"
-    try:
-        sys.stdout.write(out + "\n")
-        sys.stdout.flush()
-    except Exception:
-        pass
+    if composer is not None:
+        # Outside the main try: whatever failed above, the user's own line still shows.
+        try:
+            timeout = float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0
+            theirs = composer.finish(t0 + timeout)
+            out = join_composed(theirs, out, cfg, columns_env())
+        except Exception as e:
+            log_error(e, "compose")
+    write_out(out)
     return 0
+
+
+def columns_env():
+    try:
+        n = int(float((os.environ.get("COLUMNS") or "").strip() or 0))
+    except (ValueError, OverflowError):
+        n = 0
+    return n if n > 0 else 200
+
+
+def write_out(out):
+    """UTF-8 bytes whatever the locale: Claude Code reads stdout as UTF-8."""
+    try:
+        data = (out + "\n").encode("utf-8", "replace")
+        buf = getattr(sys.stdout, "buffer", None)
+        if buf is not None:
+            buf.write(data)
+            buf.flush()
+        else:
+            sys.stdout.write(out + "\n")
+            sys.stdout.flush()
+    except Exception as e:
+        log_error(e, "write")
 
 
 def _brief(v):

@@ -7,7 +7,7 @@
 // statusLine runs: each call records a sample (source "mod").
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
+import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-code'
 
 import type { Tone, View } from '../types'
 
@@ -16,7 +16,7 @@ const view = atom({ plugin: 'ctempo', key: 'view' } as const, null)
 const RUN_TIMEOUT_MS = 10_000
 const REFRESH_MS = 60_000
 
-type Runtime = { python: string; entry: string }
+type Runtime = { python: string; entry: string; home: string }
 
 // Desktop paints theme keys; the terminal maps them to its palette.
 const TONE: Record<Tone, { dimColor?: boolean; color?: string }> = {
@@ -47,18 +47,38 @@ export function toPayload(sessionId: string, limits: readonly SessionRateLimit[]
 // Module state: a reload starts it over, which is what we want.
 let runtime: Runtime | null = null
 let running = false
+let timer: Timer | null = null
+let periodMs = REFRESH_MS
 // A refresh asked for while one runs: the newest limits win, null = re-read.
 let queued: readonly SessionRateLimit[] | null | undefined
 
+// The same rule as the CLI: an empty CTEMPO_HOME counts as unset.
 async function loadRuntime($: EngineInterface): Promise<Runtime> {
   if (runtime !== null) return runtime
-  const home = (await $.env.get('CTEMPO_HOME')) ?? `${await $.env.get('HOME')}/.claude-tempo`
+  let home = await $.env.get('CTEMPO_HOME')
+  if (!home) {
+    const userHome = await $.env.get('HOME')
+    if (!userHome) throw new Error('HOME is unset: set CTEMPO_HOME, or run `ctempo install --apply`')
+    home = `${userHome}/.claude-tempo`
+  }
   const parsed = JSON.parse(await $.fs.read(`${home}/runtime.json`)) as Partial<Runtime>
   if (typeof parsed.python !== 'string' || typeof parsed.entry !== 'string') {
     throw new Error('runtime.json has no python/entry; run `ctempo install --apply`')
   }
-  runtime = { python: parsed.python, entry: parsed.entry }
+  runtime = { python: parsed.python, entry: parsed.entry, home }
   return runtime
+}
+
+// The CLI's mod.refresh_s, clamped; re-arms the timer when it changes.
+function rearm($: EngineInterface, seconds: unknown) {
+  const s = typeof seconds === 'number' && Number.isFinite(seconds) ? seconds : 60
+  const ms = Math.min(3600, Math.max(15, s)) * 1000
+  if (ms === periodMs || timer === null) return
+  timer.cancel()
+  periodMs = ms
+  timer = $.clock.every(periodMs, () => {
+    void refresh($)
+  })
 }
 
 async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] | null) {
@@ -67,15 +87,24 @@ async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] |
   const payload = toPayload(await $.session.id(), current)
   const result = await $.process.run(
     [rt.python, '-I', '-S', rt.entry, 'statusline', '--source', 'mod', '--format', 'json'],
-    { stdin: JSON.stringify(payload), timeoutMs: RUN_TIMEOUT_MS },
+    { stdin: JSON.stringify(payload), timeoutMs: RUN_TIMEOUT_MS, env: { CTEMPO_HOME: rt.home } },
   )
-  const parsed = JSON.parse(result.stdout) as View
+  if (result.exitCode !== 0 || result.stdout.trim() === '') {
+    const why = result.stderr.trim().split('\n').pop()
+    throw new Error(why || `ctempo exited ${result.exitCode}`)
+  }
+  const parsed = JSON.parse(result.stdout) as Partial<View>
+  if (!Array.isArray(parsed.segments)) {
+    throw new Error(typeof parsed.line === 'string' ? parsed.line : 'unexpected output from ctempo')
+  }
+  const segments = parsed.segments
   await update($, view, () => ({
-    line: parsed.line,
-    segments: parsed.segments,
-    surfaces: parsed.surfaces,
-    refresh_s: parsed.refresh_s,
+    line: typeof parsed.line === 'string' ? parsed.line : '',
+    segments,
+    surfaces: Array.isArray(parsed.surfaces) ? parsed.surfaces : ['desktop'],
+    refresh_s: typeof parsed.refresh_s === 'number' ? parsed.refresh_s : 60,
   }))
+  rearm($, parsed.refresh_s)
 }
 
 async function refresh($: EngineInterface, limits: readonly SessionRateLimit[] | null = null) {
@@ -114,7 +143,7 @@ export const register: Register = (on) => {
     $.clock.after(0, () => {
       void refresh($)
     })
-    $.clock.every(REFRESH_MS, () => {
+    timer = $.clock.every(periodMs, () => {
       void refresh($)
     })
     return started

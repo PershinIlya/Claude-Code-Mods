@@ -13,7 +13,9 @@ Only the distribution over the hours of the week matters for the prior.
 
 import datetime
 import json
+import math
 import os
+import stat
 import time
 
 from . import config, profile
@@ -36,7 +38,13 @@ def _ts(s):
 
 
 def _n(v):
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 0.0
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0.0
+    try:
+        f = float(v)
+    except OverflowError:
+        return 0.0
+    return f if math.isfinite(f) and f > 0 else 0.0
 
 
 def cost_weight(usage):
@@ -48,6 +56,25 @@ def cost_weight(usage):
         + W_CACHE_READ * _n(usage.get("cache_read_input_tokens"))
         + W_OUTPUT * _n(usage.get("output_tokens"))
     )
+
+
+def _message(line):
+    """(id, ts, weight) of an assistant line, None to skip, "bad" if broken.
+    Nothing else from the line survives this function."""
+    try:
+        d = json.loads(line)
+    except ValueError:
+        return "bad"
+    if not isinstance(d, dict) or d.get("type") != "assistant":
+        return None
+    msg = d.get("message")
+    if not isinstance(msg, dict):
+        return None
+    key = msg.get("id") or d.get("requestId") or d.get("uuid")
+    ts = _ts(d.get("timestamp"))
+    if not isinstance(key, str) or not key or ts is None:
+        return None
+    return key, ts, cost_weight(msg.get("usage"))
 
 
 def scan(root, since, now):
@@ -65,11 +92,23 @@ def scan(root, since, now):
                 continue
             path = os.path.join(dirpath, fn)
             try:
-                if os.stat(path).st_mtime < since:
+                # Non-blocking open, then check it is a regular file: a FIFO
+                # named *.jsonl must not hang the scan.
+                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            except OSError:
+                continue
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode):
+                    os.close(fd)
+                    continue
+                if st.st_mtime < since:
+                    os.close(fd)
                     stats["files_skipped_old"] += 1
                     continue
-                f = open(path, "rb")
+                f = os.fdopen(fd, "rb")
             except OSError:
+                os.close(fd)
                 continue
             stats["files"] += 1
             with f:
@@ -78,20 +117,16 @@ def scan(root, since, now):
                         continue
                     stats["lines"] += 1
                     try:
-                        d = json.loads(line)
-                    except ValueError:
+                        found = _message(line)
+                    except Exception:  # any malformed line is skipped, never fatal
+                        found = "bad"
+                    if found == "bad":
                         stats["bad_lines"] += 1
                         continue
-                    if not isinstance(d, dict) or d.get("type") != "assistant":
+                    if found is None:
                         continue
-                    msg = d.get("message")
-                    if not isinstance(msg, dict):
-                        continue
-                    ts = _ts(d.get("timestamp"))
-                    weight = cost_weight(msg.get("usage"))
-                    key = msg.get("id") or d.get("requestId") or d.get("uuid")
-                    del d, msg  # nothing else from the line is kept
-                    if ts is None or ts < since or ts > now + 300 or weight <= 0 or not key:
+                    key, ts, weight = found
+                    if ts < since or ts > now + 300 or weight <= 0:
                         continue
                     prev = best.get(key)
                     if prev is not None:

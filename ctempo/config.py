@@ -7,6 +7,7 @@ newer config does not break an older ctempo.
 
 import copy
 import json
+import math
 import os
 
 FIVE_HOUR = "five_hour"
@@ -109,7 +110,7 @@ def _compatible(default, value):
     if isinstance(default, bool):
         return isinstance(value, bool)
     if isinstance(default, (int, float)):
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
     if isinstance(default, str):
         return isinstance(value, str)
     if isinstance(default, list):
@@ -129,17 +130,93 @@ def _merge(base, over):
     return base
 
 
-def load(path=None):
-    """Defaults merged with the user's config file. Never raises."""
-    cfg = copy.deepcopy(DEFAULTS)
-    try:
-        with open(path or config_path(), encoding="utf-8") as f:
-            user = json.load(f)
-        if isinstance(user, dict):
-            _merge(cfg, user)
-    except (OSError, ValueError):
-        pass
+# Allowed ranges; a value outside is clamped (a typo must not break the line).
+RANGES = {
+    ("rate_window_min",): (2, 120),
+    ("rate_min_samples",): (2, 100),
+    ("rate_min_span_min",): (0.5, 60),
+    ("verdict", "speed_up"): (1.0, 10.0),
+    ("verdict", "slow_down"): (0.05, 1.0),
+    ("tail", "five_hour_min"): (0, 300),
+    ("tail", "seven_day_hours"): (0, 168),
+    ("min_free",): (0, 100),
+    ("profile", "half_life_days"): (0.5, 365),
+    ("profile", "floor"): (0, 1),
+    ("profile", "prior_strength"): (0, 100),
+    ("profile", "prior_strength_uniform"): (0, 100),
+    ("profile", "bootstrap_days"): (1, 365),
+    ("profile", "max_gap_hours"): (0.1, 48),
+    ("profile", "active_hours_lookback"): (1, 168),
+    ("reset", "drop_points"): (1, 100),
+    ("reset", "drop_samples"): (1, 10),
+    ("display", "max_width"): (20, 400),
+    ("compose", "timeout_ms"): (0, 10000),
+    ("mod", "refresh_s"): (15, 3600),
+    ("retention_days",): (7, 3650),
+    ("write_min_interval_s",): (0, 3600),
+    ("db_timeout_ms",): (10, 5000),
+}
+CHOICES = {("display", "symbols"): ("unicode", "ascii"), ("display", "color"): ("auto", "never", "always")}
+
+
+def _override(ov):
+    """A valid profile override, or None."""
+    if not isinstance(ov, dict):
+        return None
+    days = ov.get("work_days", [0, 1, 2, 3, 4])
+    wake = ov.get("wake_hours", [8, 23])
+    off = ov.get("off_day_factor", 0.5)
+    mode = ov.get("mode", "prior")
+    ok = (
+        isinstance(days, list)
+        and all(isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days)
+        and isinstance(wake, list)
+        and len(wake) == 2
+        and all(isinstance(h, int) and not isinstance(h, bool) and 0 <= h <= 24 for h in wake)
+        and isinstance(off, (int, float))
+        and not isinstance(off, bool)
+        and math.isfinite(off)
+        and 0 <= off <= 1
+        and mode in ("prior", "replace")
+    )
+    return {"work_days": days, "wake_hours": wake, "off_day_factor": float(off), "mode": mode} if ok else None
+
+
+def normalize(cfg):
+    for keys, (lo, hi) in RANGES.items():
+        d = cfg
+        for k in keys[:-1]:
+            d = d[k]
+        d[keys[-1]] = min(hi, max(lo, d[keys[-1]]))
+    for keys, allowed in CHOICES.items():
+        d = cfg
+        for k in keys[:-1]:
+            d = d[k]
+        if d[keys[-1]] not in allowed:
+            d[keys[-1]] = DEFAULTS[keys[0]][keys[-1]]
+    cmd = cfg["compose"].get("command")
+    cfg["compose"]["command"] = cmd if isinstance(cmd, str) and cmd.strip() else None
+    if not isinstance(cfg["compose"].get("separator"), str):
+        cfg["compose"]["separator"] = "  "
+    cfg["profile"]["override"] = _override(cfg["profile"].get("override"))
+    cfg["mod"]["surfaces"] = [x for x in cfg["mod"]["surfaces"] if isinstance(x, str)] or ["desktop"]
     return cfg
+
+
+def load(path=None):
+    """Defaults merged with the user's config file, validated. Never raises."""
+    try:
+        cfg = copy.deepcopy(DEFAULTS)
+        try:
+            with open(path or config_path(), encoding="utf-8") as f:
+                user = json.load(f)
+            if isinstance(user, dict):
+                _merge(cfg, user)
+        except (OSError, ValueError):
+            pass
+        return normalize(cfg)
+    except Exception:  # a pathological file (say, nested 200k deep): defaults
+        return copy.deepcopy(DEFAULTS)
 
 
 def target(cfg, window):

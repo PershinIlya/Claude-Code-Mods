@@ -27,29 +27,38 @@ function ran(stdout: string): { value: ProcessRunResult } {
   return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
 }
 
-type Options = { runtime?: string | null; limits?: SessionRateLimit[] }
+type Options = {
+  runtime?: string | null
+  limits?: SessionRateLimit[]
+  env?: Record<string, string>
+  run?: () => { value: ProcessRunResult }
+}
 
 function stub(on: StubOn, options: Options = {}) {
   const runs: Run[] = []
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { HOME: '/home/u' })
+  mock.env(on, options.env ?? { HOME: '/home/u' })
+  const reads: string[] = []
   const runtime =
     options.runtime === undefined
       ? JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/ctempo' })
       : options.runtime
-  on('fs.read', () => (runtime === null ? { deny: 'ENOENT: no such file' } : { value: runtime }))
+  on('fs.read', (_$, e) => {
+    reads.push(String((e as { path?: string }).path))
+    return runtime === null ? { deny: 'ENOENT: no such file' } : { value: runtime }
+  })
   on('session.usage', () => ({
     value: { startedAt: NOW - 60_000, context: { window: 200_000 }, rateLimits: options.limits ?? LIMITS },
   }))
   on('session.id', () => ({ value: 'sess-1' }))
   on('process.run', (_$, e) => {
     runs.push(e)
-    return ran(JSON.stringify(CLI))
+    return options.run?.() ?? ran(JSON.stringify(CLI))
   })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
-  return { runs, clock }
+  return { runs, clock, reads }
 }
 
 function band(surface: RenderSurface): MountTarget {
@@ -138,4 +147,51 @@ test('explains itself when ctempo is not installed', async ($, on) => {
   expect(runs.length).toBe(0)
   const ui = await $.ui.mount(band('desktop'))
   expect(await ui.find({ type: 'Text', text: /^ctempo: / })).toMatchObject({ props: { dimColor: true } })
+})
+
+test('shows why when the CLI fails, instead of a JSON parse error', async ($, on) => {
+  const { clock } = stub(on, {
+    run: () => ({
+      value: {
+        exitCode: 2,
+        stdout: '',
+        stderr: "python3: can't open file '/old/path/bin/ctempo': [Errno 2] No such file or directory\n",
+        isStdoutTruncated: false,
+        isStderrTruncated: false,
+      },
+    }),
+  })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: /can't open file/ })).toBeDefined()
+})
+
+test('an error reply without surfaces still draws on Desktop', async ($, on) => {
+  const { clock } = stub(on, {
+    run: () => ran(JSON.stringify({ ok: false, line: 'ctempo: error', segments: [{ text: 'ctempo: error', tone: 'dim' }] })),
+  })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: 'ctempo: error' })).toBeDefined()
+})
+
+test('an empty CTEMPO_HOME counts as unset, and the CLI gets the same home', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: '' } })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(reads[0]).toBe('/home/u/.claude-tempo/runtime.json')
+  expect((runs[0]?.init as { env?: Record<string, string> } | undefined)?.env).toEqual({ CTEMPO_HOME: '/home/u/.claude-tempo' })
+})
+
+test('follows mod.refresh_s from the CLI', async ($, on) => {
+  const { runs, clock } = stub(on, { run: () => ran(JSON.stringify({ ...CLI, refresh_s: 300 })) })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(runs.length).toBe(1)
+  await clock.advance(60_000)
+  expect(runs.length).toBe(1)
+  await clock.advance(240_000)
+  expect(runs.length).toBe(2)
 })

@@ -95,6 +95,26 @@ class Bootstrap(TempHome):
         self.assertLess(tue3, 0.001)
         self.assertEqual(prof.prior_meta["messages"], 26)
 
+    def test_hostile_lines_and_a_fifo_do_not_stop_the_scan(self):
+        proj = os.path.join(self.root, "-Users-me-work")
+        with open(os.path.join(proj, "weird.jsonl"), "w") as f:
+            base = json.loads(assistant(MON + D + 10 * H, "x"))
+            for bad in ({"id": ["a"]}, {"id": {"k": 1}}):
+                d = json.loads(json.dumps(base))
+                d["message"].update(bad)
+                f.write(json.dumps(d) + "\n")
+            d = json.loads(json.dumps(base))
+            d["message"]["usage"]["input_tokens"] = 10 ** 400
+            d["message"]["id"] = "msg_huge"
+            f.write(json.dumps(d) + "\n")
+            f.write('{"type":"assistant","usage":' + "[" * 100000 + "]" * 100000 + "}\n")
+        os.mkfifo(os.path.join(proj, "pipe.jsonl"))
+        t = time.time()
+        events, stats = transcripts.scan(self.root, MON - D, self.now)
+        self.assertLess(time.time() - t, 5)
+        self.assertGreaterEqual(stats["bad_lines"], 2)
+        self.assertEqual(stats["messages"], 27)  # 26 good + msg_huge (its huge count ignored)
+
     def test_cost_weight_and_stream_dedupe(self):
         events, stats = transcripts.scan(self.root, MON - D, self.now)
         self.assertEqual(stats["duplicates"], 1)
