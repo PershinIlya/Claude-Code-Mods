@@ -65,11 +65,13 @@ def rate(r):
 
 
 def hm(ts):
-    return time.strftime("%H:%M", time.localtime(ts))
+    # To the nearest minute: a window keeps the resets_at of its first
+    # reading, which may have wobbled a few seconds early (D-08).
+    return time.strftime("%H:%M", time.localtime(ts + 30))
 
 
 def dhm(ts):
-    return time.strftime("%a %H:%M", time.localtime(ts))
+    return time.strftime("%a %H:%M", time.localtime(ts + 30))
 
 
 def _glyph(verdict, s):

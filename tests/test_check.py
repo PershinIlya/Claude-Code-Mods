@@ -259,12 +259,41 @@ class Check(TempHome):
                 self.assertFalse(res["exchange_rate_assumed"])  # nothing was priced
                 self.assertNotIn("priced at", tight[0])
                 self.assertIn("5h burn rate not known yet", res["reasons"])
-            else:
-                states.add("known")
-                self.assertIsNotNone(res["weekly_cost_of_5h_leftover"])
+            elif res["five_hour"]["spare"] > 0:
+                states.add("priced")
+                self.assertGreater(res["weekly_cost_of_5h_leftover"], 0)
                 self.assertTrue(res["exchange_rate_assumed"])
                 self.assertIn("priced at 50 weekly points per 5h window", tight[0])
-        self.assertEqual(states, {"unknown", "known"})
+            else:
+                # Review 8 (delta-core#2): once it runs dry before the reset
+                # nothing is left to price, but a leftover of 0 was "priced at
+                # 50" and the JSON said exchange_rate_assumed.
+                states.add("nothing left")
+                self.assertEqual(res["weekly_cost_of_5h_leftover"], 0)
+                self.assertFalse(res["exchange_rate_assumed"])
+                self.assertEqual(tight[0], "the weekly budget is already tight")
+        self.assertEqual(states, {"unknown", "priced", "nothing left"})
+
+    def test_a_5h_leftover_of_0_is_not_priced(self):
+        # Review 8 (delta-core#2): target_5h 70, idle at 75 in the tail (spare
+        # 0) while the week runs dry on its own. Nothing was priced, yet the
+        # JSON said exchange_rate_assumed and the reason "priced at 50".
+        self.cfg["target_5h"] = 70
+        r7 = int(MON + 7 * D)
+        now = MON + 4 * D
+        self.known("s1")
+        for i in range(30, -1, -1):
+            self.feed(now - i * H, week=(90 - i, r7))
+        r5 = int(now + 40 * M)
+        for i in range(0, 21, 2):
+            self.feed(now - (20 - i) * M + 1, five=(75, r5), week=(90, r7))
+        res = self.result(now)
+        self.assertIsNone(res["exchange_rate"])
+        self.assertEqual(res["five_hour"]["spare"], 0)
+        self.assertEqual(res["weekly_cost_of_5h_leftover"], 0)
+        self.assertFalse(res["exchange_rate_assumed"])
+        self.assertIn("the weekly budget is already tight", res["reasons"])
+        self.assertFalse([r for r in res["reasons"] if "priced at" in r or "leftover" in r], res["reasons"])
 
     def test_no_5h_rate_yet_is_no_go_from_a_new_session(self):
         # Review 5 (C-commands-config-mod#0, X-integration#0): the same from a
@@ -393,6 +422,31 @@ class Check(TempHome):
         self.assertEqual(commands.views(self.st, self.cfg, now)[0]["severity"], "warn")
         self.assertEqual(f["spare"], 0)
         self.assertIn("5h window is spending faster than its 80% target allows (slow down)", res["reasons"])
+
+    def test_a_fractional_target_is_printed_as_set(self):
+        # Review 8 (delta-core#3): targets were printed with %.0f, so a target
+        # of 99.5 read "at or above its 100% target", and a go reason said
+        # "below its 100% target", a suffix only a target below 100 gets.
+        self.cfg["target_5h"] = 99.5
+        self.cfg["target_week"] = 90.4
+        now = MON + 3 * D + 10 * H
+        r5 = int(now + 40 * M)
+        r7 = int(MON + 7 * D)
+        for used, reason in ((30, "5h window ends in 40m with ~70% projected unused below its 99.5% target"),
+                             (99.6, "5h window is at or above its 99.5% target")):
+            with self.subTest(used=used):
+                self.fresh_store("frac-%s.db" % used)
+                for i in range(0, 21, 2):  # idle for 20 minutes
+                    self.feed(now - (20 - i) * M, five=(used, r5), week=(20, r7))
+                self.assertIn(reason, self.result(now)["reasons"])
+        v5, vw, _ = commands.views(self.st, self.cfg, now)
+        out = io.StringIO()
+        with mock.patch.object(commands.time, "time", return_value=now), contextlib.redirect_stdout(out):
+            commands._print_5h(v5, self.cfg)
+            commands._print_week(vw, None, now)
+        self.assertIn("(target 99.5%)", out.getvalue())
+        self.assertIn("= (99.5 - 99.6) /", out.getvalue())
+        self.assertIn("(target 90.4%)", out.getvalue())
 
     def week_in_its_tail(self, levels, five=None):
         """A week that reads `levels` (oldest first) hour by hour up to now,

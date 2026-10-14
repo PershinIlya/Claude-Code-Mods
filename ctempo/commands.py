@@ -97,7 +97,7 @@ def _print_5h(v, cfg):
     if not v.get("present"):
         return
     t = v["target"]
-    print("  used           %5.1f%%   (target %.0f%%)" % (v["used"], t))
+    print("  used           %5.1f%%   (target %g%%)" % (v["used"], t))
     print("  resets         %s, in %s" % (render.hm(v["reset_ts"]), dur(v["reset_ts"] - time.time())))
     if v.get("rate") is None:
         # The fit waits for min_span after the window's start, or after its
@@ -113,7 +113,7 @@ def _print_5h(v, cfg):
                "interpolated": "least squares over the last %s min, mostly interpolated between "
                                "sparse readings" % cfg["rate_window_min"]}
         print("  burn rate      %5.1f %%/h  %s" % (v["rate"], how.get(v["rate_source"], "")))
-    print("  allowed rate   %5.1f %%/h  = (%.0f - %.1f) / %.2f h" % (v["allowed"], t, v["used"], v["remaining_h"]))
+    print("  allowed rate   %5.1f %%/h  = (%g - %.1f) / %.2f h" % (v["allowed"], t, v["used"], v["remaining_h"]))
     if v.get("multiplier") is not None:
         m = v["multiplier"]
         print(
@@ -132,7 +132,7 @@ def _print_week(v, ppw, now):
     if not v.get("present"):
         return
     t = v["target"]
-    print("  used           %5.1f%%   (target %.0f%%)" % (v["used"], t))
+    print("  used           %5.1f%%   (target %g%%)" % (v["used"], t))
     print("  resets         %s, in %s" % (render.dhm(v["reset_ts"]), dur(v["reset_ts"] - now)))
     print("  profile        %.0f%% of a week's expected spend is still ahead (E = %.3f, %s)" % (v["E"] * 100, v["E"], v["profile_source"]))
     print(
@@ -285,21 +285,23 @@ def cmd_profile(args, cfg):
             print("Prior: none (run `ctempo bootstrap`)")
         print("Learned from usage %%: %d hours folded in, typical week %s" % (
             prof.learned_hours, ("%.0f%% of the limit" % info["weekly_total"]) if info["weekly_total"] else "unknown yet"))
-        _surplus(st, cfg, w, now)
+        _surplus(st, cfg, w, awake, flat, now)
     finally:
         st.close()
     return 0
 
 
-def _surplus(st, cfg, w, now):
+def _surplus(st, cfg, w, awake, flat, now):
     """Where surplus usually sits: the lightest awake hours, and how far
     behind pace past weeks were on each day before their reset."""
     blocks = []
     for d in range(7):
         for h in range(0, 24, 3):
-            s = sum(w[d * 24 + h + k] for k in range(3))
-            blocks.append((s, d, h))
-    awake_blocks = sorted(b for b in blocks if b[0] > 1.5 / 168)[:3]
+            hours = [d * 24 + h + k for k in range(3)]
+            if all(awake[b] for b in hours):  # a block half asleep only looks light
+                blocks.append((sum(w[b] for b in hours), d, h))
+    # A flat profile has no lightest block: any three would be a tie.
+    awake_blocks = [] if flat else sorted(blocks)[:3]
     if awake_blocks:
         print("Lightest awake blocks: " + ", ".join("%s %02d-%02d" % (profile.DAYS[d], h, h + 3) for _, d, h in awake_blocks))
     closed = _closed(st, SEVEN_DAY, now - 56 * 86400)
@@ -319,7 +321,13 @@ def _surplus(st, cfg, w, now):
             sums[k].append(used - on)
     parts = ["%s %+.0f" % ("reset" if k == 0 else "-%dd" % k, sum(v) / len(v)) for k, v in enumerate(sums) if v]
     print("Points vs pace, averaged over %d past weeks: %s" % (len(closed), ", ".join(reversed(parts))))
-    print("  (negative = surplus building up; the reset column is what expired)")
+    # Each column is the level minus the on-pace level for the target, so at
+    # the reset it is peak - target: what expired (100 - peak) only at 100.
+    if tgt >= 100.0:
+        note = "the reset column is what expired"
+    else:
+        note = "the reset column is the peak versus your %g%% target; `ctempo report` shows what expired" % tgt
+    print("  (negative = surplus building up; %s)" % note)
 
 
 # -- check -----------------------------------------------------------------------------
@@ -367,14 +375,14 @@ def _held(name, v):
     or above a target below 100, or spending faster than its target allows
     (slow down). The line shows both yellow or red (D-16)."""
     if pace.over_target(v):
-        return "%s window is at or above its %.0f%% target" % (name, v["target"])
+        return "%s window is at or above its %g%% target" % (name, v["target"])
     if v["verdict"] == "slow_down":
-        return "%s window is spending faster than its %.0f%% target allows (slow down)" % (name, v["target"])
+        return "%s window is spending faster than its %g%% target allows (slow down)" % (name, v["target"])
     return None
 
 
 def _below(target):
-    return " below its %.0f%% target" % target if target < 100.0 else ""
+    return " below its %g%% target" % target if target < 100.0 else ""
 
 
 def check_result(st, cfg, now, min_free, tail, max_age):
@@ -425,7 +433,8 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     week_cost = None
     if f["present"] and not rate_unknown:
         week_cost = f["spare"] * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
-    assumed = week_cost is not None and ppw is None
+    # Only a positive leftover is priced: 0 costs 0 at any rate (D-20).
+    assumed = bool(week_cost) and ppw is None
     # Without a cost (no 5h window, or no rate yet) this asks whether the
     # week is tight on its own.
     week_ok = (not k["present"]) or (k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= tgtw)
@@ -434,8 +443,12 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     if f["in_tail"] and held5:
         reasons.append(held5)
     if f["present"] and f["in_tail"] and not week_ok:
-        reasons.append("5h leftover would eat into a weekly budget that is already tight" + (
-            " (exchange rate not known yet: priced at %.0f weekly points per 5h window)" % ASSUMED_EXCHANGE_RATE if assumed else ""))
+        if f["spare"] == 0:  # no leftover: the week is tight on its own
+            reasons.append("the weekly budget is already tight")
+        else:
+            reasons.append("5h leftover would eat into a weekly budget that is already tight" + (
+                " (exchange rate not known yet: priced at %.0f weekly points per 5h window)" % ASSUMED_EXCHANGE_RATE
+                if assumed else ""))
     # Harvesting weekly surplus must not starve your own 5h window: it needs
     # room now and at the current burn rate.
     five_room = pace.spare(room5, min_free) and (not f["present"] or leftover_ok)

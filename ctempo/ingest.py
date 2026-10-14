@@ -10,11 +10,14 @@ Rules, in order (see DECISIONS.md D-05..D-09):
     carries no news and must never move the series.
   * window instance: resets_at within 300 s of the open instance is the same
     window (the epoch wobbles a few seconds between renders); a later
-    resets_at rolls the window over.
+    resets_at rolls the window over (at about the same level, the reset
+    moved: the old instance closes as a shift).
   * reset detection: a fresh reading at least `drop_points` below the
     instance's max, or with an earlier resets_at, is an ANOMALY. Only when
     `drop_samples` consecutive fresh readings agree is it a reset; one is
-    enough to undo a later resets_at from the same session.
+    enough to undo a later resets_at from the same session, unless that
+    reading sits `drop_points` or more above the max of the instance the
+    later resets_at opened.
   * write throttle: a sample identical to the last stored one within
     `write_min_interval_s` is not stored again; heartbeats are stored at most
     once per interval across all sessions.
@@ -184,7 +187,11 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
             # later reset was undone, it must not redo the rollover.
             return "stale"
         # The window rolled over (or reset early): close and open the next one.
-        store.close_instance(inst["id"], min(now, inst["reset_ts"]), "rollover")
+        # At about the same level (closer to the old level than to 0, as in
+        # learning, D-13) the reset moved later: that window never ended.
+        m = inst["max_used"]
+        moved = used > m - min(drop_pts, max(1.0, 0.5 * m))
+        store.close_instance(inst["id"], min(now, inst["reset_ts"]), "shift" if moved else "rollover")
         inst = store.new_instance(w, reset - DURATION[w], reset, now, used)
         store.add_sample(now, w, used, reset, source, session_id, FIRST if first_seen else FRESH, inst["id"])
         return "rollover"
@@ -231,9 +238,10 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
 def _undoes_rollover(store, w, inst, reset, source, session_id):
     """Whether the open instance came from this session's own later resets_at,
     and this reading is from the window that the instance's rollover closed."""
-    # A rollover closes the old window at the moment it opens the new one.
+    # A rollover closes the old window at the moment it opens the new one, as
+    # a shift when the level held (a moved reset).
     closed = store.db.execute(
-        "SELECT 1 FROM windows WHERE window=? AND id!=? AND close_reason='rollover' "
+        "SELECT 1 FROM windows WHERE window=? AND id!=? AND close_reason IN ('rollover', 'shift') "
         "AND ABS(reset_ts - ?) <= ? AND closed_at >= ? LIMIT 1",
         (w, inst["id"], reset, RESET_JITTER, inst["first_seen"]),
     ).fetchone()
@@ -247,17 +255,24 @@ def _undoes_rollover(store, w, inst, reset, source, session_id):
 
 def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted):
     need = max(1, int(cfg["reset"]["drop_samples"]))
-    if shifted and _undoes_rollover(store, w, inst, reset, source, session_id):
+    look = need - 1  # other sessions' pending readings are gathered either way
+    if (
+        shifted
+        and used < inst["max_used"] + float(cfg["reset"]["drop_points"])
+        and _undoes_rollover(store, w, inst, reset, source, session_id)
+    ):
         # One fresh reading did the bogus rollover, so one undoes it: a
         # session that is maxed or idle repeats its real reading only as
         # heartbeats, and the second fresh one never came (D-10). Another
-        # session still needs drop_samples (it may lag a real early reset).
+        # session still needs drop_samples (it may lag a real early reset),
+        # and so does a reading drop_points above the instance: a real early
+        # reset looks like that, and two processes can share a session id.
         need = 1
     # The previous fresh-or-anomaly readings of this window, newest first.
     rows = store.db.execute(
         "SELECT id, ts, used_pct, resets_at, flag, window_id FROM samples "
         "WHERE window=? AND flag IN (?, ?, ?) ORDER BY ts DESC, id DESC LIMIT ?",
-        (w, FRESH, FIRST, ANOMALY, need - 1),
+        (w, FRESH, FIRST, ANOMALY, look),
     ).fetchall()
     run = []
     for r in rows:

@@ -212,6 +212,60 @@ class Record(TempHome):
         self.assertEqual(self.feed(self.R5 + 800, five=(6, r), sid="a")[FIVE_HOUR], "anomaly")
         self.assertEqual(self.feed(self.R5 + 900, five=(7, r), sid="a")[FIVE_HOUR], "reset_reopen")
 
+    def test_a_shared_session_id_cannot_undo_a_real_early_reset(self):
+        # Review 8 (delta-core#0): two terminals on one conversation (`claude
+        # -c` without --fork-session) share a session id. One sees a real
+        # early reset; the other, idle, re-renders the old window's 90% every
+        # minute. That counted as the opener undoing a bogus later reset: the
+        # line flipped back to the dead window on every render pair.
+        t = MON + H
+        self.feed(t, five=(80, self.R5), sid="a")
+        self.feed(t + 60, five=(90, self.R5), sid="a")
+        r2 = int(t + 120 + 5 * H)
+        self.assertEqual(self.feed(t + 120, five=(1, r2), sid="a")[FIVE_HOUR], "rollover")
+        for k in range(4):
+            self.assertEqual(self.feed(t + 150 + k * 60, five=(90, self.R5), sid="a")[FIVE_HOUR], "anomaly")
+            self.assertEqual(self.feed(t + 180 + k * 60, five=(2 + k, r2), sid="a")[FIVE_HOUR], "fresh")
+        w = self.windows(FIVE_HOUR)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R5, "rollover"), (r2, None)])
+        self.assertEqual(w[1]["max_used"], 5)
+        self.assertEqual(pace.five_hour(self.st, t + 400, self.cfg)["reset_ts"], r2)
+
+    def test_undo_by_its_session_keeps_another_sessions_pending_reading(self):
+        # Review 8 (delta-core#1): after a's bogus later reset, b's real 96 is
+        # pending as an anomaly; a's real 94 then undoes the rollover on its
+        # own, but b's 96 stayed behind in the superseded instance, and the
+        # reopened window showed 94 until the next fresh reading.
+        self.feed(MON + H, five=(50, self.R5), sid="a")
+        self.feed(MON + H + 600, five=(80, self.R5), sid="a")
+        self.feed(MON + H + 900, five=(88, self.R5), sid="b")
+        t = MON + 2 * H
+        self.assertEqual(self.feed(t, five=(90, self.R5 + int(H)), sid="a")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(t + 30, five=(96, self.R5), sid="b")[FIVE_HOUR], "anomaly")
+        self.assertEqual(self.feed(t + 60, five=(94, self.R5), sid="a")[FIVE_HOUR], "reset_reopen")
+        opened = [i for i in self.windows(FIVE_HOUR) if i["closed_at"] is None]
+        self.assertEqual([(i["reset_ts"], i["max_used"]) for i in opened], [(self.R5, 96)])
+        b96 = [r for r in self.rows(FIVE_HOUR) if r[5] == "b" and r[1] == 96]
+        self.assertEqual([(r[3], r[4]) for r in b96], [(FRESH, opened[0]["id"])])
+
+    def test_a_reset_moved_later_at_the_same_level_is_a_shift(self):
+        # Review 8 (long-horizon#3): the weekly resets_at moved 1 h later in
+        # the middle of the window while the level kept rising. Any later
+        # resets_at closed the open window as a rollover, so `report` listed
+        # the running week as finished with 55 phantom unused points.
+        t = MON + 2 * D
+        for k in range(12):
+            self.feed(t + k * 1800, week=(30 + k, self.R7))
+        self.assertEqual(self.feed(t + 12 * 1800, week=(42, self.R7 + int(H)))[SEVEN_DAY], "rollover")
+        for k in range(13, 20):
+            self.feed(t + k * 1800, week=(30 + k, self.R7 + int(H)))
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R7, "shift"), (self.R7 + H, None)])
+        self.assertEqual(w[1]["max_used"], 49)
+        # A real early reset (the level drops) still rolls over.
+        self.feed(t + D, week=(3, self.R7 + int(2 * H)))
+        self.assertEqual([i["close_reason"] for i in self.windows(SEVEN_DAY)], ["shift", "rollover", None])
+
     def test_first_words_of_unknown_sessions_cannot_fake_a_reset(self):
         # ctempo is installed while three sessions are open: every one
         # re-renders at once; two idle ones carry an old, much lower value.
