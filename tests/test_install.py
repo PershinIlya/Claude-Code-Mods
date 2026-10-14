@@ -189,6 +189,126 @@ class Install(unittest.TestCase):
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertFalse(os.path.exists(lp))
 
+    def alt_python(self):
+        """Another absolute path to the same interpreter: forces a repin."""
+        alt = os.path.join(self.dir, "alt-python3")
+        if not os.path.exists(alt):
+            os.symlink(sys.executable, alt)
+        return alt
+
+    # -- review findings ---------------------------------------------------------------
+    def test_reinstall_after_user_changed_statusline_restores_the_new_one(self):
+        before = self.write(SETTINGS)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        obj = json.loads(self.read())
+        obj["statusLine"] = {"type": "command", "command": "~/.claude/statusline-command.sh"}
+        changed = json.dumps(obj, indent=2)
+        with open(self.path, "w") as f:
+            f.write(changed)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        self.assertEqual(install.compose_of(json.loads(self.read())["statusLine"]["command"]), "~/.claude/statusline-command.sh")
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(self.read(), changed)
+        self.assertNotEqual(self.read(), before)
+
+    def test_lost_install_record_never_restores_ctempo_itself(self):
+        s = dict(SETTINGS, statusLine={"type": "command", "command": "~/bin/theirs.sh"})
+        before = self.write(s)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        shutil.rmtree(self.home)  # install.json gone
+        self.run_cmd(install.install, args(self.path, apply=True, python=self.alt_python()))
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        sl = json.loads(self.read())["statusLine"]
+        self.assertFalse(install.is_ours(sl["command"]))
+        self.assertEqual(sl["command"], "~/bin/theirs.sh")
+        self.assertEqual(self.read(), before)
+
+    def test_records_are_per_settings_file(self):
+        a = self.path
+        b = os.path.join(self.dir, "project-settings.json")
+        sa = dict(SETTINGS, statusLine={"type": "command", "command": "~/.claude/my-line.sh", "padding": 0})
+        before_a = self.write(sa)
+        with open(b, "w") as f:
+            f.write(json.dumps({"model": "sonnet"}, indent=2))
+        self.run_cmd(install.install, args(a, apply=True))
+        self.run_cmd(install.install, args(b, apply=True))
+        rc, out = self.run_cmd(install.uninstall, args(None, apply=True))
+        self.assertEqual(rc, 1)
+        self.assertIn("several settings files", out)
+        self.run_cmd(install.uninstall, args(b, apply=True))
+        self.assertEqual(json.loads(install.read_text(b)), {"model": "sonnet"})
+        self.run_cmd(install.uninstall, args(a, apply=True))
+        self.assertEqual(self.read(), before_a)
+
+    def test_crash_after_write_leaves_a_usable_record(self):
+        s = dict(SETTINGS, statusLine={"type": "command", "command": "~/bin/theirs.sh", "padding": 2})
+        before = self.write(s)
+
+        def boom(cmd, env=None):
+            raise RuntimeError("claude died")
+
+        with mock.patch.object(install, "run_claude", boom), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
+            with self.assertRaises(RuntimeError):
+                self.run_cmd(install.install, args(self.path, apply=True, replace=True, no_mod=False))
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(self.read(), before)
+
+    def test_run_claude_reports_instead_of_raising(self):
+        with mock.patch.object(install, "claude_bin", lambda: "/nonexistent/claude"):
+            code, so, se = install.run_claude(["plugin", "list"])
+        self.assertEqual(code, 127)
+
+    def test_two_installs_in_one_second_keep_the_pristine_backup(self):
+        before = self.write({"model": "opus", "permissions": {"allow": ["Bash(ls)"]}}, indent=None)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        self.run_cmd(install.install, args(self.path, apply=True, python=self.alt_python()))
+        backups = sorted(f for f in os.listdir(self.dir) if ".ctempo-backup-" in f)
+        self.assertEqual(len(backups), 2)
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(self.read(), before)
+
+    def test_relative_settings_path_and_missing_file(self):
+        self.write(SETTINGS)
+        cwd = os.getcwd()
+        try:
+            os.chdir(self.dir)
+            self.run_cmd(install.install, args("settings.json", apply=True))
+            other = os.path.join(self.dir, "other")
+            os.makedirs(other)
+            os.chdir(other)
+            self.run_cmd(install.uninstall, args(None, apply=True))
+            self.assertFalse(os.path.exists(os.path.join(other, "settings.json")))
+            self.assertEqual(json.loads(self.read()), SETTINGS)
+            rc, out = self.run_cmd(install.uninstall, args(os.path.join(other, "nope.json"), apply=True))
+            self.assertFalse(os.path.exists(os.path.join(other, "nope.json")))
+        finally:
+            os.chdir(cwd)
+
+    def test_replace_after_compose(self):
+        s = dict(SETTINGS, statusLine={"type": "command", "command": "sleep 5; echo slow"})
+        before = self.write(s)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, replace=True))
+        self.assertIn("REPLACE", out)
+        self.assertIsNone(install.compose_of(json.loads(self.read())["statusLine"]["command"]))
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(self.read(), before)
+
+    def test_crlf_and_mode_survive(self):
+        raw = b'{\r\n  "model": "opus"\r\n}\r\n'
+        with open(self.path, "wb") as f:
+            f.write(raw)
+        os.chmod(self.path, 0o600)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        with open(self.path, "rb") as f:
+            mid = f.read()
+        self.assertNotIn(b"\n", mid.replace(b"\r\n", b""))  # every newline still CRLF
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), raw)
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+
     def test_probe_and_command_quoting(self):
         ok, ver, sq, ms, note = install.probe(sys.executable)
         self.assertTrue(ok, note)
