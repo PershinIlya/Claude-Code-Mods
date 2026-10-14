@@ -4,6 +4,7 @@ These fail loud (they are run by hand), unlike the statusline hot path.
 """
 
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -144,11 +145,16 @@ def _print_week(v, ppw, now):
         # until the level moves (D-15).
         why = ("no timed reading yet" if v["lookback_start"] >= now
                else "the level has not moved since the first timed reading, %s" % render.dhm(v["lookback_start"]))
+    if v["intensity_source"] in ("typical", "assumed"):
+        # Nor could the whole window stand in (D-15): it is still at 0 after
+        # a cut lookback (no news either), or too little of it has passed.
+        why += ("; the window is still at 0%" if v["lookback_cut"] and v["used"] <= 0
+                else "; the window is too new, opened %s" % render.dhm(v["start_ts"]))
     src = {
         "recent": "last %s: spent %.1f pts, profile expected %.1f" % (dur(now - v["lookback_start"]), v["lookback_actual"], v["lookback_expected"]),
         "window": "whole window so far (%s)" % why,
-        "typical": "your typical week (no recent data)",
-        "assumed": "assumed (no data yet)",
+        "typical": "your typical week (%s)" % why,
+        "assumed": "assumed (%s)" % why,
     }
     print("  intensity      %5.2f     %s" % (v["intensity"], src.get(v["intensity_source"], "")))
     if v.get("dry_ts"):
@@ -340,6 +346,16 @@ def parse_tail(spec, cfg):
     return tail
 
 
+def parse_min_free(value, cfg):
+    """--min-free (default: the config's), clamped to the config's range
+    (config.RANGES) like min_free in config.json; nan or inf is an error."""
+    x = float(cfg["min_free"] if value is None else value)
+    if not math.isfinite(x):
+        raise ValueError("bad --min-free %r (want a number of points)" % value)
+    lo, hi = config.RANGES[("min_free",)]
+    return float(min(hi, max(lo, x)))
+
+
 # The weekly price of a 5h leftover while the exchange rate is not known yet:
 # its clamp maximum (D-23), so a tight week still blocks the harvest.
 ASSUMED_EXCHANGE_RATE = 50.0
@@ -376,25 +392,27 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     if stale:
         reasons.append("no fresh reading in the last %s" % dur(max_age) if age is not None else "no fresh readings at all")
     # No 5h burn rate yet (D-11): its leftover is unknown (projected_unused
-    # null), so neither harvest may count on it.
+    # null), so neither harvest may count on it, whatever min_free (taken as
+    # `None or 0`, it passed min_free 0), and nothing is priced in weekly points.
     rate_unknown = f["present"] and f["projected_unused"] is None
+    leftover_ok = f["projected_unused"] is not None and f["projected_unused"] >= min_free
     week_cost = None
-    assumed = f["present"] and ppw is None
     if f["present"] and not rate_unknown:
         week_cost = f["projected_unused"] * (ppw or ASSUMED_EXCHANGE_RATE) / 100.0
+    assumed = week_cost is not None and ppw is None
+    # Without a cost (no 5h window, or no rate yet) this asks whether the
+    # week is tight on its own.
     week_ok = (not k["present"]) or (
         k.get("dry_at") is None and (k["projected"] + (week_cost or 0)) <= config.target(cfg, SEVEN_DAY)
     )
-    f["harvestable"] = bool(
-        f["present"] and f["in_tail"] and (f["projected_unused"] or 0) >= min_free and f["free_now"] >= min_free and week_ok
-    )
+    f["harvestable"] = bool(f["present"] and f["in_tail"] and leftover_ok and f["free_now"] >= min_free and week_ok)
     if f["present"] and f["in_tail"] and not week_ok:
         reasons.append("5h leftover would eat into a weekly budget that is already tight" + (
             " (exchange rate not known yet: priced at %.0f weekly points per 5h window)" % ASSUMED_EXCHANGE_RATE if assumed else ""))
     # Harvesting weekly surplus must not starve your own 5h window: it needs
     # room now and at the current burn rate.
-    five_room = f["free_now"] >= min_free and (not f["present"] or (f["projected_unused"] or 0) >= min_free)
-    week_surplus = k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free
+    five_room = f["free_now"] >= min_free and (not f["present"] or leftover_ok)
+    week_surplus = k["present"] and k["in_tail"] and k["projected_unused"] >= min_free
     k["harvestable"] = bool(week_surplus and five_room)
     if rate_unknown and (f["in_tail"] or week_surplus):
         reasons.append("5h burn rate not known yet")
@@ -427,10 +445,10 @@ def cmd_check(args, cfg):
     try:
         tail = parse_tail(args.tail, cfg)
         max_age = parse_duration(args.max_age)
+        min_free = parse_min_free(args.min_free, cfg)
     except ValueError as e:
         print(json.dumps({"ok": False, "error": str(e)}))
         return 1
-    min_free = float(args.min_free if args.min_free is not None else cfg["min_free"])
     st = _open()
     if st is None:
         print(json.dumps({"ok": False, "reasons": ["no database yet"]}))

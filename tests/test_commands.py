@@ -15,6 +15,7 @@ from unittest import mock
 
 from ctempo import commands, weekly
 from ctempo.config import SEVEN_DAY
+from ctempo.store import Store
 
 from .helpers import MON, H, D, TempHome
 
@@ -173,6 +174,51 @@ class NowText(TempHome):
         # The next week, a new session's first reading only (D-06): no timed reading yet.
         self.feed(T + 7 * D, week=(30, R + int(7 * D)), sid="s2")
         self.assertIn("whole window so far (no timed reading yet)", self.now(T + 7 * D + 2 * H))
+
+    def test_typical_and_assumed_fallbacks_name_their_cause(self):
+        # Review 6 (E-display-commands-weekly#3): a cut lookback whose window is
+        # still at 0 falls back to the typical week, then 1.0 (D-15), but `now`
+        # said "your typical week (no recent data)" or "assumed (no data yet)"
+        # above "Data: 25 samples, last reading 2h 00m ago". The week reset
+        # Saturday 02:00 and the readings from Monday 09:00 are 0.
+        R0 = int(MON - 2 * D + 2 * H)
+        R1 = R0 + int(7 * D)
+        still = "the level has not moved since the first timed reading, Mon 09:00; the window is still at 0%"
+        cases = [  # (closed week at 70%, timed readings, the label)
+            (True, True, "your typical week (%s)" % still),
+            (False, True, "assumed (%s)" % still),
+            (False, False, "assumed (no timed reading yet; the window is still at 0%)"),  # a new session's first reading
+        ]
+        for i, (closed, timed, label) in enumerate(cases):
+            self.use_home("zero-%d" % i)
+            if timed:
+                self.known("s1")
+            if closed:
+                self.feed(R0 - 12 * H, week=(69, R0))
+                self.feed(R0 - 2 * H, week=(70, R0))
+            for k in range(25):
+                self.feed(MON + 9 * H + k * 300, week=(0, R1))
+            out = self.now(MON + 11 * H)
+            self.assertIn("intensity       %.2f     %s\n" % (0.7 if closed else 1.0, label), out)
+            self.assertNotIn("no recent data", out)
+            self.assertNotIn("no data yet", out)
+        # A week that opened at 10:00, read at 1% and 2% since: no earlier week,
+        # and an hour is under 2% of a week's expected spend.
+        self.use_home("young")
+        self.known("s1")
+        R2 = int(MON + 10 * H + 7 * D)
+        self.feed(MON + 10 * H + 10 * M, week=(1, R2))
+        self.feed(MON + 10 * H + 40 * M, week=(2, R2))
+        out = self.now(MON + 11 * H)
+        self.assertIn("intensity       1.00     assumed (recent span too short; the window is too new, opened Mon 10:00)\n", out)
+
+    def use_home(self, name):
+        """A fresh store in its own CTEMPO_HOME under the test's directory."""
+        self.st.close()
+        home = os.path.join(self.dir, name)
+        os.makedirs(home)
+        os.environ["CTEMPO_HOME"] = home
+        self.st = Store(os.path.join(home, "tempo.db"))
 
     def test_data_age_ignores_heartbeats(self):
         # Review 5 (X-integration#2): check measures data age from readings

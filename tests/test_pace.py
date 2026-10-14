@@ -1,9 +1,10 @@
 """5-hour math against hand-computed values."""
 
+import json
 import os
 import unittest
 
-from ctempo import pace
+from ctempo import config, pace, render
 from ctempo.config import FIVE_HOUR
 from ctempo.store import Store
 
@@ -274,6 +275,36 @@ class FiveHour(TempHome):
                 self.assertEqual(v["severity"], "dim", i)
             # Once the rate is known, the window runs dry: red.
             self.assertEqual(out[-1]["severity"], "alert", i)
+
+    def test_no_rate_yet_in_the_tail_is_never_green_with_min_free_0(self):
+        # Review 6 (E-display-commands-weekly#0, X-integration#0): with min_free
+        # 0 in config.json (allowed: 0 to 100), the unknown leftover was read
+        # as `None or 0`, and 0 >= 0 turned the late start green again.
+        self.cfg["min_free"] = 0.0
+        start = MON + 10 * H
+        r = int(start + 5 * H)
+        self.known("s1")
+        out = [pace.five_hour(self.st, ts, self.cfg)
+               for ts in self.late_start(start + 4 * H + 10 * M, 80, 2, 60, r, renders=30)]
+        unknown = [v for v in out if v["verdict"] == "unknown"]
+        self.assertEqual(len(unknown), 12)
+        for v in unknown:
+            self.assertTrue(v["in_tail"])
+            self.assertEqual(v["severity"], "dim")
+            segs = render.segments(v, {"present": False}, self.cfg)
+            self.assertEqual(segs[0][1], "dim")
+        self.assertEqual(out[-1]["severity"], "alert")
+        base = dict(present=True, cap_ts=None, in_tail=True, verdict="unknown", unused_at_reset=None)
+        self.assertEqual(pace.severity(base, self.cfg), "dim")
+        self.assertEqual(pace.severity(dict(base, verdict="idle", unused_at_reset=5.0), self.cfg), "opportunity")
+        # The config clamps min_free to 0..100 (config.RANGES); unclamped, the
+        # unknown leftover still never passes.
+        path = os.path.join(self.dir, "config.json")
+        for given, kept in ((-5, 0.0), (1e9, 100.0)):
+            with open(path, "w") as f:
+                json.dump({"min_free": given}, f)
+            self.assertEqual(config.load(path)["min_free"], kept)
+            self.assertEqual(pace.severity(base, dict(self.cfg, min_free=given)), "dim")
 
     def test_one_reading_fades_out_over_the_fit_window(self):
         # Review 4: a single reading gave the window average for 5 minutes, then
