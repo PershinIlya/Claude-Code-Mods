@@ -72,3 +72,16 @@ existing statusLine, env) in a throwaway `HOME`/`CLAUDE_CONFIG_DIR`, real
 `claude plugin` commands: install composed with the existing statusLine and
 added the marketplace and plugin keys; uninstall removed them and the file
 came back byte-identical to both the backup and the original.
+
+## An incident during verification, and the fix
+
+To prove the review's regression tests catch their bugs, they were also run
+against the old `install.py`. That old code fell back to the default
+settings path, and since one test did not pin `CLAUDE_CONFIG_DIR`, it removed
+ctempo's `statusLine` from this container's real `~/.claude/settings.json`
+(nothing outside the container was touched). Every test now pins
+`CLAUDE_CONFIG_DIR` and `HOME` to temp dirs; the same old-code run was
+repeated and the real file's hash did not change. The container was then
+reinstalled with `ctempo install --apply` (which also exercised the
+conversion of the version-1 install record), and `ctempo doctor` is clean
+again.
