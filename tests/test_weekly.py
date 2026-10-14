@@ -101,6 +101,9 @@ class Weekly(TempHome):
             (dict(verdict="idle", in_tail=True, expire=15, target=80, used=85), "warn"),
             (dict(verdict="unknown", target=90, used=90), "warn"),
             (dict(verdict="speed_up", in_tail=True, expire=30, target=80, used=50), "opportunity"),
+            # Review 7 (checks-colors#1, integration#0): green counts only what
+            # expires below the target: 25 points expire, 5 of them below 80.
+            (dict(verdict="speed_up", in_tail=True, expire=25, target=80, used=50), "dim"),
         ]
         for kw, tone in cases:
             self.assertEqual(weekly._severity(dict(base, **kw), self.cfg), tone, kw)

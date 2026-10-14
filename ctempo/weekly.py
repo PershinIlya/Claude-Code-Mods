@@ -13,7 +13,7 @@
 
 from . import config, profile
 from .config import DURATION, FIVE_HOUR, SEVEN_DAY
-from .pace import current_used, over_target, spare, verdict_for
+from .pace import below_target, current_used, over_target, spare, verdict_for
 from .store import FIRST, FRESH
 
 MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend
@@ -185,12 +185,13 @@ def weekly(store, now, cfg, reading=None, prof=None):
 
 def _severity(v, cfg):
     # The 5h tiers (pace.severity): red needs a dry time and a slow down
-    # verdict; at or above a target below 100 is yellow, idle included.
+    # verdict; at or above a target below 100 is yellow, idle included; green
+    # counts only what expires below the target, as `check` does.
     dry = v.get("dry_ts") is not None
     if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"
-    if v.get("in_tail") and spare(v.get("expire"), cfg["min_free"]):
+    if v.get("in_tail") and spare(below_target(v.get("expire"), v.get("target", 100.0)), cfg["min_free"]):
         return "opportunity"
     return "dim"

@@ -13,7 +13,8 @@ Rules, in order (see DECISIONS.md D-05..D-09):
     resets_at rolls the window over.
   * reset detection: a fresh reading at least `drop_points` below the
     instance's max, or with an earlier resets_at, is an ANOMALY. Only when
-    `drop_samples` consecutive fresh readings agree is it a reset.
+    `drop_samples` consecutive fresh readings agree is it a reset; one is
+    enough to undo a later resets_at from the same session.
   * write throttle: a sample identical to the last stored one within
     `write_min_interval_s` is not stored again; heartbeats are stored at most
     once per interval across all sessions.
@@ -227,8 +228,31 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
     return "throttled"
 
 
+def _undoes_rollover(store, w, inst, reset, source, session_id):
+    """Whether the open instance came from this session's own later resets_at,
+    and this reading is from the window that the instance's rollover closed."""
+    # A rollover closes the old window at the moment it opens the new one.
+    closed = store.db.execute(
+        "SELECT 1 FROM windows WHERE window=? AND id!=? AND close_reason='rollover' "
+        "AND ABS(reset_ts - ?) <= ? AND closed_at >= ? LIMIT 1",
+        (w, inst["id"], reset, RESET_JITTER, inst["first_seen"]),
+    ).fetchone()
+    if closed is None:
+        return False
+    opener = store.db.execute(
+        "SELECT session_id, source FROM samples WHERE window_id=? ORDER BY ts, id LIMIT 1", (inst["id"],)
+    ).fetchone()
+    return opener is not None and (opener[0] or "~" + opener[1]) == (session_id or "~" + source)
+
+
 def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted):
     need = max(1, int(cfg["reset"]["drop_samples"]))
+    if shifted and _undoes_rollover(store, w, inst, reset, source, session_id):
+        # One fresh reading did the bogus rollover, so one undoes it: a
+        # session that is maxed or idle repeats its real reading only as
+        # heartbeats, and the second fresh one never came (D-10). Another
+        # session still needs drop_samples (it may lag a real early reset).
+        need = 1
     # The previous fresh-or-anomaly readings of this window, newest first.
     rows = store.db.execute(
         "SELECT id, ts, used_pct, resets_at, flag, window_id FROM samples "

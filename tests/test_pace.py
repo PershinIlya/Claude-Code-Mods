@@ -379,7 +379,11 @@ class FiveHour(TempHome):
             (dict(verdict="unknown", in_tail=True, unused_at_reset=None), "dim"),
             (dict(verdict="idle", in_tail=True, unused_at_reset=20, target=80, used=80), "warn"),
             (dict(verdict="unknown", target=80, used=85, unused_at_reset=None), "warn"),
-            (dict(verdict="idle", in_tail=True, unused_at_reset=25, target=80, used=75), "opportunity"),
+            # Review 7 (checks-colors#1, integration#0): green counts only what
+            # expires below the target. Idle at 75 of 80 has 25 points to
+            # expire but 5 to spare (min_free 10): it was green; at 65, 15.
+            (dict(verdict="idle", in_tail=True, unused_at_reset=25, target=80, used=75), "dim"),
+            (dict(verdict="idle", in_tail=True, unused_at_reset=35, target=80, used=65), "opportunity"),
         ]
         for kw, tone in cases:
             self.assertEqual(pace.severity(dict(base, **kw), self.cfg), tone, kw)
