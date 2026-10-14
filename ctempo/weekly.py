@@ -6,7 +6,7 @@
   intensity  = actual spend over the last N active hours
                / (target * profile share of those hours)
   projected  = used + intensity * target * E        (capped at 100)
-  multiplier = (target - used) / (intensity * target * E)
+  multiplier = max(0, target - used) / (intensity * target * E)
 
 `dry` is where the hour-by-hour walk at that intensity crosses 100%.
 """
@@ -20,25 +20,54 @@ MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's exp
 MIN_WINDOW_SHARE = 0.02
 
 
-def spend_since(store, inst, t0, now, used):
+def _start_level(store, wid, a, w, max_gap):
+    """(start, level) to count a window instance's spend from: `a`, or later.
+
+    A FIRST reading is only a lower bound (D-06): it raises the level but
+    never fixes the start, so with no FRESH reading at or before `a` the
+    count starts at the first FRESH one. When `a` falls in a gap between
+    readings (heartbeats say nothing about the level) longer than max_gap,
+    the gap's rise is spread over it by profile share, as learning does
+    (D-13): only its expected part falls after `a`. None when the instance
+    has no FRESH reading yet.
+    """
+    first = store.db.execute("SELECT MIN(ts) FROM samples WHERE window_id=? AND flag=?", (wid, FRESH)).fetchone()[0]
+    if first is None:
+        return None
+    if first > a:
+        return first, store.max_at(wid, first)
+    v0 = store.max_at(wid, a)
+    last = store.db.execute(
+        "SELECT MAX(ts) FROM samples WHERE window_id=? AND flag IN (?, ?) AND ts<=?", (wid, FRESH, FIRST, a)
+    ).fetchone()[0]
+    nxt = store.db.execute(
+        "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag IN (?, ?) AND ts>? ORDER BY ts LIMIT 1",
+        (wid, FRESH, FIRST, a),
+    ).fetchone()
+    if nxt is not None and nxt[0] - last > max_gap and nxt[1] > v0:
+        whole = profile.share_between(w, last, nxt[0])
+        if whole > 0:
+            v0 += (nxt[1] - v0) * profile.share_between(w, last, a) / whole
+    return a, v0
+
+
+def spend_since(store, inst, t0, now, used, w, max_gap):
     """Points spent between t0 (or the earliest known point after it) and now.
 
     Walks back into the previous weekly window when the lookback crosses a
-    reset. Returns (points, effective_start).
+    reset. Returns (points, effective_start, cut), cut when the count had to
+    start at a first FRESH reading after the lookback start.
     """
     a = max(t0, inst["start_ts"])
+    cut = False
     if a <= inst["start_ts"]:
         v0 = 0.0  # a weekly window starts empty
     else:
-        v0 = store.max_at(inst["id"], a)
-        if v0 is None:
-            row = store.db.execute(
-                "SELECT ts, used_pct FROM samples WHERE window_id=? AND flag IN (?, ?) ORDER BY ts LIMIT 1",
-                (inst["id"], FRESH, FIRST),
-            ).fetchone()
-            if row is None:
-                return 0.0, now
-            a, v0 = row[0], row[1]
+        k = _start_level(store, inst["id"], a, w, max_gap)
+        if k is None:
+            return 0.0, now, True
+        cut = k[0] > a
+        a, v0 = k
     actual = max(0.0, used - v0)
     if t0 < inst["start_ts"] and a <= inst["start_ts"]:
         prev = store.db.execute(
@@ -49,11 +78,11 @@ def spend_since(store, inst, t0, now, used):
         ).fetchone()
         if prev is not None:
             a2 = max(t0, prev[1])
-            p0 = 0.0 if a2 <= prev[1] else store.max_at(prev[0], a2)
-            if p0 is not None:
-                actual += max(0.0, prev[2] - p0)
-                a = a2
-    return actual, a
+            k = (a2, 0.0) if a2 <= prev[1] else _start_level(store, prev[0], a2, w, max_gap)
+            if k is not None:
+                actual += max(0.0, prev[2] - k[1])
+                a, cut = k[0], k[0] > a2
+    return actual, a, cut
 
 
 def exchange_rate(store, now, days=28):
@@ -116,10 +145,14 @@ def weekly(store, now, cfg, reading=None, prof=None):
     # Intensity over the last N awake hours (the lookback may cross a reset).
     hours = float(cfg["profile"]["active_hours_lookback"])
     t0 = profile.active_lookback(awake, now, hours, 7 * 86400)
-    actual, t_eff = spend_since(store, inst, t0, now, used)
+    max_gap = float(cfg["profile"]["max_gap_hours"]) * profile.HOUR
+    actual, t_eff, cut = spend_since(store, inst, t0, now, used, w, max_gap)
     share = profile.share_between(w, t_eff, now) / total
     intensity, source = None, None
-    if share >= MIN_EXPECTED_SHARE and t_eff < now:
+    # Readings are whole percents: a lookback cut short at the first reading
+    # (install, first sighting late in the window) that has not seen a step
+    # yet knows nothing, so its zero is not "idle".
+    if share >= MIN_EXPECTED_SHARE and t_eff < now and not (cut and actual <= 0):
         intensity, source = actual / (tgt * share), "recent"
     elif elapsed >= MIN_WINDOW_SHARE:
         intensity, source = used / (tgt * elapsed), "window"
@@ -135,7 +168,8 @@ def weekly(store, now, cfg, reading=None, prof=None):
     dry = None
     if raw >= 100.0 and used < 100.0:
         dry = profile.walk_to(w, now, reset, intensity * tgt / total, 100.0 - used)
-    mult = (tgt - used) / remaining_spend if remaining_spend > 1e-9 else None
+    # Past a target below 100 there is nothing left to allow: 0, as for 5h.
+    mult = max(0.0, tgt - used) / remaining_spend if remaining_spend > 1e-9 else None
     v.update(projected=min(100.0, raw), projected_raw=raw, dry_ts=dry, multiplier=mult,
              expire=max(0.0, 100.0 - min(100.0, raw)), unused_at_reset=max(0.0, 100.0 - min(100.0, raw)))
     if used >= 100.0:

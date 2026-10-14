@@ -1,9 +1,11 @@
 """Weekly math against hand-computed values."""
 
+import os
 import unittest
 
-from ctempo import profile, weekly
+from ctempo import profile, render, weekly
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
+from ctempo.store import Store
 
 from .helpers import MON, H, D, TempHome
 
@@ -102,14 +104,19 @@ class Weekly(TempHome):
         now = MON + 3 * D
         r_prev = int(now - 6 * H)
         r_cur = int(r_prev + 7 * D)
+        self.known("s1")  # a timed 70, not a first reading (Review 4: FIRST never anchors the start)
         self.feed(now - 30 * H, week=(70, r_prev))
         self.feed(now - 6 * H - 60, week=(80, r_prev))
         self.feed(now - 5 * H, week=(2, r_cur))
         self.feed(now, week=(5, r_cur))
         v = self.view(now)
-        # Previous window: 80 - 70 = 10; current: 5 - 0 = 5. Expected 100*24/168.
-        self.assertAlmostEqual(v["lookback_actual"], 15.0)
-        self.assertAlmostEqual(v["intensity"], 15 / (100 * 24 / 168), places=6)
+        # Previous window: the lookback starts at now - 24 h, 6 h into the
+        # unobserved gap 70 -> 80 (24 h minus 60 s long). Review 4: the gap's
+        # rise is spread over it (uniform profile), so only its last 18 h
+        # minus 60 s count. Current window: 5 - 0 = 5. Expected 100*24/168.
+        prev = 10 * (18 * H - 60) / (24 * H - 60)
+        self.assertAlmostEqual(v["lookback_actual"], prev + 5, places=6)
+        self.assertAlmostEqual(v["intensity"], (prev + 5) / (100 * 24 / 168), places=6)
 
     def test_bogus_shifted_window_is_not_taken_as_the_previous_week(self):
         R1 = int(MON + 7 * D)
@@ -129,6 +136,7 @@ class Weekly(TempHome):
     def test_parallel_sessions_running_max(self):
         R = int(MON + 7 * D)
         now = MON + 3 * D
+        self.known("busy")  # its 38 at the lookback start is timed, not a first reading
         for i in range(24, -1, -1):
             self.feed(now - i * H, week=(50 - i * 0.5, R), sid="busy")
             self.feed(now - i * H + 30, week=(20, R), sid="idle")
@@ -152,6 +160,104 @@ class Weekly(TempHome):
         v = self.view(now)
         self.assertEqual(v["intensity_source"], "window")
         self.assertAlmostEqual(v["intensity"], 10 / (100 * 3 / 7), places=6)
+
+    def test_first_readings_never_anchor_the_lookback(self):
+        # Review 4 (weekly-profile#0): at install every open session re-renders
+        # its last reading as FIRST. An idle session's old 45 must not become
+        # the level at the lookback start, whichever session renders first.
+        R = int(MON + 3 * D + 2 * H)  # resets Thursday 02:00
+        T = MON + D + 10 * H  # installed Tuesday 10:00
+        levels = {"idle": 45, "busy": 51}
+        for order in (("idle", "busy"), ("busy", "idle")):
+            self.st.close()
+            self.st = Store(os.path.join(self.dir, "%s-first.db" % order[0]))
+            self.feed(T, week=(levels[order[0]], R), sid=order[0])
+            self.feed(T + 0.5, week=(levels[order[1]], R), sid=order[1])
+            self.feed(T + 2 * H, week=(52, R), sid="busy")  # the first FRESH reading
+            v = self.view(T + 2 * H + 60)
+            # The count starts at the first FRESH reading: nothing spent since,
+            # and 60 s is too short a lookback, so the whole window speaks.
+            self.assertEqual(v["lookback_start"], T + 2 * H)
+            self.assertEqual(v["lookback_actual"], 0.0)
+            self.assertEqual(v["intensity_source"], "window")
+            self.assertIsNone(v["dry_ts"])
+            self.feed(T + 4 * H, week=(53, R), sid="busy")
+            v = self.view(T + 4 * H)
+            # 53 - 52 in 2 h vs 100*2/168 expected (old code: 53 - 45 in 4 h, 3.36, dry).
+            self.assertEqual(v["intensity_source"], "recent")
+            self.assertAlmostEqual(v["lookback_actual"], 1.0)
+            self.assertAlmostEqual(v["intensity"], 1 / (100 * 2 / 168), places=6)
+            self.assertIsNone(v["dry_ts"])
+
+    def test_first_reading_never_anchors_the_previous_window(self):
+        # Review 4 (weekly-profile#0), previous-window branch: installed 4 h
+        # before a reset with a stale FIRST 70; the first FRESH reading is 80.
+        R1 = int(MON + 3 * D)
+        R2 = R1 + int(7 * D)
+        self.feed(R1 - 4 * H, week=(70, R1))
+        self.feed(R1 - 2 * H, week=(80, R1))
+        self.feed(R1 + H, week=(2, R2))
+        self.feed(R1 + 21 * H, week=(5, R2))
+        v = self.view(R1 + 21 * H)
+        # The lookback starts at R1 - 3 h, before any FRESH reading of the old
+        # window: the count starts at its first (80, nothing more spent
+        # there), then 5 in the new window, over 23 h (old code: 15 over 24 h).
+        self.assertEqual(v["lookback_start"], R1 - 2 * H)
+        self.assertAlmostEqual(v["lookback_actual"], 5.0)
+        self.assertAlmostEqual(v["intensity"], 5 / (100 * 23 / 168), places=6)
+
+    def test_spend_in_a_long_gap_is_spread_not_charged_to_the_lookback(self):
+        # Review 4 (weekly-profile#1): no readings from Friday 16:00 (40%) to
+        # Monday 08:00 (60%), the 20 points spent on claude.ai meanwhile.
+        R = int(MON + 3 * D + 9 * H)  # resets Thursday 09:00
+        self.known("s1")
+        for h in range(8, -1, -1):
+            self.feed(MON - 2 * D - 8 * H - h * H, week=(40 - h, R))  # Friday 08:00 .. 16:00
+        now = MON + 8 * H
+        self.feed(now, week=(60, R))
+        v = self.view(now)
+        # Uniform profile: the lookback starts Sunday 08:00, 40 h into the 64 h
+        # gap, so 40/64 of the rise came before it: 40 + 20 * 40/64 = 52.5.
+        self.assertAlmostEqual(v["lookback_actual"], 60 - 52.5, places=6)
+        self.assertAlmostEqual(v["intensity"], 7.5 / (100 * 24 / 168), places=6)  # 0.525, not 1.4
+        self.assertIsNone(v["dry_ts"])
+        self.assertEqual(v["verdict"], "speed_up")
+
+    def test_cut_lookback_without_a_step_is_not_idle(self):
+        # Review 4 (weekly-profile#2): first seen 3 days into the window, the
+        # level repeats for 2 h (whole percents, no step yet): no news, not idle.
+        R = int(MON + 7 * D)
+        T = MON + 3 * D
+        self.known("s1")
+        for k in range(25):
+            self.feed(T + k * 300, week=(30, R))
+        v = self.view(T + 2 * H)
+        self.assertEqual(v["intensity_source"], "window")
+        self.assertAlmostEqual(v["intensity"], 30 / (100 * 74 / 168), places=6)
+        self.assertNotEqual(v["verdict"], "idle")
+        # The first step brings the lookback back: 1 point in 3 h.
+        self.feed(T + 3 * H, week=(31, R))
+        v = self.view(T + 3 * H)
+        self.assertEqual(v["intensity_source"], "recent")
+        self.assertAlmostEqual(v["intensity"], 1 / (100 * 3 / 168), places=6)
+
+    def test_multiplier_is_zero_past_a_target_below_100(self):
+        # Review 4 (weekly-profile#3): target_week 90 and 93 used gave ×-0.0▼.
+        self.cfg["target_week"] = 90
+        now = MON + 4 * D
+        R = int(now + 3 * D)
+        self.known("s1")
+        for h in range(30, -1, -1):  # 1 point per hour, 93% now
+            self.feed(now - h * H, week=(93 - h, R))
+        v = self.view(now)
+        # 24 points in 24 h vs 90*24/168 expected; remaining 1 %/h * 72 h = 72.
+        self.assertAlmostEqual(v["intensity"], 24 / (90 * 24 / 168), places=6)
+        self.assertAlmostEqual(v["projected_raw"], 93 + 72, places=6)
+        self.assertEqual(v["multiplier"], 0.0)  # max(0, 90 - 93) / 72
+        self.assertEqual(v["verdict"], "slow_down")
+        text = " ".join(t for t, _ in render.weekly_parts(v, render.SYMBOLS["unicode"]))
+        self.assertIn("×0.0▼", text)
+        self.assertNotIn("×-", text)
 
     def test_missing_weekly_window(self):
         self.feed(MON + H, five=(10, int(MON + 3 * H)))

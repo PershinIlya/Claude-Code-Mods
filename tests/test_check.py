@@ -52,6 +52,7 @@ class Check(TempHome):
     def test_weekly_tail_go_and_tight_week_blocks_5h(self):
         r7 = int(MON + 7 * D)
         now = r7 - D  # one day before the weekly reset
+        self.known("s1")  # a timed 40, not a first reading: a FIRST never anchors the weekly lookback
         for i in range(25, -1, -1):
             self.feed(now - i * H, week=(40, r7))  # idle week at 40%
         self.feed(now, five=(5, int(now + 4 * H)), week=(40, r7))

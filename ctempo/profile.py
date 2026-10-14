@@ -324,10 +324,12 @@ def learn(store, prof, now, cfg, w_current=None):
             if wid not in starts:
                 inst = store.instance(wid)
                 starts[wid] = inst["start_ts"] if inst else ts
-            if starts[wid] < prev[0] and used > run_max - drop:
+            if starts[wid] < prev[0] and used > run_max - min(drop, max(1.0, 0.5 * run_max)):
                 # A window that began before the previous reading at about the
                 # same level (a moved or bogus reset, the real window
-                # reopened): a continuation, not new spend.
+                # reopened): a continuation, not new spend. "About the same"
+                # is closer to the old level than to 0 (a light user's early
+                # reset drops less than drop_points), within a reading step.
                 a, delta = prev[0], max(0.0, used - run_max)
                 run_max = max(run_max, used)
             else:
