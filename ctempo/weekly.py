@@ -1,10 +1,11 @@
 """Pace math for the 7-day window, driven by the hour-of-week profile.
 
   E          = expected share of weekly spend still to come (now -> reset)
-  on_pace    = target * (1 - E)
+  on_pace    = target * (1 - E)                     (after a drop reset, over
+               the span since the drop: target * (1 - E / span))
   delta      = used - on_pace                       (+ ahead, - behind)
   intensity  = actual spend over the last N active hours
-               / (target * profile share of those hours)
+               / (target * profile share of those hours, blocked ones left out)
   projected  = used + intensity * target * E        (capped at 100)
   multiplier = max(0, target - used) / (intensity * target * E)
 
@@ -55,17 +56,19 @@ def spend_since(store, inst, t0, now, used, w, max_gap):
     """Points spent between t0 (or the earliest known point after it) and now.
 
     Walks back into the previous weekly window when the lookback crosses a
-    reset. Returns (points, effective_start, cut), cut when the count had to
-    start at a first FRESH reading after the lookback start.
+    reset. Returns (points, effective_start, cut, capped), cut when the count
+    had to start at a first FRESH reading after the lookback start, capped
+    the span (lo, hi) of the previous window after it reached 100%: nothing
+    could be spent there, so it is no expected spend either.
     """
     a = max(t0, inst["start_ts"])
-    cut = False
+    cut, capped = False, (now, now)
     if a <= inst["start_ts"]:
         v0 = 0.0  # a weekly window starts empty
     else:
         k = _start_level(store, inst["id"], a, w, max_gap)
         if k is None:
-            return 0.0, now, True
+            return 0.0, now, True, capped
         cut = k[0] > a
         a, v0 = k
     actual = max(0.0, used - v0)
@@ -82,7 +85,16 @@ def spend_since(store, inst, t0, now, used, w, max_gap):
             if k is not None:
                 actual += max(0.0, prev[2] - k[1])
                 a, cut = k[0], k[0] > a2
-    return actual, a, cut
+                if prev[2] >= 100.0:
+                    # Blocked from the cap to the reset. A FIRST reading at
+                    # 100 still bounds the moment it got there.
+                    cap = store.db.execute(
+                        "SELECT MIN(ts) FROM samples WHERE window_id=? AND flag IN (?, ?) AND used_pct>=100",
+                        (prev[0], FRESH, FIRST),
+                    ).fetchone()[0]
+                    if cap is not None:
+                        capped = (max(a, cap), inst["start_ts"])
+    return actual, a, cut, capped
 
 
 def exchange_rate(store, now, days=28):
@@ -129,16 +141,18 @@ def weekly(store, now, cfg, reading=None, prof=None):
     tgt = config.target(cfg, SEVEN_DAY)
     used = current_used(store, inst, reading)
     reset = inst["reset_ts"]
-    start = reset - DURATION[SEVEN_DAY]
+    week_start = reset - DURATION[SEVEN_DAY]
+    start = max(week_start, inst["start_ts"])  # a drop reset opens the window late (D-10)
     prof = prof or profile.load(store)
     w, awake, info = profile.current_weights(store, prof, now, cfg)
 
-    elapsed = profile.share_between(w, start, now)
+    elapsed = profile.share_between(w, week_start, now)
     left = profile.share_between(w, now, reset)
     total = elapsed + left or 1.0
     E = left / total  # DST weeks have 167 or 169 local hours
-    elapsed = elapsed / total
-    on_pace = tgt * (1.0 - E)
+    elapsed = profile.share_between(w, start, now) / total  # since this instance opened
+    span = elapsed + E  # the instance's own share of the week: 1 unless a drop opened it
+    on_pace = tgt * (1.0 - E / span) if start > week_start and span > 0 else tgt * (1.0 - E)
     v.update(present=True, used=used, reset_ts=reset, start_ts=start, remaining_h=(reset - now) / 3600.0,
              target=tgt, window_id=inst["id"], E=E, on_pace=on_pace, delta=used - on_pace,
              profile_source=info["source"], awake_hours=info["awake_hours"], weekly_typical=info["weekly_total"])
@@ -147,8 +161,8 @@ def weekly(store, now, cfg, reading=None, prof=None):
     hours = float(cfg["profile"]["active_hours_lookback"])
     t0 = profile.active_lookback(awake, now, hours, 7 * 86400)
     max_gap = float(cfg["profile"]["max_gap_hours"]) * profile.HOUR
-    actual, t_eff, cut = spend_since(store, inst, t0, now, used, w, max_gap)
-    share = profile.share_between(w, t_eff, now) / total
+    actual, t_eff, cut, capped = spend_since(store, inst, t0, now, used, w, max_gap)
+    share = (profile.share_between(w, t_eff, now) - profile.share_between(w, *capped)) / total
     intensity, source = None, None
     # Readings are whole percents: a lookback cut short at the first reading
     # (install, first sighting late in the window) that has not seen a step

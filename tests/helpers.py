@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -77,6 +78,30 @@ class TempHome(unittest.TestCase):
             ts = t0 + 20 * k
             self.feed(ts, five=(min(100, first + step * int(20 * k // every)), r5), week=week)
             yield ts
+
+    def work(self, t0, t1, R, rate, hours=(9, 18), days=(0, 1, 2, 3, 4), every=900, learn=False):
+        """A user who spends `rate` weekly points an hour in local hours
+        [hours[0], hours[1]) of `days` and nothing otherwise, from t0 (a
+        window start, at 0%) to t1. A reading every `every` seconds while
+        working, in whole percents, capped at 100; the weekly window resets
+        at R and every 7 days after. With learn, the statusline's profile
+        learning runs after each reading. Returns the next reset after t1."""
+        from ctempo import profile, statusline
+
+        prof = profile.load(self.st)
+        level, t = 0.0, t0
+        while t < t1:
+            if t >= R:
+                R += int(7 * D)
+                level = 0.0
+            lt = time.localtime(t)
+            if lt.tm_wday in days and hours[0] <= lt.tm_hour < hours[1]:
+                level = min(100.0, level + rate * every / H)
+                self.feed(t + every, week=(math.floor(level), R))
+                if learn:
+                    prof = statusline.maybe_learn(self.st, prof, t + every, self.cfg)
+            t += every
+        return R
 
     def rows(self, window):
         return self.st.db.execute(

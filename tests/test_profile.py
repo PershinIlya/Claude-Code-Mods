@@ -205,6 +205,70 @@ class LearnEdges(TempHome):
         self.assertAlmostEqual(sum(batch.S), sum(inc.S), places=6)
         self.assertAlmostEqual(sum(batch.W), sum(inc.W), places=6)
 
+    def test_the_old_windows_tail_before_a_reset_is_learned_idle(self):
+        # Review 8 (long-horizon#1): the weekly window resets Monday 09:00 and
+        # the user works Mon-Fri 9-18 at 1.25 points an hour (56.25 a week),
+        # with no transcripts (uniform prior). From Friday 18:00 to the reset
+        # no reading comes: that tail of the old window was never learned, so
+        # the weekend kept the average rate for good. It counted 63 awake
+        # hours more, the typical week read 90% and Wednesday projected 83%.
+        from ctempo import weekly
+
+        R0 = int(MON + 9 * H)
+        now = MON + 44 * D + 12 * H  # Wednesday 12:00 of week 7
+        self.known("s1")
+        self.work(R0, now, R0 + int(7 * D), 1.25, learn=True)
+        w, awake, info = profile.current_weights(self.st, profile.load(self.st), now, self.cfg)
+        self.assertFalse(any(awake[5 * 24:]))  # Saturday and Sunday
+        self.assertLessEqual(info["awake_hours"], 47)  # 45 true
+        self.assertLess(sum(w[5 * 24:]), 0.12)  # at the floor: 0.099
+        self.assertAlmostEqual(info["weekly_total"], 56.25, delta=3)
+        self.assertAlmostEqual(weekly.weekly(self.st, now, self.cfg)["projected"], 56.25, delta=5)
+
+    def test_a_capped_windows_tail_is_not_learned_idle(self):
+        # Review 8 (long-horizon#1), the other side: a heavy user (Mon-Fri
+        # 9-17, 3.5 points an hour) caps every Tuesday 13:45 and is blocked
+        # until the Thursday 09:00 reset. Blocked hours say nothing of the
+        # habit: learned as idle by the rule above, they left the profile
+        # without Wednesday, and Monday 11:00 at 63% read "on pace".
+        from ctempo import weekly
+
+        R0 = int(MON + 3 * D + 9 * H)
+        now = R0 + 25 * D + 2 * H  # Monday 11:00, after three capped weeks
+        self.known("s1")
+        self.work(R0, now, R0 + int(7 * D), 3.5, hours=(9, 17), learn=True)
+        w, awake, info = profile.current_weights(self.st, profile.load(self.st), now, self.cfg)
+        self.assertTrue(all(awake[2 * 24 + 9:2 * 24 + 17]))  # Wednesday 9-17
+        v = weekly.weekly(self.st, now, self.cfg)
+        self.assertEqual(v["used"], 63)
+        self.assertEqual(v["verdict"], "slow_down")  # it caps again on Tuesday
+        self.assertIsNotNone(v["dry_ts"])
+
+    def test_a_transcript_prior_fades_with_the_half_life(self):
+        # Review 8 (long-horizon#2): the transcripts at install say Mon-Fri
+        # 9-18 (trusted fully), then the user works Mon-Fri 14-23 for 8 weeks.
+        # The idle mornings are only seen through overnight gaps, learned at
+        # low confidence and spread by the prior's own shape, so the prior
+        # kept Mon-Fri 9-13 at 20% of the week and 70 awake hours for good.
+        from ctempo import transcripts
+
+        T0 = int(MON + 3 * D + 10 * H)  # installed Thursday 10:00, the weekly reset
+        day0 = MON - 42 * D  # a Monday more than 45 days before
+        events = [(day0 + d * D + h * H + k * 600, 100.0) for d in range(45) if d % 7 < 5
+                  for h in range(9, 18) for k in range(6)]
+        prof = profile.load(self.st)
+        prof.prior, prof.prior_meta = transcripts.build_prior(events, T0 - 45 * D, T0, 14)
+        self.assertEqual(prof.prior_meta["trust"], 1.0)
+        profile.save(self.st, prof)
+        self.known("s1")
+        now = T0 + 60 * D + 8 * H  # Monday 18:00, 8 weeks on
+        self.work(T0, now, T0 + int(7 * D), 1.25, hours=(14, 23), learn=True)
+        w, awake, info = profile.current_weights(self.st, profile.load(self.st), now, self.cfg)
+        mornings = sum(w[d * 24 + h] for d in range(5) for h in range(9, 13))
+        self.assertLess(mornings, 0.06)  # at the floor: 0.04
+        self.assertLessEqual(info["awake_hours"], 47)  # 45 true
+        self.assertEqual(info["source"], "transcripts+observed")
+
     def test_batch_and_incremental_learning_agree_with_parallel_dips(self):
         from ctempo import ingest
         from ctempo.store import Store

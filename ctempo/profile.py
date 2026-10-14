@@ -4,7 +4,8 @@ w(h) is the expected share of a week's spend that falls in hour-of-week h
 (sum 1). It combines:
 
   prior p(h)  from transcripts (cost-weighted tokens per hour of week, see
-              transcripts.py) or from a manual override, else uniform;
+              transcripts.py; it fades toward uniform with the half-life)
+              or from a manual override, else uniform;
   observed    weekly-percent spend per completed local hour, learned
               incrementally as a decay-weighted mean per bin (14-day half
               life, i.e. an EWMA in continuous time);
@@ -150,19 +151,26 @@ class Profile:
         if isinstance(ov, dict) and ov.get("mode") == "replace":
             return override_shape(ov), weekly_total, "override"
         k = float(pc["prior_strength"])
+        hl = float(pc["half_life_days"]) * 86400
         if isinstance(ov, dict):
             prior, src = normalize(override_shape(ov)), "override+observed"
         elif self.prior:
-            prior, src = normalize(self.prior), "transcripts+observed"
+            # The transcripts describe the weeks before they were read: shape
+            # and strength fade toward uniform with the half-life, like an
+            # observation. Without it, hours only seen through long gaps
+            # (learned at low confidence, spread by this very shape) kept the
+            # transcripts' rate for good.
+            a = 0.5 ** (max(0.0, now - float(self.prior_meta.get("built_at", now))) / hl)
+            prior = normalize([a * x + (1 - a) / BINS for x in normalize(self.prior)])
+            src = "transcripts+observed"
             # A prior built from a few days is mostly uniform: weigh it so.
-            trust = float(self.prior_meta.get("trust", 1.0))
+            trust = float(self.prior_meta.get("trust", 1.0)) * a
             ku = float(pc.get("prior_strength_uniform", 0.25))
             k = ku + trust * (k - ku)
         else:
             # A flat prior knows nothing: let a few observations outweigh it.
             prior, src = uniform(), "uniform+observed"
             k = float(pc.get("prior_strength_uniform", 0.25))
-        hl = float(pc["half_life_days"]) * 86400
         obs = self.observed(now, hl)
         # Unweighted: busy hours are observed with more confidence (short gaps
         # between readings), so weighting by n would inflate M.
@@ -283,7 +291,9 @@ def learn(store, prof, now, cfg, w_current=None):
     Spend between consecutive fresh readings is spread over the gap: evenly
     in time when the gap is short (it is well localized), by the current
     profile when it is long (only the total is known) and then learned with
-    low confidence. An hour is final once a fresh reading after it exists.
+    low confidence. At a reset, a long tail of the old window after its last
+    reading is learned as no spend, with low confidence, unless it was
+    capped. An hour is final once a fresh reading after it exists.
     Returns the number of hours learned.
     """
     pc = cfg["profile"]
@@ -342,6 +352,12 @@ def learn(store, prof, now, cfg, w_current=None):
             else:
                 # A real reset (an early one too, whose start is rounded down
                 # to the hour): the new window counts from 0.
+                if starts[wid] - prev[0] > max_gap and run_max < 100.0:
+                    # The old window's tail after its last reading: no
+                    # reading, no news, no spend (D-11), at low confidence.
+                    # Unlearned, those hours kept the prior's rate for good.
+                    # Not after a cap: blocked hours say nothing of the habit.
+                    _spread(spend, cover, prev[0], starts[wid], 0.0, False, w_current, pu, end)
                 a, delta, run_max = max(prev[0], starts[wid]), used, used
         else:
             a, delta = prev[0], max(0.0, used - run_max)
