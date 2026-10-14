@@ -70,7 +70,7 @@ DEFAULTS = {
     },
     # Surfaces where the mod draws its band. The terminal already has the
     # statusLine, so it is left out by default.
-    "mod": {"surfaces": ["desktop", "vscode", "mobile"], "refresh_s": 60},
+    "mod": {"surfaces": ["desktop"], "refresh_s": 60},
     "retention_days": 365,
     "write_min_interval_s": 60,
     "db_timeout_ms": 250,

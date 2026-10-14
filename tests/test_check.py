@@ -60,6 +60,19 @@ class Check(TempHome):
         self.assertTrue(res["seven_day"]["harvestable"])
         self.assertAlmostEqual(res["seven_day"]["projected_unused"], 60)
 
+    def test_weekly_harvest_waits_while_5h_runs_dry(self):
+        r7 = int(MON + 7 * D)
+        now = r7 - D
+        for i in range(25, -1, -1):
+            self.feed(now - i * H, week=(40, r7))
+        r5 = int(now + 3 * H)
+        for i in range(0, 21):  # burning 60 %/h in the 5h window
+            self.feed(now - (20 - i) * M, five=(30 + i, r5), week=(40, r7))
+        res = self.result(now)
+        self.assertFalse(res["seven_day"]["harvestable"])
+        self.assertFalse(res["ok"])
+        self.assertTrue(any("no room" in r for r in res["reasons"]))
+
     def test_5h_leftover_blocked_when_week_runs_dry(self):
         r7 = int(MON + 7 * D)
         now = MON + 4 * D

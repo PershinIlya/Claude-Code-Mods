@@ -341,14 +341,17 @@ def check_result(st, cfg, now, min_free, tail, max_age):
     )
     if f["present"] and f["in_tail"] and not week_ok:
         reasons.append("5h leftover would eat into a weekly budget that is already tight")
-    k["harvestable"] = bool(
-        k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free and f["free_now"] >= min_free
-    )
+    # Harvesting weekly surplus must not starve your own 5h window: it needs
+    # room now and at the current burn rate.
+    five_room = f["free_now"] >= min_free and (not f["present"] or (f["projected_unused"] or 0) >= min_free)
+    k["harvestable"] = bool(k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free and five_room)
+    if k["present"] and k["in_tail"] and (k["projected_unused"] or 0) >= min_free and not five_room:
+        reasons.append("weekly surplus is there, but the 5h window has no room at the current burn")
     if f["harvestable"]:
         reasons.append("5h window ends in %s with ~%.0f%% projected unused" % (dur(f["seconds_to_reset"]), f["projected_unused"]))
     if k["harvestable"]:
         reasons.append("weekly window ends in %s with ~%.0f%% projected to expire" % (dur(k["seconds_to_reset"]), k["projected_unused"]))
-    if not (f["harvestable"] or k["harvestable"]) and not stale:
+    if not (f["harvestable"] or k["harvestable"]) and not reasons:
         reasons.append("no window is in its tail with at least %.0f%% to spare" % min_free)
     ok = (f["harvestable"] or k["harvestable"]) and not stale
     return {
