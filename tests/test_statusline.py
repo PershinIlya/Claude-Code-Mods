@@ -79,6 +79,20 @@ class Statusline(unittest.TestCase):
         self.assertTrue(plain.startswith("5h 42% @"), plain)
         self.assertNotIn(b"Traceback", p.stdout + p.stderr)
 
+    def test_bad_config_types_fall_back_to_defaults(self):
+        with open(os.path.join(self.home, "config.json"), "w") as f:
+            json.dump({"verdict": 5, "display": {"max_width": "wide", "symbols": "ascii"}, "reset": None,
+                       "target_5h": "lots", "min_free": True, "future_key": 1}, f)
+        cfg = config.load(os.path.join(self.home, "config.json"))
+        self.assertEqual(cfg["verdict"], config.DEFAULTS["verdict"])
+        self.assertEqual(cfg["display"]["max_width"], 80)
+        self.assertEqual(cfg["display"]["symbols"], "ascii")
+        self.assertEqual(cfg["target_5h"], 100.0)
+        self.assertEqual(cfg["min_free"], 10.0)
+        self.assertEqual(cfg["future_key"], 1)
+        p, _ = run(self.p, self.home)
+        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
+
     def test_epoch_leak_payload_is_not_shown(self):
         self.p["rate_limits"]["seven_day"]["used_percentage"] = 1783720704
         p, _ = run(self.p, self.home)
