@@ -129,6 +129,67 @@ class ShiftedWindow(TempHome):
         self.assertNotIn("Points vs pace", out)
 
 
+class MovedReset(TempHome):
+    def test_report_counts_a_week_whose_reset_moved_once(self):
+        # Review 8 (long-horizon#3): a week whose resets_at moved 1 h later on
+        # its fourth day, at a rising level. The move closed the running week
+        # as a rollover, so `report` listed two finished weeks and 95 unused
+        # points where one week left 33.
+        now = time.time()
+        R = int(now - 2 * D)  # the reset after the move
+        start = R - H - 7 * D
+        t = start + 2 * H
+        while t < R - 2 * H:
+            self.feed(t, week=(round(60 * (t - start) / (7 * D), 1), R - int(H) if t < start + 4 * D else R))
+            t += 2 * H
+        self.feed(R - H, week=(67, R))
+        self.feed(now - H, week=(5, R + int(7 * D)))  # the next week
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(commands.cmd_report(argparse.Namespace(days=30, json=False, verbose=False), self.cfg), 0)
+        self.assertIn("Weekly windows closed: 1\n", out.getvalue())
+        self.assertIn("Totals: 33 weekly points unused over 1 weeks", out.getvalue())
+
+
+class ProfileText(TempHome):
+    def profile(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(commands.cmd_profile(argparse.Namespace(rebuild=False, json=False), self.cfg), 0)
+        return out.getvalue()
+
+    def test_reset_column_note_follows_the_weekly_target(self):
+        # Review 8 (mod-and-texts#1): the points-vs-pace columns are the level
+        # minus the on-pace level for target_week, so at the reset it is peak
+        # minus target. At target 90 a week that peaked at 89 printed "reset
+        # -1" as "what expired", while `report` said 11 points expired.
+        now = time.time()
+        R = int(now - 2 * D)
+        for k in range(1, 84):
+            self.feed(R - 7 * D + k * 2 * H, week=(round(89 * k / 83, 1), R))
+        self.feed(now - H, week=(5, R + int(7 * D)))  # the next week closes it
+        out = self.profile()
+        self.assertIn("reset -11\n", out)
+        self.assertIn("(negative = surplus building up; the reset column is what expired)", out)
+        self.cfg["target_week"] = 90
+        out = self.profile()
+        self.assertIn("reset -1\n", out)
+        self.assertIn("(negative = surplus building up; the reset column is the peak versus your 90% target; "
+                      "`ctempo report` shows what expired)", out)
+
+    def test_lightest_awake_blocks_are_awake(self):
+        # Review 8 (mod-and-texts#2): a block counted as awake on its weight
+        # alone. A flat profile listed "Mon 00-03, Mon 03-06, Mon 06-09" (a
+        # tie), and a regular day listed blocks two-thirds asleep, light only
+        # because of the hours asleep.
+        self.assertNotIn("Lightest awake blocks", self.profile())
+        self.cfg["profile"]["override"] = {"work_days": [0, 1, 2, 3, 4], "wake_hours": [8, 22],
+                                           "off_day_factor": 0.6, "mode": "replace"}
+        out = self.profile()
+        self.assertIn("Awake hours per week: 98 of 168", out)
+        self.assertIn("Lightest awake blocks: Sat 09-12, Sat 12-15, Sat 15-18\n", out)
+
+
 class NowText(TempHome):
     """Review 5: `ctempo now` gives the reasoning behind every number, so
     its reasons and its data age must be the ones that apply."""

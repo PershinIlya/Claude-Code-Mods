@@ -410,6 +410,14 @@ class Render(unittest.TestCase):
         self.assertEqual(statusline.bare_line(readings, MON, cfg), "5h 40% @16:10 | wk 30% @Sat 1...")
         self.assertEqual(statusline.bare_line(readings, MON, self.cfg), "5h 40% @16:10 · wk 30% @Sat 14:10")
 
+    def test_times_round_to_the_nearest_minute(self):
+        # Review 8 (long-horizon#4): times were cut to the minute, so a reset
+        # stored 2 s early showed a minute early.
+        self.assertEqual(render.hm(MON + 14 * H - 2), "14:00")
+        self.assertEqual(render.dhm(MON + 3 * D + 9 * H - 29), "Thu 09:00")
+        self.assertEqual(render.hm(MON + 14 * H + 29), "14:00")
+        self.assertEqual(render.hm(MON + 14 * H + 31), "14:01")
+
     def test_formatting_helpers(self):
         self.assertEqual(render.pct(99.6), "99%")
         self.assertEqual(render.pct(100.0), "100%")
@@ -460,6 +468,24 @@ class WriteFailedAtRollover(TempHome):
     def test_first_render_does_not_wait_for_data_it_has(self):
         line = self.locked_render(MON, five=(42, MON + 2 * H), week=(31.5, MON + 3 * D))
         self.assertEqual(line, "5h 42% @02:00 · wk 32% @Thu 00:00")
+
+
+class WobbledReset(TempHome):
+    def test_a_first_reading_seconds_early_shows_the_whole_minute(self):
+        # Review 8 (long-horizon#4): a window keeps the resets_at of its first
+        # reading (D-08). When that one wobbled 2 s early, the line showed
+        # @04:59 and @Sun 23:59 for the whole window.
+        from ctempo import commands
+
+        r5, r7 = int(MON + 5 * H), int(MON + 7 * D)
+        self.feed(MON + H, five=(10, r5 - 2), week=(20, r7 - 2))
+        for k in range(1, 7):
+            self.feed(MON + H + k * 600, five=(10 + k, r5), week=(20, r7))
+        self.assertEqual([i["reset_ts"] for i in self.windows(config.FIVE_HOUR)], [r5 - 2])
+        v5, vw, _ = commands.views(self.st, self.cfg, MON + 2 * H)
+        line = render.plain(render.segments(v5, vw, self.cfg))
+        self.assertIn(" @05:00 · wk ", line)
+        self.assertTrue(line.endswith(" @Mon 00:00"), line)
 
 
 class TildeHome(unittest.TestCase):
