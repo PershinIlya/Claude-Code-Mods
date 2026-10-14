@@ -1157,6 +1157,228 @@ class Install(unittest.TestCase):
         self.assertTrue(had)
         self.assertEqual(sl["command"], "ten")
 
+    # -- seventh review --------------------------------------------------------------
+    def test_uninstall_no_mod_keeps_what_the_kept_mod_needs(self):
+        # Review 7 (install-fuzz#0): `uninstall --no-mod` keeps the mod, which reads
+        # runtime.json, so runtime.json and the launcher stay with it; the full uninstall
+        # that removes the mod later removes them too.
+        proj = self._proj()
+        runtime = os.path.join(self.home, "runtime.json")
+        lp = os.path.join(self.dir, "bin", "ctempo")
+        for target in (self.path, proj):
+            with self.subTest(target=os.path.basename(target)):
+                self._reset()
+                with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                        mock.patch.object(install, "run_claude", plugin_cli(self.path)):
+                    self.run_cmd(install.install, args(target, apply=True, no_mod=False, bin_dir=os.path.dirname(lp)))
+                    rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=True))
+                    self.assertEqual(rc, 0, out)
+                    self.assertIn(install.PLUGIN_ID, json.loads(self.read())["enabledPlugins"])  # the mod stays
+                    self.assertTrue(install.load_state().get("mod"))
+                    self.assertTrue(os.path.exists(runtime), out)
+                    self.assertTrue(os.path.exists(lp), out)
+                    rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(self.read(), IRREGULAR)
+                self.assertFalse(os.path.exists(runtime))
+                self.assertFalse(os.path.exists(lp))
+                self._assert_clean(proj)
+
+    def test_uninstall_removes_the_mod_after_install_json_is_lost(self):
+        # Review 7 (install-fuzz#1): the data folder was wiped (or the shell has another
+        # CTEMPO_HOME), so install.json has no mod record, but the user file still lists
+        # the mod. Uninstall rebuilds the record from the user file, says so, and runs the
+        # reverse commands, also in the dry run; with claude missing it exits 1 to retry.
+        proj = self._proj()
+        cli = plugin_cli(self.path)
+        for target in (self.path, proj):
+            for first in ((), ("u*-nobin",)):
+                with self.subTest(target=os.path.basename(target), first=first):
+                    self._reset()
+                    calls = []
+
+                    def recording(cmd, env=None):
+                        calls.append(cmd)
+                        return cli(cmd)
+
+                    with self._user_file(IRREGULAR):
+                        self._steps(proj, "iU" if target == self.path else "iP")
+                        shutil.rmtree(self.home)  # install.json gone
+                        if first:
+                            rcs = self._steps(proj, *first)
+                            self.assertEqual(rcs, [1])
+                            self.assertTrue(install.load_state().get("mod"))  # kept for the rerun
+                        with mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                                mock.patch.object(install, "run_claude", recording):
+                            rc, out = self.run_cmd(install.uninstall, args(target, no_mod=False))  # dry run
+                            self.assertEqual(rc, 0, out)
+                            self.assertIn("claude plugin uninstall", out)
+                            if not first:
+                                self.assertIn("no record of it", out)
+                            self.assertEqual(calls, [])
+                            rc, out = self.run_cmd(install.uninstall, args(target, apply=True, no_mod=False))
+                    self.assertEqual(rc, 0, out)
+                    self.assertEqual(calls, install.unmod_commands())
+                    # Without install.json no snapshot is left to restore bytes from: the JSON comes back.
+                    self.assertEqual(json.loads(self.read()), json.loads(IRREGULAR))
+                    self.assertEqual(json.loads(install.read_text(proj)), {"model": "sonnet"})
+                    state = install.load_state()
+                    self.assertEqual(state.get("records"), {})
+                    self.assertNotIn("mod", state)
+
+    def _v1_install(self, text):
+        """What version 1 (c016f98) left after `install --apply` into the user file with
+        claude on PATH: its backup, the file with the plugin CLI's keys, and its record."""
+        backup = os.path.realpath(self.path) + ".ctempo-backup-20261001-090000"
+        with open(backup, "w", encoding="utf-8") as f:
+            f.write(text)
+        sl = {"type": "command", "command": install.our_command(sys.executable, install.entry_path()),
+              "refreshInterval": 60}
+        obj = dict(json.loads(text), statusLine=sl, enabledPlugins={install.PLUGIN_ID: True},
+                   extraKnownMarketplaces={install.MARKETPLACE: {"source": {}}})
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(obj, indent=2))
+        os.makedirs(self.home, exist_ok=True)
+        with open(os.path.join(self.home, "runtime.json"), "w") as f:
+            f.write("{}")
+        with open(install.state_path(), "w") as f:
+            json.dump({"installed": True, "settings_path": self.path, "had_file": True, "backup_path": backup,
+                       "original_sha256": install.sha(text), "had_statusLine": False, "original_statusLine": None,
+                       "had_keys": {k: False for k in install.PLUGIN_KEYS}, "python": sys.executable,
+                       "entry": install.entry_path(), "written_statusLine": sl,
+                       "mod": {"marketplace": install.MARKETPLACE, "plugin": install.PLUGIN_ID, "root": install.repo_root()}}, f)
+
+    def test_version_1_mod_record_keeps_the_user_file_baseline_for_a_rerun(self):
+        # Review 7 (install-fuzz#2): version 1's mod record names no user file; its plugin
+        # commands always edited the default one. An uninstall that leaves the mod (claude
+        # missing or hanging, or --no-mod) must keep that file's record, so the run that
+        # removes the mod brings the file back byte for byte, without empty plugin keys.
+        for first in ("u*-nobin", "u*-hang", "u*-nomod"):
+            with self.subTest(first=first):
+                self._reset()
+                with self._user_file(IRREGULAR):
+                    self._v1_install(IRREGULAR)
+                    rcs = self._steps(None, first, "u*")
+                self.assertEqual(rcs, [0 if first.endswith("nomod") else 1, 0])
+                self.assertEqual(self.read(), IRREGULAR)
+                state = install.load_state()
+                self.assertEqual(state.get("records"), {})
+                self.assertNotIn("mod", state)
+
+    def test_version_1_mod_record_takes_the_user_files_kept_record_with_it(self):
+        # Review 7 (install-fuzz#2, found again by the stress fuzzer on the fix): version 1
+        # installed into a project file, its plugin commands wrote the default user file, and
+        # ctempo went into that file with --no-mod and out again while the mod stayed. The
+        # user file's record is kept for the mod; the uninstall that removes the mod must
+        # tidy that file and drop the record, though the version-1 mod names no user file.
+        proj = self._proj()
+        sl = {"type": "command", "command": install.our_command(sys.executable, install.entry_path()),
+              "refreshInterval": 60}
+        with open(proj, "w") as f:
+            f.write(json.dumps({"model": "sonnet", "statusLine": sl}, indent=2))
+        backup = os.path.realpath(proj) + ".ctempo-backup-20261001-090000"
+        with open(backup, "w") as f:
+            f.write('{"model": "sonnet"}')
+        os.makedirs(self.home)
+        with open(install.state_path(), "w") as f:  # what version 1 wrote for `install --apply --settings proj`
+            json.dump({"installed": True, "settings_path": proj, "had_file": True, "backup_path": backup,
+                       "original_sha256": install.sha('{"model": "sonnet"}'), "had_statusLine": False,
+                       "original_statusLine": None, "had_keys": {k: False for k in install.PLUGIN_KEYS},
+                       "python": sys.executable, "entry": install.entry_path(), "written_statusLine": sl,
+                       "mod": {"marketplace": install.MARKETPLACE, "plugin": install.PLUGIN_ID, "root": install.repo_root()}}, f)
+        with self._user_file(IRREGULAR):
+            for c in install.mod_commands(install.repo_root()):
+                plugin_cli(self.path)(c)  # version 1's plugin commands
+            rcs = self._steps(proj, "iU-nomod", "uU", "uP")
+        self.assertEqual(rcs, [0, 0, 0])
+        self.assertEqual(json.loads(self.read()), json.loads(IRREGULAR))
+        self.assertEqual(install.read_text(proj), '{"model": "sonnet"}')
+        state = install.load_state()
+        self.assertEqual(state.get("records"), {})
+        self.assertNotIn("mod", state)
+
+    def test_command_put_in_compose_wins_over_a_backup_when_uninstall_finds_no_record(self):
+        # Review 7 (install-fuzz#3): install.json is gone and the user changed the command in
+        # ctempo's --compose. Uninstall restores that command, as a repin would have recorded
+        # it, not the older one in the backup from before ctempo (and, when there was no
+        # statusLine before ctempo, without the refreshInterval ctempo added).
+        newer = "npx -y ccstatusline@latest"
+        theirs = {"type": "command", "command": "~/old-line.sh"}
+        for start, want in ((dict(SETTINGS, statusLine=theirs), dict(theirs, command=newer)),
+                            (SETTINGS, {"type": "command", "command": newer, "padding": 0})):
+            with self.subTest(statusLine=start.get("statusLine")):
+                self._reset()
+                self.write(start)
+                self.run_cmd(install.install, args(self.path, apply=True))
+                shutil.rmtree(self.home)  # install.json gone
+                obj = json.loads(self.read())
+                obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
+                obj["statusLine"]["padding"] = 0
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                after = json.loads(self.read())
+                self.assertEqual(after.pop("statusLine", None), want)
+                self.assertEqual(after, SETTINGS)
+
+    def test_command_put_in_compose_survives_replace_and_then_a_lost_record(self):
+        # Review 7 (install fuzzer): the user changed the command in ctempo's --compose, then
+        # `install --replace` dropped it from the file (kept in the backup it took and in
+        # install.json), then install.json was lost. That backup's --compose wins over the
+        # older backup from before ctempo, or is used when there is none (then with the
+        # statusLine's other keys as ctempo ran it: nothing tells which were ctempo's).
+        newer = "npx -y ccstatusline@latest"
+        theirs = {"type": "command", "command": "~/old-line.sh"}
+        for start, want in ((dict(SETTINGS, statusLine=theirs), dict(theirs, command=newer)),
+                            (SETTINGS, {"type": "command", "command": newer, "padding": 0}),
+                            (None, {"type": "command", "command": newer, "padding": 0, "refreshInterval": 60})):
+            with self.subTest(start=start and start.get("statusLine", "none")):
+                self._reset()
+                if start is None:
+                    if os.path.exists(self.path):
+                        os.remove(self.path)
+                else:
+                    self.write(start)
+                self.run_cmd(install.install, args(self.path, apply=True))
+                obj = json.loads(self.read())
+                obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
+                obj["statusLine"]["padding"] = 0
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                rc, out = self.run_cmd(install.install, args(self.path, apply=True, replace=True))
+                self.assertIn("REPLACE", out)
+                shutil.rmtree(self.home)  # install.json gone
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                after = json.loads(self.read())
+                self.assertEqual(after.pop("statusLine", None), want)
+                self.assertEqual(after, start and SETTINGS or {})
+
+    def test_uninstall_no_mod_keeps_runtime_json_for_a_mod_only_the_user_file_lists(self):
+        # Review 7 (install fuzzer): install.json was lost while the mod was installed, an
+        # `install --no-mod` wrote runtime.json again, and `uninstall --no-mod` deleted it as if
+        # no mod were left, so a later uninstall that failed kept a mod record without it. The
+        # user file lists the mod: it is kept, and runtime.json with it, until a full uninstall.
+        runtime = os.path.join(self.home, "runtime.json")
+        with self._user_file(IRREGULAR):
+            self._steps(None, "iU")
+            shutil.rmtree(self.home)  # install.json gone
+            rcs = self._steps(None, "iU-nomod", "u*-nomod")
+            self.assertEqual(rcs, [0, 0])
+            self.assertTrue(install.load_state().get("mod"))
+            self.assertTrue(os.path.exists(runtime))
+            rcs = self._steps(None, "u*-nobin")
+            self.assertEqual(rcs, [1])
+            self.assertTrue(os.path.exists(runtime))
+            rcs = self._steps(None, "u*")
+        self.assertEqual(rcs, [0])
+        self.assertEqual(json.loads(self.read()), json.loads(IRREGULAR))
+        self.assertFalse(os.path.exists(runtime))
+        state = install.load_state()
+        self.assertEqual(state.get("records"), {})
+        self.assertNotIn("mod", state)
+
 
 if __name__ == "__main__":
     unittest.main()
