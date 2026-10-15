@@ -142,6 +142,12 @@ class Store:
         self.meta_set(key, int(self.meta_get(key, 0) or 0) + by)
 
     # -- readers (per-session last reading, for freshness) -------------------
+    # Each session's reading before last lives in a second row, keyed by the
+    # session id plus this suffix (no schema change). A session id can be
+    # shared by 2 processes, and the idle one re-renders the value the
+    # session left (D-06).
+    BEFORE_LAST = "\x1fbefore"
+
     def reader_get(self, session_id, window):
         return self.db.execute(
             "SELECT used_pct, resets_at, ts FROM readers WHERE session_id=? AND window=?",
@@ -268,6 +274,14 @@ class Store:
             "SELECT id, ts, used_pct, resets_at FROM samples WHERE window_id=? AND flag=? ORDER BY ts",
             (wid, ANOMALY),
         ).fetchall()
+
+    def withdraw_anomalies(self, wid, reader, used, resets_at, jitter):
+        """Delete a session's pending anomalies of 1 reading in an instance."""
+        self.db.execute(
+            "DELETE FROM samples WHERE window_id=? AND flag=? AND COALESCE(session_id, '~' || source)=? "
+            "AND ABS(used_pct - ?) < 1e-9 AND ABS(resets_at - ?) <= ?",
+            (wid, ANOMALY, reader, used, resets_at, jitter),
+        )
 
     def move_samples(self, ids, wid, flag=FRESH):
         for sid in ids:

@@ -394,6 +394,277 @@ class Record(TempHome):
         self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R7, "shift"), (moved, None)])
         self.assertEqual(commands._closed(self.st, SEVEN_DAY, MON), [])
 
+    def test_two_idle_twins_cannot_fake_a_drop_reset(self):
+        # Review 13 (fuzz#0): 2 terminals on 1 session id, idle since 57%
+        # and 58%, re-render every minute while s2 works the window up to 75%.
+        # Each render differed from the reader row the other one wrote, so
+        # both were fresh, and A then B made 2 anomalies in a row: a drop
+        # reset that never happened, again after each new level of s2. The
+        # line showed 58% at 75%, and `report` counted the phantom windows.
+        t = MON + 3 * H
+        self.feed(t, five=(57, self.R5), sid="s1")  # terminal A
+        self.feed(t + 30, five=(58, self.R5), sid="s1")  # terminal B
+        for k in range(6):
+            self.feed(t + 600 + k * 60, five=(60 + 3 * k, self.R5), sid="s2")
+        t += 1200
+        for k in range(4):
+            self.feed(t + k * 120, five=(75 + k, self.R5), sid="s2")
+            self.assertEqual(self.feed(t + 20 + k * 120, five=(57, self.R5), sid="s1")[FIVE_HOUR], "stale")
+            self.assertEqual(self.feed(t + 40 + k * 120, five=(58, self.R5), sid="s1")[FIVE_HOUR], "stale")
+        w = self.windows(FIVE_HOUR)
+        self.assertEqual([(i["close_reason"], i["max_used"]) for i in w], [(None, 78)])
+        self.assertEqual(pace.five_hour(self.st, t + 500, self.cfg)["used"], 78)
+        self.assertEqual(commands._closed(self.st, FIVE_HOUR, MON), [])
+
+    def test_two_sessions_with_idle_twins_cannot_fake_a_drop_reset_at_install(self):
+        # Review 13 (fuzz#0): when the statusLine is installed, every open
+        # process re-renders. Each of 2 sessions had an idle twin with an old,
+        # lower reading: the twins' renders were each session's first change,
+        # with no earlier reading to show a replay, and the 2 made a drop
+        # reset. A session's first change may join a run but not complete it.
+        t = MON + H
+        self.feed(t, five=(62, self.R5), sid="s1")
+        self.feed(t + 1, five=(62, self.R5), sid="s2")
+        self.assertEqual(self.feed(t + 39, five=(27, self.R5), sid="s2")[FIVE_HOUR], "anomaly")  # s2's twin
+        self.assertEqual(self.feed(t + 52, five=(36, self.R5), sid="s1")[FIVE_HOUR], "anomaly")  # s1's twin
+        for k in range(1, 4):  # the 4 processes keep re-rendering
+            self.feed(t + k * 60, five=(62, self.R5), sid="s1")
+            self.feed(t + k * 60 + 1, five=(62, self.R5), sid="s2")
+            self.feed(t + k * 60 + 39, five=(27, self.R5), sid="s2")
+            self.feed(t + k * 60 + 52, five=(36, self.R5), sid="s1")
+        self.assertEqual([(i["close_reason"], i["max_used"]) for i in self.windows(FIVE_HOUR)], [(None, 62)])
+        # A real drop reset read by those sessions still counts, 1 reading later.
+        t += 600
+        self.assertEqual(self.feed(t, five=(1, self.R5), sid="s1")[FIVE_HOUR], "anomaly")
+        self.assertEqual(self.feed(t + 60, five=(2, self.R5), sid="s1")[FIVE_HOUR], "reset_drop")
+        self.assertEqual([(i["close_reason"], i["max_used"]) for i in self.windows(FIVE_HOUR)], [("drop", 62), (None, 2)])
+
+    def test_an_idle_twins_pre_reset_reading_cannot_raise_a_window_a_drop_opened(self):
+        # Review 13 (fuzz#1): the 5h window was reset early with resets_at
+        # unchanged (85% to 0). Terminal A worked on, and terminal B on the
+        # same session id re-rendered its 85%: fresh, since the reader row
+        # held A's reading, so it raised the new window's max to 85. The line
+        # showed 85% at 2%, and A's next 2 readings faked another drop, a
+        # phantom window per cycle.
+        t = MON + 2 * H
+        self.feed(t, five=(80, self.R5), sid="s1")
+        self.feed(t + 30, five=(85, self.R5), sid="s1")
+        t += 600
+        self.assertEqual(self.feed(t, five=(1, self.R5), sid="s1")[FIVE_HOUR], "anomaly")
+        self.assertEqual(self.feed(t + 5, five=(2, self.R5), sid="s1")[FIVE_HOUR], "reset_drop")
+        for k in range(4):
+            self.assertEqual(self.feed(t + 40 + k * 60, five=(85, self.R5), sid="s1")[FIVE_HOUR], "anomaly")  # B
+            self.feed(t + 50 + k * 60, five=(3 + 2 * k, self.R5), sid="s1")  # A
+            self.feed(t + 55 + k * 60, five=(4 + 2 * k, self.R5), sid="s1")
+        w = self.windows(FIVE_HOUR)
+        self.assertEqual([(i["close_reason"], i["max_used"]) for i in w], [("drop", 85), (None, 10)])
+        self.assertEqual(pace.five_hour(self.st, t + 300, self.cfg)["used"], 10)
+        # A goes idle too: once B's 85 is seen to be a replay, its pending
+        # render is withdrawn, so it cannot complete a later rise.
+        self.assertEqual(self.feed(t + 300, five=(85, self.R5), sid="s1")[FIVE_HOUR], "anomaly")
+        self.assertIn(self.feed(t + 330, five=(10, self.R5), sid="s1")[FIVE_HOUR], ("heartbeat", "throttled"))
+        self.assertEqual(self.feed(t + 360, five=(85, self.R5), sid="s1")[FIVE_HOUR], "stale")
+        # A real jump over it (claude.ai use while Claude Code was idle) takes
+        # drop_samples readings, like the drop.
+        t += 1800
+        self.assertEqual(self.feed(t, five=(32, self.R5), sid="s1")[FIVE_HOUR], "anomaly")
+        self.assertEqual(self.feed(t + 60, five=(33, self.R5), sid="s1")[FIVE_HOUR], "rise")
+        self.assertEqual(self.windows(FIVE_HOUR)[-1]["max_used"], 33)
+
+    def test_an_idle_twin_cannot_undo_a_reset_moved_earlier(self):
+        # Review 13 (fuzz#2): the weekly reset moved 1 h earlier while
+        # terminal A on the same session id sat idle at 30% of the old reset.
+        # A's re-render was fresh (B had written the reader row) and later, so
+        # it rolled the window back to the old reset; B's next render undid
+        # that, 1 window row per render pair. Once B was 15 points above
+        # 30, the line stuck on the old reset at 30% while B was at 50%.
+        R = self.R7
+        t = MON + 2 * D
+        self.feed(t, week=(30, R), sid="s1")  # A, idle from now on
+        for k in range(5):
+            self.feed(t + 600 + k * 600, week=(31 + k, R), sid="s1")  # B working
+        t += 3 * H
+        E = R - int(H)
+        self.feed(t, week=(36, E), sid="s1")
+        self.feed(t + 10, week=(37, E), sid="s1")
+        for k in range(4):
+            self.assertEqual(self.feed(t + 60 + k * 60, week=(30, R), sid="s1")[SEVEN_DAY], "stale")
+            self.feed(t + 90 + k * 60, week=(37, E), sid="s1")
+        for k, lvl in enumerate((40, 44, 46, 50)):
+            self.feed(t + 600 + k * 120, week=(lvl, E), sid="s1")
+            self.assertEqual(self.feed(t + 660 + k * 120, week=(30, R), sid="s1")[SEVEN_DAY], "stale")
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"], i["max_used"]) for i in w], [(E, None, 50), (R, "shift", 35)])
+        # After the real reset, A's dead week (its reset is still ahead) does
+        # not open again.
+        self.assertEqual(self.feed(E + 60, week=(30, R), sid="s1")[SEVEN_DAY], "stale")
+        self.assertIsNone(self.st.open_instance(SEVEN_DAY))
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in commands._closed(self.st, SEVEN_DAY, MON)], [(E, "expired")])
+
+    def test_two_idle_twins_cannot_undo_a_reset_moved_later(self):
+        # Review 13 (fuzz#3): 2 idle terminals on session s1, last at 40%
+        # and 41% of the week, alternated as fresh readings. When s2 read the
+        # reset moved 1 h later, A's 40 was a pending anomaly and B's 41
+        # completed the drop_samples run: the pre-move window was reopened,
+        # and `report` later listed the running week as finished.
+        R = self.R7
+        t = MON + 2 * D
+        self.feed(t, week=(40, R), sid="s1")
+        self.feed(t + 30, week=(41, R), sid="s1")
+        for k in range(4):
+            self.feed(t + 600 + k * 600, week=(42 + k, R), sid="s2")
+        t += 3 * H
+        moved = R + int(H)
+        self.assertEqual(self.feed(t, week=(46, moved), sid="s2")[SEVEN_DAY], "rollover")
+        for k in range(3):
+            self.assertEqual(self.feed(t + 20 + k * 60, week=(40, R), sid="s1")[SEVEN_DAY], "stale")
+            self.assertEqual(self.feed(t + 40 + k * 60, week=(41, R), sid="s1")[SEVEN_DAY], "stale")
+        self.assertEqual(self.st.open_instance(SEVEN_DAY)["reset_ts"], moved)
+        self.feed(R + 600, week=(47, moved), sid="s2")
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(R, "shift"), (moved, None)])
+        self.assertEqual(commands._closed(self.st, SEVEN_DAY, MON), [])
+
+    def test_idle_twins_of_two_sessions_cannot_undo_a_reset_moved_later(self):
+        # Review 13 (fuzz#3): sessions s1 and s3 each had an idle twin at the
+        # old reset and a busy one that read the reset moved later. Each idle
+        # render went back from its busy twin's reading, so it was fresh, and
+        # 2 in a row (1 per session) made the drop_samples run that
+        # reopened the old window. A session that last read the later reset
+        # completes a run only with what a reset moved earlier looks like.
+        R = self.R7
+        moved = R + int(H)
+        t = MON + 2 * D
+        self.feed(t, week=(30, R), sid="s1")  # s1's idle twin
+        self.feed(t + 10, week=(25, R), sid="s3")  # s3's idle twin
+        self.feed(t + 600, week=(32, R), sid="s1")
+        self.feed(t + 610, week=(33, R), sid="s3")
+        t += 3 * H
+        self.assertEqual(self.feed(t, week=(34, moved), sid="s2")[SEVEN_DAY], "rollover")  # a shift
+        for k in range(4):
+            self.feed(t + 20 + k * 60, week=(35, moved), sid="s1")
+            self.feed(t + 25 + k * 60, week=(35, moved), sid="s3")
+            self.assertEqual(self.feed(t + 40 + k * 60, week=(30, R), sid="s1")[SEVEN_DAY], "anomaly")
+            self.assertEqual(self.feed(t + 45 + k * 60, week=(25, R), sid="s3")[SEVEN_DAY], "anomaly")
+        self.assertEqual(self.st.open_instance(SEVEN_DAY)["reset_ts"], moved)
+        self.feed(R + 600, week=(36, moved), sid="s2")
+        self.assertEqual(commands._closed(self.st, SEVEN_DAY, MON), [])
+
+    def test_idle_twins_of_two_sessions_cannot_reopen_a_week_ctempo_never_saw(self):
+        # Review 13 (fuzz#3): at install, the idle twins of 2 sessions still
+        # showed a week that had ended early before ctempo saw it (its reset
+        # is still ahead, so the readings pass). Each was its session's first
+        # change, so neither was known as a replay, and the 2 made the
+        # drop_samples run that put the line on the dead week at 78%.
+        R_old, R_new = int(MON + 3 * D), int(MON + 7 * D)
+        t = MON + D
+        self.feed(t, week=(1, R_new), sid="s3")
+        self.feed(t + 8, week=(1, R_new), sid="s2")
+        self.feed(t + 12, week=(1, R_new), sid="s1")
+        for k in range(3):
+            self.assertEqual(self.feed(t + 29 + k * 60, week=(74, R_old), sid="s2")[SEVEN_DAY], "anomaly")
+            self.assertEqual(self.feed(t + 58 + k * 60, week=(78, R_old), sid="s1")[SEVEN_DAY], "anomaly")
+            self.feed(t + 68 + k * 60, week=(1, R_new), sid="s2")
+            self.feed(t + 72 + k * 60, week=(1, R_new), sid="s1")
+        self.assertEqual(self.st.open_instance(SEVEN_DAY)["reset_ts"], R_new)
+        self.assertEqual(commands._closed(self.st, SEVEN_DAY, MON), [])
+
+    def test_an_idle_twin_cannot_undo_a_moved_reset_once_the_level_moved_on(self):
+        # Review 13 (fuzz#2): a twin whose stale reading equals the moved one
+        # still undoes the move (D-10's limit). Once the busy twin read a
+        # higher level at the moved reset, the stale one still undid it,
+        # since the undo compared it with the reading that opened the window
+        # only; the busy twin's next render then went back to its reading
+        # before last and the line stayed on the old reset. A session's real
+        # reading is never below its own last one.
+        R = self.R7
+        moved = R + int(H)
+        t = MON + 2 * D
+        self.feed(t, week=(1, R), sid="s1")
+        self.feed(t + 600, week=(2, R), sid="s1")  # both terminals' last reading
+        t += 3 * H
+        self.assertEqual(self.feed(t, week=(2, moved), sid="s1")[SEVEN_DAY], "rollover")  # B: the move
+        self.assertEqual(self.feed(t + 60, week=(3, moved), sid="s1")[SEVEN_DAY], "fresh")  # B works on
+        self.assertEqual(self.feed(t + 90, week=(2, R), sid="s1")[SEVEN_DAY], "anomaly")  # A, idle
+        for k in range(3):
+            self.feed(t + 120 + k * 60, week=(3, moved), sid="s1")
+            self.feed(t + 150 + k * 60, week=(2, R), sid="s1")
+        self.assertEqual(self.st.open_instance(SEVEN_DAY)["reset_ts"], moved)
+
+    def test_two_idle_twins_cannot_undo_a_real_early_reset(self):
+        # Review 13 (fuzz#3): the early-reset variant. The week was reset
+        # early to 0; twins idle at 60% and 62% of the dead week reopened it,
+        # and the line showed 70% with the old reset.
+        R = self.R7
+        t = MON + 2 * D
+        self.feed(t, week=(60, R), sid="s1")
+        self.feed(t + 30, week=(62, R), sid="s1")
+        self.feed(t + 600, week=(70, R), sid="s2")
+        t += 3 * H
+        r2 = int(t + 7 * D)
+        self.assertEqual(self.feed(t, week=(0, r2), sid="s2")[SEVEN_DAY], "rollover")
+        for k in range(3):
+            self.assertEqual(self.feed(t + 20 + k * 3600, week=(60, R), sid="s1")[SEVEN_DAY], "stale")
+            self.assertEqual(self.feed(t + 40 + k * 3600, week=(62, R), sid="s1")[SEVEN_DAY], "stale")
+            self.feed(t + 3000 + k * 3600, week=(1 + k, r2), sid="s2")
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"], i["max_used"]) for i in w], [(R, "rollover", 70), (r2, None, 3)])
+
+    def test_a_reset_moved_earlier_is_taken_on_one_reading(self):
+        # Review 13 (fuzz#4): the 5h window was maxed at 100% with reset
+        # 15:00, and at 13:30 the reset moved to 14:00. Each rate-limited
+        # response repeated (100, 14:00): the first was an anomaly waiting for
+        # drop_samples, the rest heartbeats, so the line said 100% until
+        # 15:00, 1 hour past the real reset. A move later was taken at once.
+        R = int(MON + 15 * H)
+        for k, lvl in enumerate((70, 85, 95, 100)):
+            self.feed(MON + 11 * H + k * 900, five=(lvl, R), sid="s1")
+        t = MON + 13 * H + 1800
+        E = R - int(H)
+        self.assertEqual(self.feed(t, five=(100, E), sid="s1")[FIVE_HOUR], "reset_shift")
+        for k in range(1, 6):
+            self.feed(t + k * 300, five=(100, E), sid="s1")
+        self.assertEqual(pace.five_hour(self.st, E - 60, self.cfg)["reset_ts"], E)
+        self.feed(E + 600, five=(100, E), sid="s1")  # rejected: it has passed
+        self.assertFalse(pace.five_hour(self.st, E + 601, self.cfg)["present"])
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in self.windows(FIVE_HOUR)], [(E, "expired"), (R, "shift")])
+        # The weekly mirror of the move later at the same level (D-08).
+        for k in range(5):
+            self.feed(MON + 2 * D + k * 3600, week=(96 + k, self.R7), sid="s1")
+        E7 = self.R7 - int(H)
+        self.assertEqual(self.feed(MON + 3 * D, week=(100, E7), sid="s1")[SEVEN_DAY], "reset_shift")
+        # Moved back later, read at the same level: followed, not a replay.
+        self.assertEqual(self.feed(MON + 3 * D + 600, week=(100, self.R7), sid="s1")[SEVEN_DAY], "rollover")
+        self.assertEqual(self.st.open_instance(SEVEN_DAY)["reset_ts"], self.R7)
+
+    def test_a_bogus_reset_that_opened_a_window_is_undone_by_one_reading(self):
+        # Review 13 (fuzz#4): the bogus later reset was the first reading of
+        # a new window, so no rollover closed the real one, and the undo by
+        # 1 reading did not apply. The session went idle and the line kept
+        # the bogus reset past the real one.
+        self.feed(MON + H, five=(40, self.R5), sid="s1")
+        self.feed(MON + 2 * H, five=(55, self.R5), sid="s1")
+        r2 = int(MON + 11 * H)
+        t = MON + 6 * H + 3000
+        self.assertEqual(self.feed(t, five=(2, r2 + int(H)), sid="s1")[FIVE_HOUR], "new_window")
+        self.assertEqual(self.feed(t + 30, five=(3, r2), sid="s1")[FIVE_HOUR], "reset_shift")
+        for k in range(3):
+            self.feed(t + 90 + k * 60, five=(3, r2), sid="s1")
+        self.assertEqual(pace.five_hour(self.st, t + 300, self.cfg)["reset_ts"], r2)
+        self.assertFalse(pace.five_hour(self.st, r2 + 60, self.cfg)["present"])
+
+    def test_an_unknown_earlier_reset_far_above_the_max_still_takes_drop_samples(self):
+        # Review 13: the one-reading move earlier asks for about the same
+        # level. An idle twin's reading of a week ctempo never saw (it ended
+        # by an early reset before install) carries an earlier reset no
+        # window had, far above the open window: it must not open on its own.
+        t = MON + 2 * D
+        r2 = int(t + 7 * D)
+        self.feed(t, week=(1, r2), sid="s3")
+        self.feed(t + 8, week=(1, r2), sid="s2")
+        self.assertEqual(self.feed(t + 29, week=(74, self.R7), sid="s2")[SEVEN_DAY], "anomaly")
+        self.assertEqual(self.st.open_instance(SEVEN_DAY)["reset_ts"], r2)
+
     def test_first_words_of_unknown_sessions_cannot_fake_a_reset(self):
         # ctempo is installed while three sessions are open: every one
         # re-renders at once; two idle ones carry an old, much lower value.
