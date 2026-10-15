@@ -41,8 +41,12 @@ a temporary folder for every step: the real ones are never read or written.
    or "is not recognized".
 5. A read-only settings.json (attrib +R on Windows): install and uninstall
    go through, and it comes back byte for byte, still read-only.
+6. Windows: a CTEMPO_HOME rooted with a slash and no drive (/srv/ctempo-ci)
+   in the settings env. What Git Bash hands python.exe for it is reported
+   only; `install --apply` must refuse it up front ("has no drive", exit 1),
+   with settings.json byte for byte what it was and no ctempo home made.
 
-Exit 1 when a check in 1, 2, 4 or 5 fails.
+Exit 1 when a check in 1, 2, 4, 5 or 6 fails.
 """
 
 import argparse
