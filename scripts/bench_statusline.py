@@ -21,7 +21,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, ROOT)
 
-from ctempo import clock, config, ingest, profile  # noqa: E402
+from ctempo import clock, config, ingest, profile, winshell  # noqa: E402
 from ctempo.store import Store  # noqa: E402
 
 
@@ -89,7 +89,7 @@ def main():
             "five_hour": {"used_percentage": round(fu, 1), "resets_at": int(fr)},
             "seven_day": {"used_percentage": round(wu, 1), "resets_at": int(wr)}}}
     env = dict(os.environ, CTEMPO_HOME=home)
-    argv = [a.python, "-I", "-S", os.path.join(ROOT, "bin", "ctempo"), "statusline"]
+    argv = [a.python] + winshell.python_flags() + [os.path.join(ROOT, "bin", "ctempo"), "statusline"]  # as installed
     times, out = [], b""
     for i in range(a.runs):
         payload["rate_limits"]["five_hour"]["used_percentage"] += 0.1  # a fresh reading each run
@@ -107,7 +107,7 @@ def main():
 
     print("python: %s" % a.python)
     print("runs: %d  p50 %.1f ms  p95 %.1f ms  max %.1f ms" % (len(times), pct(0.5), pct(0.95), times[-1]))
-    print("last line: %s" % out.decode().strip())
+    print("last line: %s" % out.decode("utf-8", "replace").strip())
     if tmp:
         shutil.rmtree(tmp, ignore_errors=True)
 

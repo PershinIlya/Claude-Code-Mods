@@ -80,6 +80,9 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
       - name: Install, the statusLine through Git Bash, pwsh and powershell.exe, uninstall
         run: python scripts/ci_integration.py
+      # Report only: a fresh process per render, as Claude Code runs it (budget: p95 100 ms).
+      - name: Time the statusline
+        run: python -X utf8 scripts/bench_statusline.py --runs 50
 
   macos-integration:
     name: macos-integration
@@ -98,3 +101,5 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code
       - name: Install, the statusLine through /bin/sh, uninstall
         run: python scripts/ci_integration.py
+      - name: Time the statusline
+        run: python -X utf8 scripts/bench_statusline.py --runs 50
