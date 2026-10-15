@@ -579,6 +579,40 @@ def read_only(tmp):
         fail("%s: %s" % (name, msg))
 
 
+def drive_less_home(tmp, entry):
+    """Windows: what Git Bash hands python.exe for a CTEMPO_HOME rooted with a slash and no
+    drive (reported only), and that install refuses such a value in the settings env, which
+    Claude Code passes to the statusLine as written."""
+    print("\n== A CTEMPO_HOME with no drive: /srv/ctempo-ci")
+    if not WINDOWS:
+        print("  (Windows only: elsewhere it is an absolute path)")
+        return
+    env = sandbox(tmp)
+    probe = "'%s' -I -S -c 'import os; print(os.environ[\"CTEMPO_HOME\"])'" % sys.executable.replace("\\", "/")
+    for sh, argv, e in shells(env):
+        if sh == "bash":
+            p = subprocess.run(argv + [probe], env=dict(e, CTEMPO_HOME="/srv/ctempo-ci"), capture_output=True,
+                               timeout=60, **hidden())
+            seen = (p.stdout + p.stderr).decode("utf-8", "replace").strip()
+            print("  Git Bash hands python.exe CTEMPO_HOME=%s" % seen)
+            ROWS.append(("CTEMPO_HOME /srv/ctempo-ci", sh, "python.exe sees %s" % seen))
+    path = os.path.join(tmp, "settings.json")
+    before = b'{\n  "env": {\n    "CTEMPO_HOME": "/srv/ctempo-ci"\n  }\n}\n'
+    with open(path, "wb") as f:
+        f.write(before)
+    args = ["install", "--apply", "--settings", path, "--no-bootstrap", "--no-mod"]
+    p = subprocess.run([sys.executable, entry] + args, env=env, capture_output=True, timeout=600)
+    out = (p.stdout + p.stderr).decode("utf-8", "replace")
+    print("  $ python %s %s (its env: CTEMPO_HOME=/srv/ctempo-ci) -> exit %d" % (entry, " ".join(args), p.returncode))
+    show(out)
+    with open(path, "rb") as f:
+        after = f.read()
+    ok = p.returncode == 1 and "has no drive" in out and after == before and not os.path.exists(env["CTEMPO_HOME"])
+    ROWS.append(("CTEMPO_HOME /srv/ctempo-ci", "install --apply", "refused" if ok else "FAILED"))
+    if not ok:
+        fail("install --apply with CTEMPO_HOME=/srv/ctempo-ci in the settings env: not refused up front")
+
+
 def report(tmp):
     print("\n== The statusLine shell and the installer's interpreter report")
     env = sandbox(tmp)
@@ -677,6 +711,7 @@ def main(argv):
             own_forms(env, python, entry)
         launchers(os.path.join(tmp, "launchers"))
         read_only(os.path.join(tmp, "read-only"))
+        drive_less_home(os.path.join(tmp, "nodrive"), os.path.join(ROOT, "bin", "ctempo"))
         if not args.no_marketplace:
             marketplace(os.path.join(tmp, "marketplace"))
     finally:

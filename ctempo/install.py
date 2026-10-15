@@ -594,6 +594,21 @@ def settings_env(obj=None):
     return env
 
 
+def home_problem(obj=None):
+    """Windows: why ctempo refuses the CTEMPO_HOME of the settings env of `obj`,
+    or of this process (config.windows_home), else None. Claude Code passes the
+    settings env's value to the statusLine as written, and Git Bash rewrites a
+    /x there before python.exe sees it: only here does the raw value show."""
+    if not config.IS_WINDOWS:
+        return None
+    try:
+        config.windows_home(settings_env(obj).get("CTEMPO_HOME"))
+        config.home()
+    except config.HomeError as e:
+        return str(e)
+    return None
+
+
 def predicted_shell(obj=None):
     """The shell Claude Code will run the statusLine of settings `obj` with on Windows:
     "bash" or "powershell" (winshell.predict_shell, with that file's settings env)."""
@@ -943,6 +958,10 @@ def install(args, out=print):
         obj, raw, fmt = read_settings(spath)
     except ValueError as e:
         out("error: %s" % e)
+        return 1
+    bad = home_problem(obj)
+    if bad:  # the statusLine and the mod would use different folders, or none
+        out("error: %s" % bad)
         return 1
     python, report = choose_python(args.python)
     out("Interpreter candidates (python -I -S startup, best of 3):")
@@ -1307,6 +1326,7 @@ def _drop_records(state, real):
 
 
 def uninstall(args, out=print):
+    config.home()  # a CTEMPO_HOME ctempo refuses (config.HomeError) stops it before anything changes
     state = load_state()
     records = state.setdefault("records", {})
     if args.settings:

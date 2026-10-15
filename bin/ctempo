@@ -9,6 +9,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
+if os.name == "nt":  # a TZ the C runtime misreads goes before anything reads local time
+    from ctempo.clock import windows_tz
+
+    windows_tz()
+
 if len(sys.argv) > 1 and sys.argv[1] == "statusline":
     from ctempo.statusline import main
 

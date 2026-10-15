@@ -34,6 +34,8 @@ type Options = {
   limits?: SessionRateLimit[]
   env?: Record<string, string>
   run?: () => { value: ProcessRunResult }
+  // What $.fs.exists answers; left out, nothing answers it (the call rejects).
+  exists?: (path: string) => boolean
 }
 
 function stub(on: StubOn, options: Options = {}) {
@@ -53,6 +55,8 @@ function stub(on: StubOn, options: Options = {}) {
     value: { startedAt: NOW - 60_000, context: { window: 200_000 }, rateLimits: options.limits ?? LIMITS },
   }))
   on('session.id', () => ({ value: 'sess-1' }))
+  const exists = options.exists
+  if (exists) on('fs.exists', (_$, e) => ({ value: exists(e.path) }))
   on('process.run', (_$, e) => {
     runs.push(e)
     return options.run?.() ?? ran(JSON.stringify(CLI))
@@ -251,7 +255,6 @@ const WINDOWS_HOMES: [string, Record<string, string>, string][] = [
   ['an absolute E:\\ CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: 'E:\\data\\ctempo' }, 'E:\\data\\ctempo'],
   ['an absolute E:/ CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: 'E:/data/ctempo' }, 'E:/data/ctempo'],
   ['a rooted \\x, on the home drive', { ...WINDOWS, CTEMPO_HOME: '\\data\\ctempo' }, 'C:\\data\\ctempo'],
-  ['a rooted /x, on the home drive', { ...WINDOWS, CTEMPO_HOME: '/data/ctempo' }, 'C:/data/ctempo'],
   ["Git Bash's /c/Users/u/ctempo", { ...WINDOWS, CTEMPO_HOME: '/c/Users/u/ctempo' }, 'C:/Users/u/ctempo'],
   ["Git Bash's /d/data, on another drive", { ...WINDOWS, CTEMPO_HOME: '/d/data' }, 'D:/data'],
 ]
@@ -327,13 +330,13 @@ test("Windows: reads Git Bash's /c/Users/x as C:/Users/x, as the CLI does", asyn
     ['/C/Users/me/x', 'C:\\Users\\me\\x'],
     ['/c', 'C:\\'],
     ['/e/', 'E:\\'],
-    ['/cc/x', 'C:\\cc\\x'],
-    ['/1/x', 'C:\\1\\x'],
-    ['/c\\x', 'C:\\c\\x'],
-    ['/\u00e9/x', 'C:\\\u00e9\\x'],
   ]
   for (const [given, folder] of cli) {
     expect(resolveHome(given, windows('C:\\Users\\me')).replace(/\//g, '\\')).toBe(folder)
+  }
+  // Not a drive: refused, as config.windows_home refuses them (TildeHome).
+  for (const given of ['/cc/x', '/1/x', '/c\\x', '/\u00e9/x']) {
+    expect(() => resolveHome(given, windows('C:\\Users\\me'))).toThrow(/has no drive/)
   }
   expect(resolveHome('/d/data', windows(undefined))).toBe('D:/data') // a drive of its own needs no home
   expect(fromGitBash('/z/')).toBe('Z:/')
@@ -383,4 +386,82 @@ test('follows mod.refresh_s from the CLI', async ($, on) => {
   expect(runs.length).toBe(1)
   await clock.advance(240_000)
   expect(runs.length).toBe(2)
+})
+
+// Review 15: Git Bash, which runs the statusLine on Windows, rewrites a
+// CTEMPO_HOME rooted with a slash and no drive to a folder under its own
+// install (C:\Program Files\Git\srv\ctempo) before Python sees it, while the
+// mod hands Python the value as given: the band and the line would use two
+// folders. The CLI refuses the same values (tests/test_statusline.py, NoDriveHome).
+for (const value of ['/srv/ctempo', '/ctempo', '/tmp/x', '/']) {
+  test(`Windows: refuses the drive-less CTEMPO_HOME ${value}, naming the fix`, async ($, on) => {
+    const { runs, clock, reads } = stub(on, { env: { ...WINDOWS, CTEMPO_HOME: value } })
+    await $.session.start(start('desktop'))
+    await clock.advance(1)
+    expect(reads.length).toBe(0)
+    expect(runs.length).toBe(0)
+    const ui = await $.ui.mount(band('desktop'))
+    const why =
+      `CTEMPO_HOME ${value} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
+      `Write it with a drive, e.g. C:${value}, or as ~/...`
+    expect(await ui.find({ type: 'Text', text: ending(why) })).toBeDefined()
+  })
+}
+
+test('the drive-less rule is Windows only, and UNC, \\x and Git Bash drives still work', async () => {
+  const windows = (home: string | undefined) => ({ windows: true, home })
+  expect(resolveHome('/srv/ctempo', { windows: false, home: '/home/u' })).toBe('/srv/ctempo')
+  expect(resolveHome('//srv/share/x', windows('C:\\Users\\u'))).toBe('//srv/share/x')
+  expect(resolveHome('/\\srv\\share\\x', windows('C:\\Users\\u'))).toBe('/\\srv\\share\\x')
+  expect(resolveHome('\\srv\\ctempo', windows('D:\\Users\\u'))).toBe('D:\\srv\\ctempo')
+  expect(resolveHome('/d/srv', windows('C:\\Users\\u'))).toBe('D:/srv')
+})
+
+// Review 15: on Windows a pinned python.exe that is gone does not fail to
+// start. cmd.exe runs the command instead, and its message names neither
+// Python nor the fix: the band said "ctempo: operable program or batch file.".
+const GONE = 'C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
+const GONE_RUNTIME = JSON.stringify({ python: GONE, args: ['-I', '-S', '-X', 'utf8'], entry: 'C:\\repo\\bin\\ctempo' })
+const NOT_RECOGNIZED =
+  `'${GONE}' is not recognized as an internal or external command,\r\n` + 'operable program or batch file.\r\n'
+const NOT_FOUND = /Python not found at C:\\Users\\u\\.*python\.exe: run `ctempo install --apply`/
+
+function failed(exitCode: number, stderr: string): () => { value: ProcessRunResult } {
+  return () => ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+}
+
+const MISSING: [string, number, string][] = [
+  ['its folder still there (exit 9009)', 9009, NOT_RECOGNIZED],
+  ['its folder gone', 1, 'The system cannot find the path specified.\r\n'],
+]
+for (const [what, exitCode, stderr] of MISSING) {
+  test(`Windows: names a missing interpreter, ${what}`, async ($, on) => {
+    const { runs, clock, reads } = stub(on, {
+      env: WINDOWS,
+      runtime: GONE_RUNTIME,
+      exists: () => false,
+      run: failed(exitCode, stderr),
+    })
+    await $.session.start(start('desktop'))
+    await clock.advance(1)
+    expect(runs.length).toBe(1)
+    const ui = await $.ui.mount(band('desktop'))
+    expect(await ui.find({ type: 'Text', text: NOT_FOUND })).toBeDefined()
+    // runtime.json is read again on the next refresh: a reinstall needs no new session.
+    await clock.advance(60_000)
+    expect(reads.length).toBe(2)
+  })
+}
+
+test("Windows: keeps cmd.exe's whole message when exists() cannot tell", async ($, on) => {
+  // No fs.exists answer: the call rejects, which counts as present (a Store alias it cannot stat).
+  const { clock, reads } = stub(on, { env: WINDOWS, runtime: GONE_RUNTIME, run: failed(9009, NOT_RECOGNIZED) })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  const ui = await $.ui.mount(band('desktop'))
+  const whole = /not recognized as an internal or external command, operable program or batch file\.$/
+  expect(await ui.find({ type: 'Text', text: whole })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Python not found/ })).toBeUndefined()
+  await clock.advance(60_000)
+  expect(reads.length).toBe(1)
 })

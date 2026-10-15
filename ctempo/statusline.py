@@ -26,7 +26,10 @@ def log_error(exc, where="statusline"):
         path = config.log_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX:
-            os.replace(path, path + ".1")
+            try:
+                os.replace(path, path + ".1")
+            except OSError:  # Windows: the log is held open without delete sharing; a later error rotates it
+                pass
         with open(path, "a", encoding="utf-8") as f:
             f.write("%s %s: %s\n" % (clock.strftime("%Y-%m-%dT%H:%M:%S", time.time()), where, exc))
             f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)[-6:]))

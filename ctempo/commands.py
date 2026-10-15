@@ -542,6 +542,8 @@ def cmd_bootstrap(args, cfg):
     finally:
         st.close()
     print("Scanned %d transcript files in %.1fs (%d skipped as older than the period)." % (stats["files"], el, stats["files_skipped_old"]))
+    if stats.get("files_unreadable"):
+        print("Could not open %d transcript files or folders: skipped." % stats["files_unreadable"])
     print("Assistant messages counted: %d (%d duplicate lines merged, %d unreadable lines)." % (stats["messages"], stats["duplicates"], stats["bad_lines"]))
     print("Only timestamps, message ids and token counts were read; no content was kept.")
     if prior is None:
@@ -567,6 +569,12 @@ def cmd_doctor(args, cfg):
         results.append((level, what, detail))
 
     add("ok", "ctempo %s" % _version(), "repo %s" % install.repo_root())
+    home_err = None
+    try:
+        config.home()
+    except config.HomeError as e:  # Windows: no home, so no runtime.json, database or log below
+        home_err = str(e)
+        add("fail", "CTEMPO_HOME", home_err)
     rt = None
     try:
         with open(config.runtime_path(), encoding="utf-8-sig") as f:
@@ -578,7 +586,7 @@ def cmd_doctor(args, cfg):
         add("ok" if ok else "fail", "pinned interpreter %s" % rt.get("python"),
             ("Python %s, sqlite %s, %.0f ms startup" % (ver, sq, ms)) if ok else note)
         add("ok" if os.path.exists(rt.get("entry", "")) else "fail", "entry point %s" % rt.get("entry"))
-    else:
+    elif not home_err:
         add("warn", "no runtime.json", "run `ctempo install --apply` (the mod reads it)")
 
     sp = install.settings_path(args.settings)
@@ -600,6 +608,11 @@ def cmd_doctor(args, cfg):
         if config.IS_WINDOWS:
             _doctor_shell(add, sp, obj, cmd)
             _doctor_compose(add, cmd)
+            # Claude Code passes the settings env's CTEMPO_HOME as written, but doctor run
+            # from Git Bash sees only the folder MSYS rewrote it to: check the raw one.
+            bad = install.home_problem(obj)
+            if bad and bad != home_err:
+                add("fail", "CTEMPO_HOME in the settings env", bad)
         if obj.get("disableAllHooks"):
             add("warn", "disableAllHooks is set", "the statusLine and mods do not run")
     except ValueError as e:
@@ -621,10 +634,10 @@ def cmd_doctor(args, cfg):
     else:
         add("warn", "could not list plugins", (se or "claude not on PATH").strip()[:120])
 
-    st = _open()
-    if st is None:
+    st = None if home_err else _open()
+    if st is None and not home_err:
         add("warn", "no database yet", config.db_path())
-    else:
+    elif st is not None:
         try:
             jm = st.db.execute("PRAGMA journal_mode").fetchone()[0]
             qc = st.db.execute("PRAGMA quick_check").fetchone()[0]
@@ -666,7 +679,7 @@ def cmd_doctor(args, cfg):
             add("fail", "database error", str(e))
         finally:
             st.close()
-    if os.path.exists(config.log_path()):
+    if not home_err and os.path.exists(config.log_path()):
         with open(config.log_path(), encoding="utf-8", errors="replace") as f:
             n = sum(1 for line in f if line[:2] == "20")
         add("warn" if n else "ok", "errors.log has %d entries" % n, config.log_path())
@@ -744,6 +757,12 @@ def cmd_config(args, cfg):
         p = config.write_defaults()
         print("Config at %s" % p)
     else:
-        print("# %s%s" % (config.config_path(), "" if os.path.exists(config.config_path()) else " (not created; defaults shown)"))
+        path = config.config_path()
+        if not os.path.exists(path):
+            note = " (not created; defaults shown)"
+        else:  # a file that does not parse is ignored as a whole: say so
+            why = config.unreadable(path)
+            note = " (not used: %s; defaults shown)" % why if why else ""
+        print("# %s%s" % (path, note))
         print(json.dumps(cfg, indent=2))
     return 0

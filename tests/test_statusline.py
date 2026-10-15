@@ -563,24 +563,27 @@ class TildeHome(unittest.TestCase):
     def test_home_expands_tilde_and_takes_relative_paths_from_home(self):
         # USERPROFILE too: Python reads `~` from it on Windows, never HOME.
         elsewhere = os.path.join(self.dir, "elsewhere")
-        rooted = ntpath.splitdrive(self.user)[0] + "\\srv\\ctempo" if WINDOWS else "/srv/ctempo"
+        # Windows refuses /srv/ctempo (tests/test_config.py, NoDriveHome); \srv\ctempo takes the home's drive.
+        drive = ntpath.splitdrive(self.user)[0]
+        rooted = ("\\srv\\ctempo", drive + "\\srv\\ctempo") if WINDOWS else ("/srv/ctempo", "/srv/ctempo")
         cases = (("~/.ctempo-moved", os.path.join(self.user, ".ctempo-moved")), ("~", self.user),
                  ("data/ctempo", os.path.join(self.user, "data", "ctempo")), (elsewhere, elsewhere),
-                 ("/srv/ctempo", rooted), ("", os.path.join(self.user, ".claude-tempo")))
+                 rooted, ("", os.path.join(self.user, ".claude-tempo")))
         for value, want in cases:
             with mock.patch.dict(os.environ, {"HOME": self.user, "USERPROFILE": self.user, "CTEMPO_HOME": value}):
                 self.assertEqual(config.home(), want, value)
 
     def test_windows_rules(self):
         # Windows paths whatever the OS: drive and UNC paths are absolute, a
-        # rooted path without a drive takes the home's drive, Git Bash's
-        # /c/Users/x is C:/Users/x, and `~` is USERPROFILE (HOME is ignored).
+        # path rooted with a backslash and no drive takes the home's drive
+        # (with a slash it is refused: tests/test_config.py, NoDriveHome), Git
+        # Bash's /c/Users/x is C:/Users/x, and `~` is USERPROFILE (HOME is ignored).
         user = "C:\\Users\\me"
         cases = ((None, user + "\\.claude-tempo"), ("", user + "\\.claude-tempo"), ("~", user),
                  ("~/tempo", user + "\\tempo"), ("~\\tempo\\", user + "\\tempo"), ("data/ctempo", user + "\\data\\ctempo"),
-                 ("D:\\tempo", "D:\\tempo"), ("d:/tempo/", "d:\\tempo"), ("/srv/ctempo", "C:\\srv\\ctempo"),
+                 ("D:\\tempo", "D:\\tempo"), ("d:/tempo/", "d:\\tempo"),
                  ("\\srv\\ctempo", "C:\\srv\\ctempo"), ("/d/tempo", "D:\\tempo"), ("/c", "C:\\"), ("/e/", "E:\\"),
-                 ("/cc/x", "C:\\cc\\x"), ("/1/x", "C:\\1\\x"), ("//server/share/tempo", "\\\\server\\share\\tempo"),
+                 ("//server/share/tempo", "\\\\server\\share\\tempo"),
                  ("\\\\server\\share\\tempo", "\\\\server\\share\\tempo"), ("C:/Users/me/../tempo", "C:\\Users\\tempo"))
         with mock.patch.object(config, "IS_WINDOWS", True):
             for value, want in cases:
@@ -636,6 +639,40 @@ class EncodedCompose(unittest.TestCase):
         self.assertEqual(out.returncode, 0)
         self.assertTrue(ANSI.sub("", out.stdout.decode()).startswith("5h 42%"), out.stdout)
         self.assertFalse(os.path.exists(os.path.join(home, "errors.log")))
+
+
+class LogRotation(unittest.TestCase):
+    """Review 15: on Windows the rename that rotates errors.log fails while
+    the log is held open without delete sharing (CPython's open() and
+    doctor's reader open files so), and the error being logged was dropped
+    with it."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ctempo-log-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        env = mock.patch.dict(os.environ, {"CTEMPO_HOME": self.dir})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_a_rotation_that_fails_still_logs_the_error(self):
+        from ctempo import statusline
+
+        path = config.log_path()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("2026-10-14T08:00:00 record: old\n" * (statusline.LOG_MAX // 32 + 1))
+        held = PermissionError(13, "The process cannot access the file because it is being used by another process")
+        with mock.patch.object(os, "replace", side_effect=held) as replace:
+            statusline.log_error(RuntimeError("database is locked"), "record")
+        self.assertEqual(replace.call_count, 1)  # tried once: no retry on the hot path
+        self.assertIn(" record: database is locked\n", self.read(path))
+        self.assertFalse(os.path.exists(path + ".1"))
+        statusline.log_error(RuntimeError("later"), "learn")  # released: the next error rotates
+        self.assertIn(" record: database is locked\n", self.read(path + ".1"))
+        self.assertTrue(self.read(path).endswith("RuntimeError: later\n") and " learn: later\n" in self.read(path))
 
 
 class ComposeWidth(unittest.TestCase):

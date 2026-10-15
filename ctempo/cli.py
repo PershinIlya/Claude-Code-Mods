@@ -99,7 +99,10 @@ def main(argv):
     if args.cmd in ("install", "uninstall"):
         from . import install
 
-        return install.install(args) if args.cmd == "install" else install.uninstall(args)
+        try:
+            return install.install(args) if args.cmd == "install" else install.uninstall(args)
+        except config.HomeError as e:
+            return refused(e)
     from . import commands
 
     fn = {
@@ -113,10 +116,18 @@ def main(argv):
     }[args.cmd]
     try:
         return fn(args, cfg)
+    except config.HomeError as e:
+        return refused(e)
     except KeyboardInterrupt:
         return 130
     except BrokenPipeError:
         return 0
+
+
+def refused(e):
+    """A CTEMPO_HOME ctempo refuses (config.HomeError): the reason, no traceback."""
+    print("ctempo: %s" % e, file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

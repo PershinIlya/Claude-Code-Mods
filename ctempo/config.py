@@ -94,13 +94,24 @@ def home():
     return os.path.join(os.path.expanduser("~"), os.path.expanduser(value))
 
 
+class HomeError(ValueError):
+    """A CTEMPO_HOME ctempo refuses (Windows: see windows_home)."""
+
+
 def windows_home(value):
     """home() by Windows rules (ntpath, so tests run on any OS). `~` is
     USERPROFILE (else HOMEDRIVE and HOMEPATH) as Python reads it, never HOME,
     which Git Bash sets and PowerShell does not. C:\\x, C:/x and
-    \\\\server\\share\\x are absolute; a rooted path without a drive (/srv/x)
-    takes the home's drive; Git Bash's /c/Users/x is C:/Users/x; anything else
-    is taken from the home directory. The result is normalized (backslashes)."""
+    \\\\server\\share\\x are absolute; Git Bash's /c/Users/x is C:/Users/x; a
+    path rooted with a backslash and no drive (\\srv\\x) takes the home's
+    drive; anything else is taken from the home directory. The result is
+    normalized (backslashes).
+
+    Any other path rooted with a slash and no drive (/srv/x) raises HomeError:
+    Git Bash, which runs the statusLine, rewrites such a value to a folder
+    under its own install before python.exe sees it, while the mod and
+    PowerShell use it as given, so they would use different folders. The mod
+    refuses it with the same message (resolveHome)."""
     import ntpath
 
     user = ntpath.expanduser("~")
@@ -108,6 +119,9 @@ def windows_home(value):
         return ntpath.join(user, ".claude-tempo")
     if value[:1] == "/" and value[1:2].isalpha() and value[1:2].isascii() and value[2:3] in ("", "/"):
         value = value[1].upper() + ":/" + value[3:]
+    elif value[:1] == "/" and value[1:2] not in ("/", "\\"):
+        raise HomeError("CTEMPO_HOME %s has no drive; Git Bash rewrites such a path to a folder under its own "
+                        "install. Write it with a drive, e.g. C:%s, or as ~/..." % (value, value))
     return ntpath.normpath(ntpath.join(user, ntpath.expanduser(value)))
 
 
@@ -234,13 +248,32 @@ def normalize(cfg):
     return cfg
 
 
+def _read(path=None):
+    """The config file, parsed. Bytes, so json picks the encoding: UTF-8 with
+    or without a BOM (Windows editors add one), or UTF-16/32, which Windows
+    PowerShell 5.1's `>` and Out-File write."""
+    with open(path or config_path(), "rb") as f:
+        return json.loads(f.read())
+
+
+def unreadable(path=None):
+    """Why a config file that exists is not used (not JSON, or not an
+    object), else None. A missing file is not a problem."""
+    try:
+        user = _read(path)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RecursionError) as e:
+        return str(e) or type(e).__name__
+    return None if isinstance(user, dict) else "not a JSON object"
+
+
 def load(path=None):
     """Defaults merged with the user's config file, validated. Never raises."""
     try:
         cfg = copy.deepcopy(DEFAULTS)
         try:
-            with open(path or config_path(), encoding="utf-8-sig") as f:  # Windows editors may add a BOM
-                user = json.load(f)
+            user = _read(path)
             if isinstance(user, dict):
                 _merge(cfg, user)
         except (OSError, ValueError):
