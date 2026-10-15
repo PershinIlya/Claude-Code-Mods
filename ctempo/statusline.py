@@ -14,6 +14,7 @@ from . import config
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)")
 LOG_MAX = 64 * 1024
+FOOTER_PAD = 4  # Claude Code's prompt footer pads the status line by 2 columns a side
 
 
 def log_error(exc, where="statusline"):
@@ -258,7 +259,22 @@ class Composer:
 
 
 def visible_len(s):
-    return len(ANSI_RE.sub("", s))
+    """Display columns, as Claude Code measures them when it cuts the line:
+    wide characters (CJK, most emoji) take 2, combining marks and joiners 0,
+    and VS16 turns a narrow symbol into a 2-column emoji."""
+    import unicodedata
+
+    n = prev = 0
+    for ch in ANSI_RE.sub("", s):
+        if ch == "\ufe0f":
+            n += 1 if prev == 1 else 0
+            prev = 2
+        elif unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+            continue
+        else:
+            prev = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+            n += prev
+    return n
 
 
 def join_composed(theirs, ours, cfg, columns):
@@ -266,7 +282,8 @@ def join_composed(theirs, ours, cfg, columns):
         return ours
     lines = theirs.split("\n")
     sep = cfg["compose"].get("separator", "  ")
-    if visible_len(lines[-1]) + len(sep) + visible_len(ours) <= columns:
+    # Claude Code cuts the line at its footer's width, not at COLUMNS.
+    if visible_len(lines[-1]) + visible_len(sep) + visible_len(ours) <= columns - FOOTER_PAD:
         lines[-1] = lines[-1] + sep + ours
     else:
         lines.append(ours)

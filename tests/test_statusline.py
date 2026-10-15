@@ -525,5 +525,36 @@ class TildeHome(unittest.TestCase):
         self.assertEqual(os.listdir(self.cwd), [])  # no directory literally named "~" in the project
 
 
+class ComposeWidth(unittest.TestCase):
+    """Review 9 (macos-readiness#0): Claude Code draws the status line in its
+    prompt footer, 2 columns of padding on each side, and cuts it at the
+    footer's width in display columns (an emoji takes 2). Our segment was
+    joined to the user's line up to COLUMNS code points, so a joined line
+    between COLUMNS - 4 and COLUMNS columns lost its weekly reset."""
+
+    ours = "5h 41% ~×2.2▲ →68% @02:19 · wk 52% -18 ×2.2▲ →74% @Sat 02:19"
+
+    def lines(self, theirs, columns=100):
+        from ctempo import statusline
+
+        return statusline.join_composed(theirs, self.ours, config.DEFAULTS, columns).split("\n")
+
+    def test_joined_line_fits_the_footer(self):
+        n = 96 - 2 - len(self.ours)  # exactly the footer's width at COLUMNS=100
+        self.assertEqual(len(self.lines("x" * n)), 1)
+        self.assertEqual(len(self.lines("x" * (n + 1))), 2)
+        self.assertEqual(self.lines("\x1b[2m" + "x" * n + "\x1b[0m")[0][-len(self.ours):], self.ours)
+
+    def test_wide_characters_count_twice(self):
+        from ctempo import statusline
+
+        theirs = "\U0001f4c1 tempo \U0001f33f main \U0001f916 Opus \U0001f4b0 $1.2 41%"
+        self.assertEqual(statusline.visible_len(theirs), len(theirs) + 4)
+        self.assertLessEqual(len(theirs) + 2 + len(self.ours), 96)  # fits in code points
+        self.assertEqual(self.lines(theirs), [theirs, self.ours])
+        # Combining marks and joiners take no column; VS16 makes a symbol an emoji.
+        self.assertEqual(statusline.visible_len("cafe\u0301 \u2601\ufe0f a\u200db \u5f00"), 13)
+
+
 if __name__ == "__main__":
     unittest.main()

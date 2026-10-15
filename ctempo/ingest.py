@@ -10,14 +10,15 @@ Rules, in order (see DECISIONS.md D-05..D-09):
     carries no news and must never move the series.
   * window instance: resets_at within 300 s of the open instance is the same
     window (the epoch wobbles a few seconds between renders); a later
-    resets_at rolls the window over (at about the same level, the reset
-    moved: the old instance closes as a shift).
+    resets_at rolls the window over (when the new window began before the
+    last reading, at about the same level, the reset moved: the old
+    instance closes as a shift).
   * reset detection: a fresh reading at least `drop_points` below the
     instance's max, or with an earlier resets_at, is an ANOMALY. Only when
     `drop_samples` consecutive fresh readings agree is it a reset; one is
-    enough to undo a later resets_at from the same session, unless that
-    reading sits `drop_points` or more above the max of the instance the
-    later resets_at opened.
+    enough to undo a moved reset (a shift) from the same session, unless
+    that reading sits below the session's reading of the moved reset or
+    `drop_points` or more above the max of the instance it opened.
   * write throttle: a sample identical to the last stored one within
     `write_min_interval_s` is not stored again; heartbeats are stored at most
     once per interval across all sessions.
@@ -187,10 +188,12 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
             # later reset was undone, it must not redo the rollover.
             return "stale"
         # The window rolled over (or reset early): close and open the next one.
-        # At about the same level (closer to the old level than to 0, as in
-        # learning, D-13) the reset moved later: that window never ended.
+        # Begun before the last reading, at about the same level (closer to
+        # the old level than to 0), the reset moved later: that window never
+        # ended. The continuation test learning uses (D-13): one that began
+        # after the last reading is a real reset, whatever its level.
         m = inst["max_used"]
-        moved = used > m - min(drop_pts, max(1.0, 0.5 * m))
+        moved = reset - DURATION[w] < inst["last_seen"] and used > m - min(drop_pts, max(1.0, 0.5 * m))
         store.close_instance(inst["id"], min(now, inst["reset_ts"]), "shift" if moved else "rollover")
         inst = store.new_instance(w, reset - DURATION[w], reset, now, used)
         store.add_sample(now, w, used, reset, source, session_id, FIRST if first_seen else FRESH, inst["id"])
@@ -235,22 +238,31 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
     return "throttled"
 
 
-def _undoes_rollover(store, w, inst, reset, source, session_id):
-    """Whether the open instance came from this session's own later resets_at,
+def _undoes_rollover(store, w, inst, used, reset, source, session_id):
+    """Whether the open instance came from this session's own moved resets_at,
     and this reading is from the window that the instance's rollover closed."""
     # A rollover closes the old window at the moment it opens the new one, as
-    # a shift when the level held (a moved reset).
+    # a shift when the reset moved. One closed as a rollover (the level
+    # dropped, or the new window began after the last reading) is what a real
+    # early reset looks like.
     closed = store.db.execute(
-        "SELECT 1 FROM windows WHERE window=? AND id!=? AND close_reason IN ('rollover', 'shift') "
+        "SELECT 1 FROM windows WHERE window=? AND id!=? AND close_reason='shift' "
         "AND ABS(reset_ts - ?) <= ? AND closed_at >= ? LIMIT 1",
         (w, inst["id"], reset, RESET_JITTER, inst["first_seen"]),
     ).fetchone()
     if closed is None:
         return False
     opener = store.db.execute(
-        "SELECT session_id, source FROM samples WHERE window_id=? ORDER BY ts, id LIMIT 1", (inst["id"],)
+        "SELECT session_id, source, used_pct FROM samples WHERE window_id=? ORDER BY ts, id LIMIT 1", (inst["id"],)
     ).fetchone()
-    return opener is not None and (opener[0] or "~" + opener[1]) == (session_id or "~" + source)
+    # A session's real reading is never below its own reading of the moved
+    # reset; an idle twin's stale one (two processes can share a session id)
+    # can be.
+    return (
+        opener is not None
+        and (opener[0] or "~" + opener[1]) == (session_id or "~" + source)
+        and used >= opener[2]
+    )
 
 
 def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted):
@@ -259,14 +271,16 @@ def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
     if (
         shifted
         and used < inst["max_used"] + float(cfg["reset"]["drop_points"])
-        and _undoes_rollover(store, w, inst, reset, source, session_id)
+        and _undoes_rollover(store, w, inst, used, reset, source, session_id)
     ):
         # One fresh reading did the bogus rollover, so one undoes it: a
         # session that is maxed or idle repeats its real reading only as
         # heartbeats, and the second fresh one never came (D-10). Another
         # session still needs drop_samples (it may lag a real early reset),
-        # and so does a reading drop_points above the instance: a real early
-        # reset looks like that, and two processes can share a session id.
+        # and so does a window closed as a rollover (a real early reset looks
+        # like that), or a reading below the moved reset's or drop_points
+        # above the instance: two processes can share a session id, and the
+        # idle one re-renders the old window.
         need = 1
     # The previous fresh-or-anomaly readings of this window, newest first.
     rows = store.db.execute(
