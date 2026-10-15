@@ -68,9 +68,12 @@ review). On Windows with Python 3.12+ the last connection closes without a
 checkpoint (`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`): folding the WAL into the
 database and deleting it took 18 ms of a 30 ms render on the CI runner (p95
 32 of 44), and a render that records a reading went from p50 83 ms, p95 101
-ms to p50 51 ms, p95 55 ms there. The WAL stays between renders and a commit
-checkpoints it once it holds 1000 pages (35 to 80 ms, about once in 100
-renders). Tables: `samples(ts, window, used_pct, resets_at, source, session_id,
+ms to p50 51 ms, p95 55 ms there. The WAL stays between renders; a close that
+finds it 1000 pages or larger empties it (`wal_checkpoint(TRUNCATE)`, about
+once in 165 renders, never waiting for another process's read): a process that
+opens the database alone rebuilds the WAL index as if nothing had been copied,
+so without that every commit past 1000 pages copied the whole WAL again (found
+in review). Tables: `samples(ts, window, used_pct, resets_at, source, session_id,
 flag, window_id)` (the brief's columns plus `flag` and `window_id`), `windows`
 (one row per window instance: start, reset, first/last seen, last and max
 used, closed_at, unused_at_close, close_reason), `readers` (each session's
