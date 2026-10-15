@@ -119,6 +119,34 @@ def phases(payload, runs):
                                (pace, "five_hour", "  5-hour math"), (weekly, "weekly", "  weekly math"),
                                (statusline, "note_render", "  note the line"), (store.Store, "close", "  close")):
         timed(owner, name, label)
+    report("render in this process", renders(payload, runs))
+    for label, ms in sorted(spent.items(), key=lambda kv: -sum(kv[1])):
+        report(label, ms)
+    # Closing the last connection checkpoints the WAL into the database and deletes it,
+    # which costs most on Windows: the same renders with the store set up otherwise.
+    import sqlite3
+
+    init = store.Store.__init__
+    tries = [("synchronous=OFF", lambda db: db.execute("PRAGMA synchronous=OFF"))]
+    if hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE"):  # Python 3.12+
+        tries.append(("no checkpoint on close", lambda db: db.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)))
+    for label, tweak in tries:
+        def tweaked(self, *a, **kw):
+            init(self, *a, **kw)
+            tweak(self.db)
+
+        store.Store.__init__ = tweaked
+        spent.clear()
+        report("render, " + label, renders(payload, runs))
+        for part in ("  close", "  record the reading"):
+            report(part, spent[part])
+    store.Store.__init__ = init
+
+
+def renders(payload, runs):
+    """`runs` renders in this process, each with a fresh reading: their times."""
+    from ctempo import statusline
+
     total, saved = [], (sys.stdin, sys.stdout)
     try:
         for _ in range(runs):
@@ -129,9 +157,7 @@ def phases(payload, runs):
             total.append((time.perf_counter() - t) * 1000)
     finally:
         sys.stdin, sys.stdout = saved
-    report("render in this process", total)
-    for label, ms in sorted(spent.items(), key=lambda kv: -sum(kv[1])):
-        report(label, ms)
+    return total
 
 
 def main():
