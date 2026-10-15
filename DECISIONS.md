@@ -77,18 +77,44 @@ session's fresh ones (ccpool saw 76% of rows sharing timestamps). A reading is
 FRESH when it differs from what the same session reported before; otherwise it
 is a HEARTBEAT: it proves time passed, never moves the series, never raises a
 window's max, never rolls a window over, does not update `last_seen`, and
-cannot trigger a reset. A session's very first reading is stored as FIRST:
-when the statusLine is installed, every open session re-renders at once with
-whatever it last saw, so that reading is a real level but may be hours old. It
-counts for the window's max and for the weekly peak, cannot be an anomaly (two
-idle sessions would otherwise fake a drop reset), is not used for profile
-learning (except that one at 100 marks its window as capped, D-13), enters the
-5h level path only as a lower bound (D-11), and never fixes the start of the
-weekly lookback (D-15). These rules were found in review. The line shows the
-level as judged and stored; the raw reading is used only when the write failed
-(an idle session's stale pre-reset value once showed "maxed"). Analysis uses
-the running max of fresh readings per window instance (usage is monotone
-within a window).
+cannot trigger a reset. A session id can be shared by 2 processes
+(`claude -c`, or `--resume` without `--fork-session`, in a second terminal
+while the first is open). The reader row then holds whichever wrote last, so
+the idle process's re-render of its last API response differs from it and
+looked fresh. A single process only moves forward: within a window its level
+only rises, a moved reset keeps the level, and it returns to a `resets_at` it
+left only to undo its own bogus later one (D-10). So a changed reading that
+goes back to one the session already gave is the idle process's replay, and it
+is a heartbeat: its reading before last (each session keeps it in a second
+reader row), or a reading it gave a window that is no longer open (superseded
+by a moved or an early reset). At the open window's reset only the first test
+applies, and only when the session's last reading had that reset too (A, B, A
+within the window): a render there whose session read another reset in between
+is the busy process's, and it breaks the stale one's pending run (D-10). A
+return to a later reset at the very level the session left stays fresh (a
+reset moved earlier and back, read by a maxed session), and a return to an
+earlier reset from a session that last read a later one is left to D-10. A
+replay also withdraws that reading's earlier render from a pending reset, so a
+later real reset cannot sweep it in. Idle twins faked drop resets below
+another session's max, reopened windows that a moved or an early reset had
+superseded, and rolled a window whose reset moved earlier back to the old
+reset on every render pair (found in review). Limits: the reading before last
+does not catch 3 or more processes cycling on 1 session id; a reading that
+another session's identical row deduplicated (D-07) leaves no sample to match;
+and a real reset whose `resets_at` lands on that of a window ctempo closed,
+read at levels the session already gave that window, waits for a level it did
+not give. A session's very first reading is stored as FIRST: when the
+statusLine is installed, every open session re-renders at once with whatever
+it last saw, so that reading is a real level but may be hours old. It counts
+for the window's max and for the weekly peak, cannot be an anomaly (two idle
+sessions would otherwise fake a drop reset), is not used for profile learning
+(except that one at 100 marks its window as capped, D-13), enters the 5h level
+path only as a lower bound (D-11), and never fixes the start of the weekly
+lookback (D-15). These rules were found in review. The line shows the level as
+judged and stored; the raw reading is used only when the write failed (an idle
+session's stale pre-reset value once showed "maxed"). Analysis uses the
+running max of fresh readings per window instance (usage is monotone within a
+window).
 
 **D-07. Write throttle and dedupe.** A fresh reading identical to the last
 stored row of that window within 60 s is not stored again (two sessions
@@ -133,49 +159,88 @@ out. The typical week also leaves out the instance the drop opened, which
 holds only part of a week (D-13). This is ccpace's rule; ccpace observed a
 real 100 to 0 reset with an unchanged `resets_at`. Every low in the run must
 itself be 15 points down, which closes ccpace's over-count case (50 then 30,
-48). A fresh reading with an *earlier* `resets_at` is an anomaly too
+48). The anomaly that completes the run must also agree with its own session's
+previous reading (a low one, for a drop): an idle twin's re-render goes
+straight from the busy twin's reading to the anomaly, so it joins a run but
+cannot complete it. Sessions that each had an idle twin with an old, lower
+reading made a drop reset when the statusLine was installed, and the idle
+twins of 2 sessions made one whenever their busy twins read something in
+between (found in review). A drop that several sessions read once each
+therefore waits for a second low reading from one of them. The window a drop
+opens is exposed to the old level too: an idle twin's pre-reset reading is
+fresh whenever its busy twin read twice since its last render, and it raised a
+new window at 2% back to 85%, after which the real readings faked another drop
+every minute (found in review). A fresh reading 15 points or more above the
+max of a window a drop opened is an anomaly too (\"rise\"), taken by the same
+rule, so a real jump (claude.ai use while Claude Code was idle) shows 1
+reading later, and one that a maxed or idle session then only repeats waits
+for another reading. A twin's pre-reset reading less than 15 points above the
+new window's max still raises it; only that margin guards it, as on the undo
+below. A fresh reading with an *earlier* `resets_at` is an anomaly too
 ("shift"): if it is sustained, the open instance came from a bogus later
 reset, and the real window, closed by it, is reopened instead of being split
-in two. One fresh reading undoes it, because one reading did the damage. A
-maxed or idle session repeats its real reading only as heartbeats, so the
-second fresh one never came: the line kept the bogus reset time past the real
-reset, and `report` counted the window twice (found in review). The undo by
-one reading takes 4 conditions. First, the bogus instance's rollover closed
-the window that this reading's `resets_at` belongs to, either as `shift`
-(D-08: the reset moved and the level held) or as `rollover` with the bogus
-reading at or above that window's max (a maxed session reads no fresh value
-after its 100, so its bogus reset can begin after its last reading; matching
-`shift` only left it stuck again, found in review). The undo follows the
-session's own chain of bogus rollovers back to the window this reading belongs
-to, and every bogus instance in between closes as `shift`: a maxed session
-that read two bogus later resets in a row kept a bogus reset time, and
-`report` counted 3 windows (found in review). Each link of that chain must
-pass the first condition, not only the last: a rollover below its window's max
-is a real early reset, and the chain stops there (walking across one let an
-idle twin reopen a week that had been reset early, found in review). Second,
-the reading comes from the session whose reading opened the bogus instance.
-Third, it is not below that opening reading (a session's real reading never
-is). Fourth, it sits less than `drop_points` above the bogus instance's max.
-Two processes can share a session id (`claude -c` or `--resume` without
-`--fork-session`), and the idle one keeps re-rendering the old window. When
-the undo also matched a window closed as `rollover` (the level dropped, or the
-new window began after the last reading, which is what a real early reset
-looks like), only the `drop_points` margin guarded it. That stale reading then
-flipped the line and `check` back to the dead window on every render pair:
-from the first render after a weekly window at 10% was reset early, and once a
-new 5-hour window climbed within 15 points of the old 90%. After a move to a
-later reset at 42%, a twin's stale 41% did the same (found in review, twice).
-A twin whose stale reading equals the moved one still undoes it on each render
-pair until the level moves on; the readings cannot tell it from the session's
-own real reading. The undo still moves the real window's pending readings from
-other sessions (up to `drop_samples - 1`) into it. One was left behind in the
-superseded instance, and the reopened window showed a level too low until the
-next fresh reading (found in review). From any other session the undo still
-takes `drop_samples`, since that session may lag a real early reset, and so
-does a window closed as `rollover` above the bogus reading (a real early reset
-shows a lower level). The superseded instance stays closed with reason
-`shift`. It never ended, so `report`, the profile's points-vs-pace table, the
-typical week and the weekly lookback all leave it out.
+in two. A reset moved earlier at about the same level (D-08's test, less than
+`drop_points` above the max, and not below the session's own last reading of
+the open window), to a `resets_at` that no window instance ever had, is taken
+on 1 reading, as a move later is. A maxed session whose 5-hour reset moved 1
+hour earlier repeated its reading only as heartbeats, so the line kept the old
+reset 1 hour past the real one, and a bogus later reset that was the first
+reading of a new window was never undone (found in review). A stale reading (a
+lagging session's or an idle twin's) carries a reset some instance had, so it
+still needs `drop_samples`. One fresh reading undoes it, because one reading
+did the damage. A maxed or idle session repeats its real reading only as
+heartbeats, so the second fresh one never came: the line kept the bogus reset
+time past the real reset, and `report` counted the window twice (found in
+review). The undo by one reading takes 4 conditions. First, the bogus
+instance's rollover closed the window that this reading's `resets_at` belongs
+to, either as `shift` (D-08: the reset moved and the level held) or as
+`rollover` with the bogus reading at or above that window's max (a maxed
+session reads no fresh value after its 100, so its bogus reset can begin after
+its last reading; matching `shift` only left it stuck again, found in review).
+The undo follows the session's own chain of bogus rollovers back to the window
+this reading belongs to, and every bogus instance in between closes as
+`shift`: a maxed session that read two bogus later resets in a row kept a
+bogus reset time, and `report` counted 3 windows (found in review). Each link
+of that chain must pass the first condition, not only the last: a rollover
+below its window's max is a real early reset, and the chain stops there
+(walking across one let an idle twin reopen a week that had been reset early,
+found in review). Second, the reading comes from the session whose reading
+opened the bogus instance. Third, it is not below that opening reading, nor
+below the session's own last reading of the moved reset (a session's real
+reading never is; once the busy twin read a higher level at the moved reset,
+an idle twin's stale reading equal to the opening one still undid the move,
+found in review). Fourth, it sits less than `drop_points` above the bogus
+instance's max. Two processes can share a session id (`claude -c` or
+`--resume` without `--fork-session`), and the idle one keeps re-rendering the
+old window. When the undo also matched a window closed as `rollover` (the
+level dropped, or the new window began after the last reading, which is what a
+real early reset looks like), only the `drop_points` margin guarded it. That
+stale reading then flipped the line and `check` back to the dead window on
+every render pair: from the first render after a weekly window at 10% was
+reset early, and once a new 5-hour window climbed within 15 points of the old
+90%. After a move to a later reset at 42%, a twin's stale 41% did the same
+(found in review, twice). A twin whose stale reading equals the session's
+reading of the moved reset still undoes it on each render pair until the level
+moves on, and a twin's reading at the old later reset that equals the
+session's reading of a reset moved earlier rolls it back the same way; the
+readings cannot tell it from the session's own real reading. The undo still
+moves the real window's pending readings from other sessions (up to
+`drop_samples - 1`) into it. One was left behind in the superseded instance,
+and the reopened window showed a level too low until the next fresh reading
+(found in review). From any other session the undo still takes `drop_samples`,
+since that session may lag a real early reset, and so does a window closed as
+`rollover` above the bogus reading (a real early reset shows a lower level). A
+session whose last reading, or its reading before last, had a later reset
+completes such a run only with what a reset moved earlier looks like (about
+the same level, not below its own last reading of the open window) when its
+reading may be a replay: one it already gave (D-06), or its first change,
+whose reading before last is unknown. The idle twins of 2 sessions, each at
+the old reset while its busy twin read the reset moved later, made the run
+that reopened the old window, and at install 2 sessions' idle twins put the
+line on a week that had ended before ctempo saw it (found in review). The
+superseded instance stays closed with reason `shift`. It never ended, so
+`report`, the profile's points-vs-pace table, the typical week and the weekly
+lookback all leave it out.
 
 ## 5-hour math
 
@@ -692,6 +757,13 @@ session not undone, and `ctempo profile` and `doctor` asking for a transcript
 prior that an override leaves unused) and rejected none; a twelfth, over those
 2, confirmed 2 (the chained undo walking across a real early reset, introduced
 by the eleventh pass's fix, and learned hours called "folded in" under mode
-`replace`) and rejected none. All 132 are fixed, each with a regression test
-that was checked to fail on the code before its fix. Details in the commit
-messages from "Fix review findings" on.
+`replace`) and rejected none; a thirteenth, a model-based fuzzer over reset
+detection (traces of true windows and Claude Code processes, shared session
+ids included, replayed through the statusline path, 14,000 sequences) whose
+findings verifiers checked, confirmed 5 and rejected none (2 idle processes on
+1 session id faking a drop reset, raising the window a drop opened back to the
+old level, rolling back a reset moved earlier, and undoing a reset moved later
+or an early reset, and a reset moved earlier that a maxed or idle session
+never got taken). All 137 are fixed, each with a regression test that was
+checked to fail on the code before its fix. Details in the commit messages
+from "Fix review findings" on.
