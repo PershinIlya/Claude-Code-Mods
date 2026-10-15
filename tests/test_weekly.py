@@ -186,6 +186,25 @@ class Weekly(TempHome):
         self.assertLess(abs(v["delta"]), 1.0)
         self.assertEqual(v["verdict"], "on_pace")
 
+    def test_the_lookback_after_a_drop_week_reads_the_window_the_drop_opened(self):
+        # Review 9 (delta-weekly#1): an early reset on Tuesday 12:00 at 90%
+        # that keeps the Thursday 09:00 reset (D-10), its readings' resets_at
+        # 3 s later (it wobbles, D-08). Two hours into the next week, the
+        # lookback took the window closed by the drop as the previous week
+        # (its reset is 3 s closer) and lost what was spent since.
+        R = int(MON + 3 * D + 9 * H)
+        drop = MON + D + 12 * H
+        self.known("s1")
+        self.work(R - int(7 * D), drop, R, 3.0)  # Mon-Fri 9-18
+        self.work(drop, R, R + 3, 3.0)  # from 0 again
+        self.work(R, R + 2 * H, R + int(7 * D), 3.0)
+        v = self.view(R + 2 * H)
+        self.assertEqual(v["lookback_start"], R - 22 * H)  # Wednesday 11:00
+        # The drop's window from 24 to 45, then 6 in the new one (old code: 6).
+        self.assertAlmostEqual(v["lookback_actual"], 21 + 6)
+        self.assertEqual(v["intensity_source"], "recent")
+        self.assertEqual(v["verdict"], "slow_down")
+
     def test_bogus_shifted_window_is_not_taken_as_the_previous_week(self):
         R1 = int(MON + 7 * D)
         for h in range(0, 167, 2):  # week 1 at 0.5 %/h, one bogus later reset in the middle

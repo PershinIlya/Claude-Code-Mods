@@ -56,6 +56,14 @@ class TempHome(unittest.TestCase):
             os.environ["CLAUDE_CONFIG_DIR"] = self.old_ccd
         shutil.rmtree(self.dir, ignore_errors=True)
 
+    def use_home(self, name):
+        """A fresh store in its own CTEMPO_HOME under the test's directory."""
+        self.st.close()
+        home = os.path.join(self.dir, name)
+        os.makedirs(home)
+        os.environ["CTEMPO_HOME"] = home
+        self.st = Store(os.path.join(home, "tempo.db"))
+
     def feed(self, now, five=None, week=None, sid="s1", source="test"):
         readings, rejects, kinds = ingest.parse_payload(payload(five, week, sid), now)
         return ingest.record(self.st, readings, now, source, sid, self.cfg, rejects, kinds)

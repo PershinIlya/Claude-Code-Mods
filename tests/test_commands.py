@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ import time
 import unittest
 from unittest import mock
 
-from ctempo import commands, weekly
+from ctempo import commands, profile, weekly
 from ctempo.config import SEVEN_DAY
 from ctempo.store import Store
 
@@ -152,11 +153,69 @@ class MovedReset(TempHome):
 
 
 class ProfileText(TempHome):
-    def profile(self):
+    def profile(self, now=None):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with contextlib.ExitStack() as stack:
+            if now is not None:
+                stack.enter_context(mock.patch.object(commands.time, "time", return_value=now))
+            stack.enter_context(contextlib.redirect_stdout(out))
             self.assertEqual(commands.cmd_profile(argparse.Namespace(rebuild=False, json=False), self.cfg), 0)
         return out.getvalue()
+
+    def ramp(self, t0, t1, start, reset, span):
+        """On pace from `start`: floor(100 x the share of `span` passed), a
+        reading every 30 minutes in [t0, t1)."""
+        t = t0
+        while t < t1:
+            self.feed(t, week=(math.floor(100 * (t - start) / span), reset))
+            t += 30 * M
+
+    def test_points_vs_pace_paces_a_cut_week_from_its_own_start(self):
+        # Review 9 (delta-ingest-texts#2, delta-weekly#2): an early reset on
+        # Thursday 12:00, then on pace for the window it opened. The table
+        # paced that window from resets_at - 7 d, kept the window it cut
+        # short (its frozen level against a rising pace) and counted both as
+        # weeks: "averaged over 3 past weeks", up to 18 points of "surplus"
+        # in the last 3 days for a user on pace. Two kinds of early reset:
+        # one that keeps the reset time (a drop, D-10), one that moves it later.
+        cut = MON - 3.5 * D
+        for moved in (False, True):
+            self.use_home("moved" if moved else "drop")
+            self.known("s1")
+            self.ramp(MON - 14 * D + 10 * M, MON - 7 * D, MON - 14 * D, int(MON - 7 * D), 7 * D)  # on pace
+            self.ramp(MON - 7 * D + 10 * M, cut, MON - 7 * D, int(MON), 7 * D)  # 49% at the cut
+            if moved:  # a rollover to a full week from the cut
+                R = int(cut + 7 * D)
+                self.ramp(cut, R, cut, R, 7 * D)
+            else:  # a drop: the same reset, paced over the 3.5 days left
+                R = int(MON)
+                self.ramp(cut, R, cut, R, R - cut)
+            self.ramp(R + 10 * M, R + D, R, int(R + 7 * D), 7 * D)  # the next week closes it
+            reasons = [i["close_reason"] for i in self.windows(SEVEN_DAY) if i["closed_at"] is not None]
+            self.assertEqual(reasons, ["expired", "rollover" if moved else "drop", "expired"])
+            out = self.profile(R + D)
+            line = [x for x in out.splitlines() if x.startswith("Points vs pace")][0]
+            head, cols = line.split(": ")
+            self.assertEqual(head, "Points vs pace, averaged over 2 past weeks")
+            values = dict(c.rsplit(" ", 1) for c in cols.split(", "))
+            self.assertEqual(list(values), ["-6d", "-5d", "-4d", "-3d", "-2d", "-1d", "reset"])
+            for x in values.values():
+                self.assertLessEqual(abs(float(x)), 1, (moved, line))
+
+    def test_the_prior_line_shows_its_age_and_weight_now(self):
+        # Review 9 (delta-weekly#3): the transcript prior fades with the
+        # half-life from its build (D-14), but `ctempo profile` printed the
+        # trust from build time for good: "trusted 100%" 8 weeks on, when it
+        # weighed 6% of that.
+        prof = profile.load(self.st)
+        prof.prior = profile.uniform()
+        prof.prior_meta = {"built_at": MON, "days": 45.0, "messages": 1782, "active_hours": 296, "trust": 1.0}
+        profile.save(self.st, prof)
+        out = self.profile(MON + 28 * D)
+        self.assertIn("Prior: transcripts, 45.0 days, 1782 messages, 296 active hours, "
+                      "trusted 100% when built (full at 14 days)\n", out)
+        self.assertIn("  built 28d 00h ago, weight now 25% (it halves every 14 days; "
+                      "`ctempo bootstrap` builds a fresh one)\n", out)
 
     def test_reset_column_note_follows_the_weekly_target(self):
         # Review 8 (mod-and-texts#1): the points-vs-pace columns are the level
@@ -272,14 +331,6 @@ class NowText(TempHome):
         self.feed(MON + 10 * H + 40 * M, week=(2, R2))
         out = self.now(MON + 11 * H)
         self.assertIn("intensity       1.00     assumed (recent span too short; the window is too new, opened Mon 10:00)\n", out)
-
-    def use_home(self, name):
-        """A fresh store in its own CTEMPO_HOME under the test's directory."""
-        self.st.close()
-        home = os.path.join(self.dir, name)
-        os.makedirs(home)
-        os.environ["CTEMPO_HOME"] = home
-        self.st = Store(os.path.join(home, "tempo.db"))
 
     def test_data_age_ignores_heartbeats(self):
         # Review 5 (X-integration#2): check measures data age from readings

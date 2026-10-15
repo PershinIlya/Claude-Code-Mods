@@ -73,9 +73,13 @@ def spend_since(store, inst, t0, now, used, w, max_gap):
         a, v0 = k
     actual = max(0.0, used - v0)
     if t0 < inst["start_ts"] and a <= inst["start_ts"]:
+        # Not a window that never ended ('shift'), nor one a drop reset
+        # replaced ('drop', D-10): the window that replaced it ends at the
+        # same reset, give or take the seconds resets_at wobbles (D-08), and
+        # holds the spend since the drop. Which one was closer was chance.
         prev = store.db.execute(
             "SELECT id, start_ts, max_used FROM windows WHERE window=? AND id!=? "
-            "AND ABS(reset_ts - ?) <= 3600 AND IFNULL(close_reason, '') != 'shift' "
+            "AND ABS(reset_ts - ?) <= 3600 AND IFNULL(close_reason, '') NOT IN ('shift', 'drop') "
             "ORDER BY ABS(reset_ts - ?), id DESC LIMIT 1",
             (SEVEN_DAY, inst["id"], inst["start_ts"], inst["start_ts"]),
         ).fetchone()
