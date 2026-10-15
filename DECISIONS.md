@@ -1030,7 +1030,14 @@ python had rewritten or deleted it, a drive-less `CTEMPO_HOME` read as 2
 folders, a read-only settings.json, a UTF-16 config.json, a missing interpreter
 named only by cmd.exe in the band, an IANA `TZ`, long transcript paths, a held
 errors.log, 2 tests that could skip or pass by accident, and 3 in the docs,
-which described a Mac install only. 157 are fixed, each with a regression test
+which described a Mac install only; a 16th, over those fixes (2 reviewers: the
+code and the docs), confirmed 9 (a deleted Git Bash launcher coming back, a
+venv pin hiding the shell from the Composer, a refusal naming the wrong drive,
+`compose_of` and `ctempo statusline` disagreeing on 2 flags, the CLI taking a
+`C:x` the band refused, and 4 in the docs: hand edits, `&&`, cmd.exe quoting
+and numerals); a 17th, over those, confirmed 2 (doctor reading the first of 2
+compose flags, and a Git Bash launcher left on the old pin with `--bin-dir`).
+168 are fixed, each with a regression test
 that was checked to fail on the code before its fix (the 3 in the docs share a
 single test: the README's Windows section must say what the code does). Details
 in the commit messages from "Fix review findings" on.
