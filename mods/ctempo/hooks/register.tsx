@@ -15,8 +15,10 @@ const view = atom({ plugin: 'ctempo', key: 'view' } as const, null)
 
 const RUN_TIMEOUT_MS = 10_000
 const REFRESH_MS = 60_000
+// The interpreter flags of a runtime.json written before it listed them.
+const DEFAULT_ARGS: readonly string[] = ['-I', '-S']
 
-type Runtime = { python: string; entry: string; home: string }
+type Runtime = { python: string; args: readonly string[]; entry: string; home: string }
 
 // Desktop paints theme keys; the terminal maps them to its palette.
 const TONE: Record<Tone, { dimColor?: boolean; color?: string }> = {
@@ -52,28 +54,88 @@ let periodMs = REFRESH_MS
 // A refresh asked for while one runs: the newest limits win, null = re-read.
 let queued: readonly SessionRateLimit[] | null | undefined
 
+// The user's home as Python's os.path.expanduser finds it, and whether
+// Windows path rules apply.
+export type UserHome = { windows: boolean; home: string | undefined }
+
+// No $ API names the OS; Windows sets OS=Windows_NT system-wide. There Python
+// ignores HOME (Git Bash sets one of its own) and takes USERPROFILE, else
+// HOMEDRIVE+HOMEPATH; an empty value counts as unset.
+async function userHome($: EngineInterface): Promise<UserHome> {
+  if ((await $.env.get('OS')) !== 'Windows_NT') return { windows: false, home: await $.env.get('HOME') }
+  const profile = await $.env.get('USERPROFILE')
+  if (profile) return { windows: true, home: profile }
+  const homePath = await $.env.get('HOMEPATH')
+  return { windows: true, home: homePath ? `${(await $.env.get('HOMEDRIVE')) ?? ''}${homePath}` : undefined }
+}
+
+// One separator between the two, as os.path.join puts it.
+function join(base: string, name: string, windows: boolean): string {
+  const ends = windows ? /[\\/]$/ : /\/$/
+  return ends.test(base) ? `${base}${name}` : `${base}${windows ? '\\' : '/'}${name}`
+}
+
+// A UNC path (\\server\share): $.fs.read refuses most of them.
+function isNetwork(path: string, windows: boolean): boolean {
+  return windows && /^[\\/]{2}/.test(path)
+}
+
+// The drive of a Windows path as ntpath.splitdrive reads it: `C:`, or
+// `\\server\share`; '' when it has none.
+function driveOf(path: string | undefined): string {
+  return path?.match(/^(?:[A-Za-z]:|[\\/]{2}[^\\/]+[\\/][^\\/]+)/)?.[0] ?? ''
+}
+
 // The same rules as the CLI: an empty CTEMPO_HOME counts as unset, a leading
-// `~` is HOME, and a relative path is taken from HOME, never from the
-// session's cwd (Claude Code copies settings.json env values as written).
-function resolveHome(given: string | undefined, userHome: string | undefined): string {
-  if (given?.startsWith('/')) return given
-  if (given?.startsWith('~') && given !== '~' && !given.startsWith('~/')) {
-    throw new Error(`CTEMPO_HOME ${given}: only ~ and ~/ are expanded; use an absolute path`)
+// `~` is the user's home, and a relative path is taken from it, never from the
+// session's cwd (Claude Code copies settings.json env values as written). On
+// Windows `~\` works like `~/`, `C:\`, `C:/` and `\\server\share` are
+// absolute, a rooted path with no drive (`\x`, `/x`) takes the drive of the
+// user's home, as Python's ntpath.join does, and `C:x` (relative to that
+// drive's current folder) is refused.
+export function resolveHome(given: string | undefined, user: UserHome): string {
+  const { windows, home } = user
+  if (given && (windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2})/ : /^\//).test(given)) return given
+  if (windows && given && /^[A-Za-z]:/.test(given)) {
+    throw new Error(`CTEMPO_HOME ${given} is relative to a drive's current folder; use an absolute path`)
   }
-  if (!userHome) throw new Error('HOME is unset: set CTEMPO_HOME to an absolute path, or run `ctempo install --apply`')
-  if (!given) return `${userHome}/.claude-tempo`
-  const rest = given.replace(/^~\/?/, '')
-  return rest ? `${userHome}/${rest}` : userHome
+  if (windows && given && /^[\\/]/.test(given)) return `${driveOf(home)}${given}`
+  const tilde = windows ? /^~(?:[\\/]|$)/ : /^~(?:\/|$)/
+  if (given?.startsWith('~') && !tilde.test(given)) {
+    const forms = windows ? '~, ~/ and ~\\' : '~ and ~/'
+    throw new Error(`CTEMPO_HOME ${given}: only ${forms} are expanded; use an absolute path`)
+  }
+  if (!home) {
+    const name = windows ? 'USERPROFILE' : 'HOME'
+    throw new Error(`${name} is unset: set CTEMPO_HOME to an absolute path, or run \`ctempo install --apply\``)
+  }
+  if (!given) return join(home, '.claude-tempo', windows)
+  const rest = given.replace(windows ? /^~[\\/]?/ : /^~\/?/, '')
+  return rest ? join(home, rest, windows) : home
 }
 
 async function loadRuntime($: EngineInterface): Promise<Runtime> {
   if (runtime !== null) return runtime
-  const home = resolveHome(await $.env.get('CTEMPO_HOME'), await $.env.get('HOME'))
-  const parsed = JSON.parse(await $.fs.read(`${home}/runtime.json`)) as Partial<Runtime>
+  const user = await userHome($)
+  const home = resolveHome(await $.env.get('CTEMPO_HOME'), user)
+  let text: string
+  try {
+    text = await $.fs.read(join(home, 'runtime.json', user.windows))
+  } catch (error) {
+    if (!isNetwork(home, user.windows)) throw error
+    const why = error instanceof Error ? error.message : String(error)
+    throw new Error(`cannot read runtime.json from network path ${home}: set CTEMPO_HOME to a local folder (${why})`)
+  }
+  // A byte order mark (a Windows editor's) would make JSON.parse throw.
+  const parsed = JSON.parse(text.replace(/^\uFEFF/, '')) as { python?: unknown; args?: unknown; entry?: unknown }
   if (typeof parsed.python !== 'string' || typeof parsed.entry !== 'string') {
     throw new Error('runtime.json has no python/entry; run `ctempo install --apply`')
   }
-  runtime = { python: parsed.python, entry: parsed.entry, home }
+  const args = parsed.args === undefined ? DEFAULT_ARGS : parsed.args
+  if (!Array.isArray(args) || !args.every((arg) => typeof arg === 'string')) {
+    throw new Error('runtime.json args is not a list of strings; run `ctempo install --apply`')
+  }
+  runtime = { python: parsed.python, args, entry: parsed.entry, home }
   return runtime
 }
 
@@ -94,7 +156,7 @@ async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] |
   const current = limits ?? (await $.session.usage()).rateLimits
   const payload = toPayload(await $.session.id(), current)
   const result = await $.process.run(
-    [rt.python, '-I', '-S', rt.entry, 'statusline', '--source', 'mod', '--format', 'json'],
+    [rt.python, ...rt.args, rt.entry, 'statusline', '--source', 'mod', '--format', 'json'],
     { stdin: JSON.stringify(payload), timeoutMs: RUN_TIMEOUT_MS, env: { CTEMPO_HOME: rt.home } },
   )
   if (result.exitCode !== 0 || result.stdout.trim() === '') {
