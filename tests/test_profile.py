@@ -3,11 +3,11 @@ import os
 import time
 import unittest
 
-from ctempo import config, profile
+from ctempo import clock, config, profile
 from ctempo.config import SEVEN_DAY
 from ctempo.store import FIRST
 
-from .helpers import MON, H, D, TempHome, utc
+from .helpers import MON, H, D, TempHome, utc, zone
 
 
 class Shape(unittest.TestCase):
@@ -74,19 +74,36 @@ class Shape(unittest.TestCase):
 
 
 class DST(unittest.TestCase):
-    def tearDown(self):
-        utc()
-
     def test_segments_across_fall_back(self):
-        os.environ["TZ"] = "America/New_York"
-        time.tzset()
-        # Sunday 2026-11-01: clocks go back at 02:00, the day has 25 hours.
-        start = 1793505600  # 2026-11-01 00:00 EDT (04:00 UTC)
-        segs = list(profile.segments(start, start + 25 * H))
-        self.assertEqual(len(segs), 25)
-        self.assertTrue(all(abs((e - s) - H) < 1e-6 for s, e, _, _ in segs))
-        self.assertEqual(time.localtime(start + 25 * H).tm_hour, 0)
-        self.assertEqual(segs[1][3], segs[2][3])  # both 01:00 hours share Sunday 01:00
+        with zone("America/New_York"):
+            # Sunday 2026-11-01: clocks go back at 02:00, the day has 25 hours.
+            start = 1793505600  # 2026-11-01 00:00 EDT (04:00 UTC)
+            segs = list(profile.segments(start, start + 25 * H))
+            self.assertEqual(len(segs), 25)
+            self.assertTrue(all(abs((e - s) - H) < 1e-6 for s, e, _, _ in segs))
+            self.assertEqual(clock.localtime(start + 25 * H).tm_hour, 0)
+            self.assertEqual(segs[1][3], segs[2][3])  # both 01:00 hours share Sunday 01:00
+
+    def test_segments_across_spring_forward(self):
+        with zone("America/New_York"):
+            # Sunday 2027-03-14: clocks go forward at 02:00, the day has 23 hours.
+            start = 1805000400  # 2027-03-14 00:00 EST (05:00 UTC)
+            segs = list(profile.segments(start, start + 23 * H))
+            self.assertEqual(len(segs), 23)
+            self.assertTrue(all(abs((e - s) - H) < 1e-6 for s, e, _, _ in segs))
+            self.assertEqual([b for _, _, _, b in segs[:3]], [6 * 24, 6 * 24 + 1, 6 * 24 + 3])  # no Sunday 02:00
+            lt = clock.localtime(start + 23 * H)
+            self.assertEqual((lt.tm_wday, lt.tm_hour), (0, 0))  # Monday 00:00
+
+
+class HalfHourZone(unittest.TestCase):
+    def test_local_hours_start_on_the_half_hour(self):
+        with zone("Asia/Kolkata"):  # UTC+05:30, no DST
+            # MON is Monday 05:30 in India: that local hour began at 05:00.
+            self.assertEqual(profile.hour_start(MON), MON - 1800)
+            segs = list(profile.segments(MON, MON + 2 * H))
+            self.assertEqual(segs, [(MON, MON + 1800, MON - 1800, 5), (MON + 1800, MON + 5400, MON + 1800, 6),
+                                    (MON + 5400, MON + 2 * H, MON + 5400, 7)])
 
 
 class Learn(TempHome):

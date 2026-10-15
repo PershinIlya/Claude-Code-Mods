@@ -18,7 +18,7 @@ import os
 import stat
 import time
 
-from . import config, profile
+from . import clock, config, profile
 
 W_INPUT, W_CACHE_CREATE, W_CACHE_READ, W_OUTPUT = 1.0, 1.25, 0.1, 5.0
 FULL_TRUST_DAYS = 14.0
@@ -185,7 +185,7 @@ def build_prior(events, since, now, half_life_days):
             trimmed_start = max(start, profile.hour_start(t))
             break
     covered = (end - trimmed_start) / 86400.0
-    active_days = len({time.strftime("%Y-%m-%d", time.localtime(t)) for t, _ in ordered})
+    active_days = len({clock.strftime("%Y-%m-%d", t) for t, _ in ordered})
     mix = max(0.0, min(1.0, covered / FULL_TRUST_DAYS, active_days / MIN_ACTIVE_DAYS))
     prior = [mix * x + (1 - mix) / profile.BINS for x in shape]
     meta = {

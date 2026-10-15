@@ -18,7 +18,7 @@ from ctempo import cli, commands, config, install, profile, weekly, winshell
 from ctempo.config import SEVEN_DAY
 from ctempo.store import Store
 
-from .helpers import MON, H, D, TempHome, write_json
+from .helpers import MON, H, D, TZ_UTC, TempHome, write_json
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
@@ -29,7 +29,7 @@ class Commands(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.home = tempfile.mkdtemp(prefix="ctempo-cmd-")
-        cls.env = dict(os.environ, CTEMPO_HOME=cls.home, TZ="UTC", CLAUDE_CONFIG_DIR=os.path.join(cls.home, "claude"))
+        cls.env = dict(os.environ, CTEMPO_HOME=cls.home, TZ=TZ_UTC, CLAUDE_CONFIG_DIR=os.path.join(cls.home, "claude"))
         cls.env.pop("NO_COLOR", None)
         now = time.time()
         # Two closed 5h windows and one closed week, then the current ones.
@@ -86,7 +86,7 @@ class Commands(unittest.TestCase):
 
     def test_doctor_and_config(self):
         settings = os.path.join(self.home, "settings.json")
-        with open(settings, "w") as f:
+        with open(settings, "w", encoding="utf-8", newline="") as f:
             json.dump({"statusLine": {"type": "command", "command": "x/bin/ctempo statusline", "refreshInterval": 60}}, f)
         out = self.run_cmd("doctor", "--settings", settings, ok=(0, 1))
         self.assertIn("statusLine runs ctempo", out)
