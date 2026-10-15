@@ -80,10 +80,16 @@ class Store:
             os.makedirs(d, exist_ok=True)
         self.timeout_ms = timeout_ms
         self.db = sqlite3.connect(self.path, timeout=timeout_ms / 1000.0, isolation_level=None)
-        self.db.execute("PRAGMA busy_timeout=%d" % int(timeout_ms))
-        if self.db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-            self._migrate()
-        self.db.execute("PRAGMA synchronous=NORMAL")
+        try:
+            self.db.execute("PRAGMA busy_timeout=%d" % int(timeout_ms))
+            if self.db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                self._migrate()
+            self.db.execute("PRAGMA synchronous=NORMAL")
+        except BaseException:
+            # A failed open must not hold the file: on Windows an open
+            # handle keeps it from being renamed or deleted.
+            self.close()
+            raise
 
     def _migrate(self):
         # Several openers of a new file (every open session re-renders at

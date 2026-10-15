@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from ctempo.store import SCHEMA_VERSION, Store
 
@@ -46,10 +47,21 @@ class FirstOpen(unittest.TestCase):
         # Review 7 (fresh-eyes#1): it waits up to the busy timeout, not
         # forever, then fails as before.
         t = time.monotonic()
-        with self.assertRaises(sqlite3.OperationalError):
-            Store(self.path, timeout_ms=100)
+        opened, real = [], sqlite3.connect
+
+        def connect(*a, **kw):
+            opened.append(real(*a, **kw))
+            return opened[-1]
+
+        with mock.patch("ctempo.store.sqlite3.connect", connect):
+            with self.assertRaises(sqlite3.OperationalError):
+                Store(self.path, timeout_ms=100)
         self.assertGreaterEqual(time.monotonic() - t, 0.09)
         self.assertLess(time.monotonic() - t, 2.0)
+        # The failed open closed its connection: on Windows an open handle
+        # keeps the file from being renamed or deleted.
+        with self.assertRaises(sqlite3.ProgrammingError):
+            opened[0].execute("SELECT 1")
 
 
 if __name__ == "__main__":
