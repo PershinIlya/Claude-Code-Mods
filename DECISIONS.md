@@ -145,14 +145,18 @@ the window that this reading's `resets_at` belongs to, either as `shift`
 (D-08: the reset moved and the level held) or as `rollover` with the bogus
 reading at or above that window's max (a maxed session reads no fresh value
 after its 100, so its bogus reset can begin after its last reading; matching
-`shift` only left it stuck again, found in review). Second, the reading comes
-from the session whose reading opened the bogus instance. Third, it is not
-below that opening reading (a session's real reading never is). Fourth, it
-sits less than `drop_points` above the bogus instance's max. Two processes can
-share a session id (`claude -c` or `--resume` without `--fork-session`), and
-the idle one keeps re-rendering the old window. When the undo also matched a
-window closed as `rollover` (the level dropped, or the new window began after
-the last reading, which is what a real early reset looks like), only the
+`shift` only left it stuck again, found in review). The undo follows the
+session's own chain of bogus rollovers back to the window this reading belongs
+to, and every bogus instance in between closes as `shift`: a maxed session
+that read two bogus later resets in a row kept a bogus reset time, and
+`report` counted 3 windows (found in review). Second, the reading comes from
+the session whose reading opened the bogus instance. Third, it is not below
+that opening reading (a session's real reading never is). Fourth, it sits less
+than `drop_points` above the bogus instance's max. Two processes can share a
+session id (`claude -c` or `--resume` without `--fork-session`), and the idle
+one keeps re-rendering the old window. When the undo also matched a window
+closed as `rollover` (the level dropped, or the new window began after the
+last reading, which is what a real early reset looks like), only the
 `drop_points` margin guarded it. That stale reading then flipped the line and
 `check` back to the dead window on every render pair: from the first render
 after a weekly window at 10% was reset early, and once a new 5-hour window
@@ -321,9 +325,11 @@ strength kept Mon-Fri 9-13 at 20% of the week 8 weeks after a move to 14-23
 (trust times `a`) beside the trust it was built with. It printed the
 build-time trust for good: "trusted 100%" 8 weeks on (found in review). Under
 `profile.override` the transcript prior is unused, and `ctempo profile` says
-so; it printed the prior's faded weight there too (found in review).
-`ctempo bootstrap` builds a fresh one. `install --apply` runs the bootstrap
-too (`--no-bootstrap` skips it).
+so; it printed the prior's faded weight there too (found in review). With an
+override and no transcript prior, `ctempo profile` names the override as the
+prior and `doctor` no longer warns "no transcript prior, run
+`ctempo bootstrap`" (found in review). `ctempo bootstrap` builds a fresh one.
+`install --apply` runs the bootstrap too (`--no-bootstrap` skips it).
 
 **D-15. Weekly numbers.** As in the brief, with these details: `E` is
 normalized by the week's total share (DST weeks have 167 or 169 local hours).
@@ -675,6 +681,9 @@ empty plugin key, an older version's local-time backup names, and a
 `--bin-dir` alias); a tenth, over those fixes only, confirmed 3 and rejected 1
 (a maxed session's bogus reset that began after its last reading no longer
 undone, an early-rollover week counted as a typical week, and the prior's
-weight printed under `profile.override`). All 128 are fixed, each with a
-regression test that was checked to fail on the code before its fix. Details
-in the commit messages from "Fix review findings" on.
+weight printed under `profile.override`); an eleventh, over those 3, confirmed
+2 that were older than them (two bogus later resets in a row from a maxed
+session not undone, and `ctempo profile` and `doctor` asking for a transcript
+prior that an override leaves unused) and rejected none. All 130 are fixed,
+each with a regression test that was checked to fail on the code before its
+fix. Details in the commit messages from "Fix review findings" on.

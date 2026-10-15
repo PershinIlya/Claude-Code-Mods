@@ -291,7 +291,15 @@ def cmd_profile(args, cfg):
                 print("  built %s ago, weight now %.0f%% (it halves every %g days; `ctempo bootstrap` builds a fresh one)" % (
                     dur(now - float(m.get("built_at", now))), 100 * trust * prof.prior_fade(now, hl), hl / 86400))
         else:
-            print("Prior: none (run `ctempo bootstrap`)")
+            ov = cfg["profile"].get("override")
+            if isinstance(ov, dict):
+                # The override is the prior (Profile.rates); a transcript one would be unused.
+                wake = ov.get("wake_hours") or ("?", "?")
+                print("Prior: profile.override (work days %s, wake %s-%s, mode %s)" % (
+                    ",".join(profile.DAYS[d] for d in ov.get("work_days", ()) if 0 <= d < 7),
+                    wake[0], wake[1], ov.get("mode", "prior")))
+            else:
+                print("Prior: none (run `ctempo bootstrap`)")
         print("Learned from usage %%: %d hours folded in, typical week %s" % (
             prof.learned_hours, ("%.0f%% of the limit" % info["weekly_total"]) if info["weekly_total"] else "unknown yet"))
         _surplus(st, cfg, w, awake, flat, now)
@@ -636,9 +644,13 @@ def cmd_doctor(args, cfg):
             if rej:
                 add("ok", "readings rejected by the guards", ", ".join("%s=%s" % (k[9:], v) for k, v in rej))
             prof = profile.load(st)
+            overridden = isinstance(cfg["profile"].get("override"), dict)
             if prof.prior:
                 m = prof.prior_meta
-                add("ok", "profile prior from transcripts", "%s days, %s messages" % (m.get("days"), m.get("messages")))
+                add("ok", "profile prior from transcripts", "%s days, %s messages%s" % (
+                    m.get("days"), m.get("messages"), "; unused: profile.override replaces it" if overridden else ""))
+            elif overridden:
+                add("ok", "profile prior from profile.override")
             else:
                 add("warn", "no transcript prior", "run `ctempo bootstrap`")
             add("ok", "profile hours learned from usage %%: %d" % prof.learned_hours)

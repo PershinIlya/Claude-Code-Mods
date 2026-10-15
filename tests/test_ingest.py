@@ -233,6 +233,22 @@ class Record(TempHome):
         self.assertEqual(self.feed(t, five=(100, int(t + 5 * H)), sid="a")[FIVE_HOUR], "rollover")
         self.assertEqual(self.feed(t + 60, five=(100, self.R5), sid="a")[FIVE_HOUR], "reset_reopen")
 
+    def test_two_bogus_resets_in_a_row_are_undone_by_one_reading(self):
+        # Review 11: a maxed session read two bogus later resets in a row, so
+        # the window its real reading belongs to was closed by the first bogus
+        # instance, not by the open one: the undo did not look that far back,
+        # the line kept a bogus reset time and `report` counted 3 windows.
+        for i in range(10):  # session a maxes the 00:00-05:00 window by 00:45
+            self.feed(MON + i * 300, five=(10 * (i + 1), self.R5), sid="a")
+        t = MON + 2 * H
+        self.assertEqual(self.feed(t, five=(100, self.R5 + int(H)), sid="a")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(t + 60, five=(100, self.R5 + int(2 * H)), sid="a")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(t + 120, five=(100, self.R5), sid="a")[FIVE_HOUR], "reset_reopen")
+        self.assertEqual(pace.five_hour(self.st, t + 180, self.cfg)["reset_ts"], self.R5)
+        self.feed(self.R5 + 600, five=(3, self.R5 + int(5 * H)), sid="a")  # the next window
+        ended = [(i["reset_ts"], i["close_reason"]) for i in self.windows(FIVE_HOUR) if i["close_reason"] in ("expired", "rollover")]
+        self.assertEqual(ended, [(self.R5, "expired")])
+
     def test_a_shared_session_id_cannot_undo_a_real_early_reset(self):
         # Review 8 (delta-core#0): two terminals on one conversation (`claude
         # -c` without --fork-session) share a session id. One sees a real
