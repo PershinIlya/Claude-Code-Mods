@@ -1765,7 +1765,7 @@ class WindowsProbe(unittest.TestCase):
             with mock.patch.object(install, "candidates", lambda: [stub, store]):
                 self.assertEqual(install.choose_python()[0], store)
         calls.clear()
-        with mock.patch.object(install, "_run", self.fake_run({"/opt/py/bin/python3": (0, "/opt/py/bin/python3")}, calls)), \
+        with windows(False), mock.patch.object(install, "_run", self.fake_run({"/opt/py/bin/python3": (0, "/opt/py/bin/python3")}, calls)), \
                 mock.patch.object(install, "_runnable", lambda p: True):
             install.probe_full("/opt/py/bin/python3")
         self.assertIsNone(calls[0][1])  # the environment as it is, off Windows
