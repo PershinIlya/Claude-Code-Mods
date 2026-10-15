@@ -12,7 +12,8 @@ byte (line endings and mode included).
 On Windows the statusLine runs in Git Bash or PowerShell (see winshell), so the
 command uses forward slashes and -X utf8, in a form both shells read the same
 when there is one, else in the syntax of the shell Claude Code will use (which
-the record keeps); the launcher is a ctempo.cmd.
+the record keeps); the launcher is a ctempo.cmd, with an sh `ctempo` beside it
+for Git Bash.
 """
 
 import calendar
@@ -136,15 +137,54 @@ REPLACE_TRIES = 10
 def _replace(src, dst):
     """os.replace. On Windows it fails while another process holds the target open
     without sharing delete (Claude Code reading settings.json, an antivirus scan):
-    retried for a moment there."""
+    retried for a moment there. Windows also refuses a read-only target (attrib +R),
+    which POSIX replaces like any other: the attribute is cleared for the move (and
+    put back if it fails), and the new file has src's mode, which atomic_write made
+    the target's, so it stays read-only."""
     tries = REPLACE_TRIES if config.IS_WINDOWS else 1
-    for i in range(tries):
+    mode = _writable(dst) if config.IS_WINDOWS else None
+    try:
+        for i in range(tries):
+            try:
+                return os.replace(src, dst)
+            except PermissionError:
+                if i == tries - 1:
+                    raise
+                time.sleep(0.05 * (i + 1))
+    except BaseException:
+        _chmod_back(dst, mode)
+        raise
+
+
+def _remove(path):
+    """os.remove, which on Windows refuses a read-only file that POSIX removes like any other."""
+    mode = _writable(path) if config.IS_WINDOWS else None
+    try:
+        os.remove(path)
+    except BaseException:
+        _chmod_back(path, mode)
+        raise
+
+
+def _writable(path):
+    """Clear the read-only attribute of an existing file: its mode before, or None
+    when it was writable already (or is not there)."""
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        if mode & stat.S_IWRITE:
+            return None
+        os.chmod(path, mode | stat.S_IWRITE)
+        return mode
+    except OSError:
+        return None
+
+
+def _chmod_back(path, mode):
+    if mode is not None:
         try:
-            return os.replace(src, dst)
-        except PermissionError:
-            if i == tries - 1:
-                raise
-            time.sleep(0.05 * (i + 1))
+            os.chmod(path, mode)
+        except OSError:
+            pass
 
 
 def atomic_write(path, data):
@@ -663,12 +703,35 @@ def launcher_text(python, entry):
     if config.IS_WINDOWS:
         # For running ctempo by hand only: the statusLine and the mod run python.exe itself
         # (Bun will not start a .cmd without a shell, and cmd.exe parses its arguments again).
+        # cmd.exe reads a batch file one line at a time, opening it again by path and offset after
+        # each command, and install and uninstall run from here rewrite or delete it. The failing
+        # (goto) ends the batch on python's line, which still runs (%* expanded already), as in
+        # npm's cmd-shim: nothing is read after python, and its exit code is the caller's.
         def q(p):
             return '"%s"' % p.replace("/", "\\").replace("%", "%%")
 
-        return "@echo off\r\n%s\r\n%s %s %s %%*\r\nexit /b %%ERRORLEVEL%%\r\n" % (
+        return "@echo off\r\n%s\r\n(goto) 2>nul & %s %s %s %%*\r\n" % (
             CMD_MARK, q(python), " ".join(winshell.python_flags()), q(entry))
-    return '#!/bin/sh\n%s\nexec %s -I -S %s "$@"\n' % (LAUNCHER_MARK, shlex.quote(python), shlex.quote(entry))
+    return sh_launcher_text(python, entry)
+
+
+def sh_launcher_text(python, entry):
+    """The POSIX sh launcher: the launcher on macOS and Linux, and on Windows the `ctempo`
+    beside ctempo.cmd that Git Bash runs (forward slashes, -X utf8)."""
+    if config.IS_WINDOWS:
+        python, entry = winshell.slashes(python), winshell.slashes(entry)
+    return '#!/bin/sh\n%s\nexec %s %s %s "$@"\n' % (
+        LAUNCHER_MARK, shlex.quote(python), " ".join(winshell.python_flags()), shlex.quote(entry))
+
+
+def _sh_launcher_path(lp, old_sh, explicit):
+    """Windows: the sh launcher to write beside ctempo.cmd at lp, or None. Git Bash (and Claude
+    Code's Bash tool, which runs in it) looks a command up by its very name, never with .cmd, so
+    `ctempo` there needs a file of that name, as npm's cmd-shim writes. As with ctempo.cmd, one
+    the user deleted since an earlier install comes back only with --bin-dir."""
+    if not (config.IS_WINDOWS and lp) or (not explicit and old_sh and not os.path.exists(old_sh)):
+        return None
+    return os.path.join(os.path.dirname(lp), "ctempo")
 
 
 def _launcher_bytes(python, entry):
@@ -932,12 +995,17 @@ def install(args, out=print):
                 out("  (if claude rejects the folder: cd %s, then run claude plugin marketplace add ./)" % _shown([root]))
     bin_dir = os.path.abspath(os.path.expanduser(args.bin_dir)) if args.bin_dir else None
     # Without --bin-dir, the launcher an earlier install wrote follows the new pin
-    # (one the user deleted since is not written again), as ctempo.cmd on Windows.
-    old_lp = load_state().get("launcher")
+    # (one the user deleted since is not written again), as ctempo.cmd on Windows,
+    # with an sh launcher for Git Bash beside it.
+    prev = load_state()
+    old_lp, old_sh = prev.get("launcher"), prev.get("sh_launcher")
     lp = os.path.join(bin_dir if bin_dir else os.path.dirname(old_lp), launcher_name()) \
         if bin_dir or (old_lp and os.path.exists(old_lp)) else None
+    sh = _sh_launcher_path(lp, old_sh, bool(bin_dir))
     if lp:
         out("Launcher: %s -> %s %s %s" % (lp, python, " ".join(winshell.python_flags()), entry))
+    if sh:
+        out("Launcher for Git Bash: %s" % sh)
     out("Runtime info for the mod: %s" % config.runtime_path())
     if not args.no_bootstrap:
         out("Profile: bootstrap the prior from ~/.claude/projects transcripts (timestamps and token counts only)")
@@ -1016,12 +1084,26 @@ def install(args, out=print):
                         os.chmod(lp, 0o755)
                     state["launcher"] = lp
                     out("Wrote launcher %s" % lp)
-                    # Only the newest launcher is ctempo's: one in an earlier --bin-dir goes (and on
-                    # Windows a ctempo an older version wrote beside ctempo.cmd). The same file under
-                    # another name (case on macOS, a bind mount) is not one realpath can tell.
-                    if old_lp and os.path.exists(old_lp) and not os.path.samefile(old_lp, lp) and _is_launcher(old_lp):
-                        os.remove(old_lp)
-                        out("Removed launcher %s" % old_lp)
+                    keep = [lp]
+                    if sh and os.path.exists(sh) and not _is_launcher(sh):
+                        out("Skipped launcher: %s exists and is not ours" % sh)
+                    elif sh:
+                        with open(sh, "wb") as f:  # LF and UTF-8, as Git Bash reads it
+                            f.write(sh_launcher_text(python, entry).encode("utf-8"))
+                        keep.append(sh)
+                        out("Wrote launcher %s" % sh)
+                    if sh in keep:
+                        state["sh_launcher"] = sh
+                    else:
+                        state.pop("sh_launcher", None)
+                    # Only the newest launchers are ctempo's: those in an earlier --bin-dir go (a ctempo
+                    # an older version wrote beside ctempo.cmd on Windows is the sh launcher now). The
+                    # same file under another name (case on macOS, a bind mount) is not one realpath can tell.
+                    for old in (old_lp, old_sh):
+                        if old and os.path.exists(old) and not any(os.path.samefile(old, k) for k in keep) \
+                                and _is_launcher(old):
+                            os.remove(old)
+                            out("Removed launcher %s" % old)
                 else:
                     out("Skipped launcher: %s exists and is not ours" % lp)
             except OSError as e:
@@ -1209,7 +1291,7 @@ def _tidy_user_settings(state, mod, skip_real, touched=True):
     _, new_raw = restore(obj, raw, fmt, base)
     _drop_records(state, os.path.realpath(us))
     if new_raw is None:
-        os.remove(os.path.realpath(us))
+        _remove(os.path.realpath(us))
         return "Removed %s (it did not exist before the mod was installed)" % us
     if new_raw == raw or new_raw == (raw or "").encode("utf-8"):
         return None
@@ -1317,7 +1399,7 @@ def uninstall(args, out=print):
         if ours or (cmds and mod_ok and mine):
             new_obj, new_raw = restore(obj, raw, fmt, rec if (mod_ok or not cmds) else dict(rec, had_keys={}))
             if new_raw is None:
-                os.remove(real)
+                _remove(real)
                 out("Removed %s (it did not exist before install)" % spath)
             elif new_raw != raw and new_raw != (raw or "").encode("utf-8"):
                 atomic_write(spath, new_raw)
@@ -1346,10 +1428,11 @@ def uninstall(args, out=print):
                 out("Kept the mod (--no-mod) and %s, which it reads; `ctempo uninstall --apply` removes both."
                     % config.runtime_path())
             else:
-                lp = state.pop("launcher", None)
-                if lp and os.path.exists(lp) and _is_launcher(lp):
-                    os.remove(lp)
-                    out("Removed launcher %s" % lp)
+                for key in ("launcher", "sh_launcher"):
+                    lp = state.pop(key, None)
+                    if lp and os.path.exists(lp) and _is_launcher(lp):
+                        os.remove(lp)
+                        out("Removed launcher %s" % lp)
                 if os.path.exists(config.runtime_path()):
                     os.remove(config.runtime_path())
     save_state(state)
