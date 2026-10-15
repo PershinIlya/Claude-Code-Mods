@@ -8,11 +8,14 @@ Linux too. CTEMPO_HOME, CLAUDE_CONFIG_DIR, HOME and USERPROFILE point into
 a temporary folder for every step: the real ones are never read or written.
 
 1. Report: the shell Claude Code would run the statusLine with here
-   (winshell.predict_shell(), which matters on Windows) and the installer's
+   (winshell.predict_shell(), which matters on Windows, and must say Git
+   Bash when Git for Windows is in its default folder) and the installer's
    interpreter report (install.choose_python()).
 2. For each starting settings.json (no statusLine; CRLF line endings; a
-   statusLine of the user's to compose with; ctempo and its interpreter in
-   folders with a space): `python bin/ctempo install --apply --settings
+   statusLine of the user's to compose with, in plain form and, where a
+   shell would change it on the way to Python, encoded; ctempo and its
+   interpreter in folders with a space, where Windows may use their 8.3
+   short paths): `python bin/ctempo install --apply --settings
    <tmp>/settings.json --no-bootstrap --no-mod`, then the statusLine command
    is read back and a statusLine payload with rate limits is piped into it
    through each shell Claude Code may use on this OS, with COLUMNS set
@@ -308,6 +311,109 @@ def own_forms(env, python, entry):
             show(p.stderr.decode("utf-8", "replace"))
 
 
+def git_bash_predicted(tmp):
+    """Windows: Git for Windows in its default folder means Claude Code runs the statusLine
+    in Git Bash, so winshell.predict_shell() must say bash. A fact the code under test does
+    not decide, which target_shell's comparisons then lean on."""
+    if not WINDOWS or not os.path.exists(GIT_BASH):
+        return
+    got = winshell.predict_shell(sandbox(tmp))
+    print("\n== Git Bash is at %s; winshell.predict_shell() says %r" % (GIT_BASH, got))
+    if got[0] != "bash":
+        fail("Git Bash is at %s but winshell.predict_shell() says %r" % (GIT_BASH, got))
+
+
+# (the user's statusLine, written encoded on Windows, shells to run it through, a check of its
+# line, what that check means): see composed_forms.
+COMPOSED = (
+    ('echo "mine two"', True, ("bash", "pwsh", "powershell", "sh"), lambda s: s.startswith("mine two"),
+     "a double quote reaches Python intact (Windows PowerShell 5.1 splits it in plain form)"),
+    ("/usr/bin/printf mine", True, ("bash", "sh"), lambda s: s.startswith("mine"),
+     "Git Bash's MSYS2 conversion of a leading POSIX path is avoided"),
+    ("echo /usr/x", False, ("bash", "sh"), lambda s: s == "/usr/x" or s.startswith("/usr/x "),
+     "MSYS2 leaves an argument alone when whitespace comes before its first slash; if this fails, the plain-form "
+     "criterion (winshell.msys_converts) is wrong"),
+    ("~/mine.sh", False, ("bash", "sh"), lambda s: s.startswith("mine"),
+     "MSYS2 leaves an argument starting with ~ alone, and the composed .sh runs"),
+)
+
+
+def composed_forms(tmp, entry):
+    """A previous statusLine that a shell would hand to Python changed on Windows goes
+    base64-encoded after --compose-b64, any other as the readable --compose <command>
+    (never encoded on macOS or Linux). Each: install, check the form, render through the
+    shells given (the composed command's line must be there, and ctempo's), uninstall,
+    and compare settings.json byte for byte."""
+    for i, (theirs, encoded, names, ok, meaning) in enumerate(COMPOSED):
+        name = "composed %s" % theirs
+        print("\n== %s" % name)
+        root = os.path.join(tmp, str(i))
+        env = sandbox(root)
+        with open(os.path.join(env["HOME"], "mine.sh"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("#!/bin/sh\necho mine\n")
+        os.chmod(os.path.join(env["HOME"], "mine.sh"), 0o755)
+        os.makedirs(env["CTEMPO_HOME"], exist_ok=True)
+        with open(os.path.join(env["CTEMPO_HOME"], "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"compose": {"timeout_ms": 5000}}, f)  # what is checked here is the text, not the timing
+        path = os.path.join(root, "settings.json")
+        before = (json.dumps({"statusLine": {"type": "command", "command": theirs}}, indent=2) + "\n").encode("utf-8")
+        with open(path, "wb") as f:
+            f.write(before)
+        if ctempo(entry, env, ["install", "--apply", "--settings", path, "--no-bootstrap", "--no-mod"]) != 0:
+            fail("%s: install failed" % name)
+            continue
+        with open(path, encoding="utf-8-sig") as f:
+            cmd = json.load(f)["statusLine"]["command"]
+        b64 = winshell.COMPOSE_B64 in cmd
+        print("  statusLine command: %s\n  install wrote it %s" % (
+            cmd, "encoded after %s" % winshell.COMPOSE_B64 if b64 else "as plain text after --compose"))
+        want = encoded and WINDOWS
+        ROWS.append((name, "form", "encoded" if b64 else "plain"))
+        if b64 != want:
+            fail("%s: install wrote it %s, expected %s" % (name, "encoded" if b64 else "plain",
+                                                          "encoded" if want else "plain"))
+        for sh, argv, e in [s for s in shells(env) if s[0] in names]:
+            p, lines, utf8, secs = render(argv, cmd, e)
+            print("  %-10s %4.1f s, exit %d: %s" % (sh, secs, p.returncode, " / ".join(lines) or "(no output)"))
+            problems = problems_of(p, lines, utf8, None)
+            if not any(ok(s) for s in lines):
+                problems.append("no line from the composed command (%s)" % meaning)
+            ROWS.append((name, sh, "FAILED: %s" % "; ".join(problems) if problems else "ok, %.1f s" % secs))
+            if problems:
+                fail("%s, through %s: %s" % (name, sh, "; ".join(problems)))
+                show(p.stderr.decode("utf-8", "replace"))
+        log = os.path.join(env["CTEMPO_HOME"], "errors.log")
+        if os.path.exists(log):
+            fail("%s: ctempo logged errors" % name)
+            with open(log, encoding="utf-8", errors="replace") as f:
+                show(f.read())
+        if ctempo(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
+            fail("%s: uninstall failed" % name)
+            continue
+        with open(path, "rb") as f:
+            after = f.read()
+        if after != before:
+            fail("%s: settings.json differs after uninstall:\n  before %r\n  after  %r" % (name, before, after))
+        else:
+            print("  settings.json is byte for byte what it was")
+
+
+def short_paths(python, entry):
+    """Windows, the paths with a space: whether the statusLine command names the interpreter
+    and ctempo by their 8.3 short paths (then it reads the same in every shell, and the
+    scenario above required it to work in all of them). Reported only."""
+    if not WINDOWS or not python:
+        return
+    from ctempo import install
+
+    print("\n== 8.3 short paths for the paths with a space")
+    for what, path in (("interpreter", python), ("ctempo", entry)):
+        word = install._path_word(path)
+        used = word != winshell.slashes(path)
+        print("  %s: %s -> %s (%s)" % (what, path, word, "8.3 short path" if used else "no bare short path"))
+        ROWS.append(("8.3 short path", what, "used" if used else "not used"))
+
+
 def report(tmp):
     print("\n== The statusLine shell and the installer's interpreter report")
     env = sandbox(tmp)
@@ -391,14 +497,17 @@ def main(argv):
     tmp = tempfile.mkdtemp(prefix="ctempo-ci-")
     try:
         report(os.path.join(tmp, "report"))
+        git_bash_predicted(os.path.join(tmp, "predicted"))
         entry = os.path.join(ROOT, "bin", "ctempo")
         scenario("no statusLine before", os.path.join(tmp, "add"), b'{\n  "theme": "dark"\n}\n', entry)
         scenario("CRLF line endings", os.path.join(tmp, "crlf"), b'{\r\n  "theme": "dark"\r\n}\r\n', entry)
         theirs = b'{\n  "statusLine": {\n    "type": "command",\n    "command": "echo mine"\n  }\n}\n'
         scenario("composed with the user's statusLine", os.path.join(tmp, "compose"), theirs, entry, extra="mine")
+        composed_forms(os.path.join(tmp, "forms"), entry)
         spaces = os.path.join(tmp, "spaces", "with space")  # settings.json and CTEMPO_HOME too
         entry, python = spaced_copy(spaces)
         env = scenario("paths with a space", spaces, b"{}\n", entry, python=python)
+        short_paths(python, entry)
         if WINDOWS and python and env:
             own_forms(env, python, entry)
         if not args.no_marketplace:

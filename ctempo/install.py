@@ -466,21 +466,37 @@ def is_ours(cmd):
     return isinstance(cmd, str) and "ctempo" in cmd and " statusline" in cmd
 
 
+def _path_word(path):
+    """A path as a word of the Windows statusLine command: forward slashes, and when
+    that needs quotes, its folders' 8.3 short names if those need none (the command
+    then reads the same in both shells; runtime.json keeps the long path)."""
+    word = winshell.slashes(path)
+    if not winshell.is_bare(word):
+        short = winshell.short_path(path)
+        if short and winshell.is_bare(winshell.slashes(short)):
+            return winshell.slashes(short)
+    return word
+
+
 def our_command(python, entry, compose=None, shell=None):
     """The statusLine command. On Windows (see winshell): forward slashes (Git Bash
     eats backslashes) and -X utf8, in a form Git Bash and PowerShell read the same
-    when there is one (the interpreter bare, the rest bare or in single quotes with
-    no quote inside), since the shell Claude Code uses changes when Git for Windows
-    comes or goes; otherwise in the syntax of `shell` (predicted when not given):
-    single quotes for bash, `& ...` for PowerShell, whose `&` no bash reads, so the
-    command says which shell it is for (winshell.written_for)."""
+    when there is one (the interpreter bare, its 8.3 short path if need be, the rest
+    bare or in single quotes with no quote inside), since the shell Claude Code uses
+    changes when Git for Windows comes or goes; otherwise in the syntax of `shell`
+    (predicted when not given): single quotes for bash, `& ...` for PowerShell, whose
+    `&` no bash reads, so the command says which shell it is for (winshell.written_for).
+    A composed command that Windows PowerShell 5.1 or Git Bash would hand to Python
+    changed goes base64-encoded after --compose-b64 (winshell.needs_encoding)."""
     if not config.IS_WINDOWS:
         parts = [shlex.quote(python), "-I", "-S", shlex.quote(entry), "statusline"]
         if compose:
             parts += ["--compose", shlex.quote(compose)]
         return " ".join(parts)
-    argv = [winshell.slashes(python)] + winshell.python_flags() + [winshell.slashes(entry), "statusline"]
-    argv += ["--compose", compose] if compose else []
+    argv = [_path_word(python)] + winshell.python_flags() + [_path_word(entry), "statusline"]
+    if compose:
+        argv += [winshell.COMPOSE_B64, winshell.encoded(compose)] if winshell.needs_encoding(compose) \
+            else ["--compose", compose]
     bash = winshell.command_line(argv, "bash")
     if bash == winshell.command_line(argv, "powershell"):
         return bash
@@ -512,11 +528,14 @@ def command_shell(cmd):
 
 
 def compose_of(cmd):
-    """The composed command embedded in one of our statusLine commands."""
-    argv = split_command(cmd)
-    if argv and "--compose" in argv:
-        i = argv.index("--compose")
-        return argv[i + 1] if i + 1 < len(argv) else None
+    """The composed command embedded in one of our statusLine commands: what follows
+    --compose, or what follows --compose-b64 decoded (as ctempo statusline reads it)."""
+    argv = split_command(cmd) or []
+    for i, a in enumerate(argv[:-1]):
+        if a == "--compose":
+            return argv[i + 1]
+        if a == winshell.COMPOSE_B64:
+            return winshell.decoded(argv[i + 1])
     return None
 
 
@@ -835,6 +854,26 @@ def _with_compose(rec, cur):
 
 
 # -- install / uninstall -------------------------------------------------------------
+def _shell_notes(cmd, shell, out):
+    """Windows: what install tells about the statusLine command it leaves: a previous
+    statusLine stored encoded, and a command that runs in one shell only."""
+    if winshell.COMPOSE_B64 in (split_command(cmd) or []):
+        why = "Git Bash would rewrite the POSIX path it starts with"
+        if not winshell.passes_intact(compose_of(cmd) or ""):
+            why = "Windows PowerShell 5.1 would pass its double quotes (or final backslash) to Python changed"
+        out("  note: your previous statusLine is stored base64-encoded after %s, since %s; `ctempo doctor` shows it "
+            "decoded" % (winshell.COMPOSE_B64, why))
+    if winshell.reads_alike(cmd):
+        return
+    out("  warning: this command runs only in %s; after installing or removing Git for Windows, or setting "
+        "CLAUDE_CODE_GIT_BASH_PATH, run `ctempo install --apply` again (`ctempo doctor` checks this)"
+        % winshell.SHELLS[winshell.written_for(cmd) or shell])
+    if winshell.getenv(os.environ, "MSYSTEM"):
+        # Git Bash puts its own git first on PATH, which can change what Claude Code finds.
+        out("  note: Claude Code started from this Git Bash terminal can pick another shell than when started from "
+            "the Desktop app or PowerShell; run `ctempo doctor` from PowerShell to check")
+
+
 def install(args, out=print):
     spath = settings_path(args.settings)
     try:
@@ -877,6 +916,7 @@ def install(args, out=print):
             "; the command reads the same in Git Bash and PowerShell" if winshell.reads_alike(cmd) else ""))
         if shell_path is None:
             out("  warning: no Git Bash and no PowerShell found, so Claude Code cannot run the statusLine here")
+        _shell_notes(cmd, shell, out)
     if want is not None:
         d = diff(raw, new_raw, spath)
         out(d if d else "  (no textual change)")

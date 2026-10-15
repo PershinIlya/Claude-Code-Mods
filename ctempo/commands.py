@@ -599,6 +599,7 @@ def cmd_doctor(args, cfg):
             add("warn", "no statusLine in %s" % sp)
         if config.IS_WINDOWS:
             _doctor_shell(add, sp, obj, cmd)
+            _doctor_compose(add, cmd)
         if obj.get("disableAllHooks"):
             add("warn", "disableAllHooks is set", "the statusLine and mods do not run")
     except ValueError as e:
@@ -703,11 +704,30 @@ def _doctor_shell(add, spath, obj, cmd):
         add("ok", "statusLine shell: %s" % name, path + note)
         return
     need = winshell.written_for(cmd) or was
+    # Inside Git Bash, whose PATH puts its own git first, the prediction can differ from what
+    # Claude Code finds when started from the Desktop app or PowerShell: a note, not a repin.
+    msys = ""
+    if winshell.getenv(os.environ, "MSYSTEM"):
+        msys = ("; checked from Git Bash, so Claude Code started from the Desktop app or PowerShell may pick "
+                "another shell: run `ctempo doctor` from PowerShell to check")
     if need and need != kind:
+        fix = path + msys if msys else "run `ctempo install --apply` to rewrite it (%s)" % path
         add("warn", "statusLine command is written for %s, but Claude Code would run it in %s" % (
-            winshell.SHELLS[need], name), "run `ctempo install --apply` to rewrite it (%s)" % path)
+            winshell.SHELLS[need], name), fix)
     else:
-        add("ok", "statusLine shell: %s" % name, path)
+        add("ok", "statusLine shell: %s" % name, path + msys)
+
+
+def _doctor_compose(add, cmd):
+    """Windows: a previous statusLine that an older install left as plain text after
+    --compose, where Windows PowerShell 5.1 or Git Bash hands it to Python changed."""
+    from . import install, winshell
+
+    argv = install.split_command(cmd) if install.is_ours(cmd) else None
+    i = argv.index("--compose") if argv and "--compose" in argv[:-1] else None
+    if i is not None and winshell.needs_encoding(argv[i + 1]):
+        add("warn", "your previous statusLine can reach ctempo changed in Windows PowerShell 5.1 or Git Bash",
+            "run `ctempo install --apply` to store it encoded")
 
 
 def _version():

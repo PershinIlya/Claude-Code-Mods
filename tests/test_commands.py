@@ -471,6 +471,7 @@ class DoctorCase(unittest.TestCase):
         env = mock.patch.dict(os.environ, {"CTEMPO_HOME": self.dir, "CLAUDE_CONFIG_DIR": os.path.join(self.dir, "claude")})
         env.start()
         self.addCleanup(env.stop)
+        os.environ.pop("MSYSTEM", None)  # doctor in a Git Bash terminal says more (DoctorFromGitBash)
         self.settings = os.path.join(self.dir, "settings.json")
 
     def doctor(self, cmd, recorded=None, predicted=("powershell", PS51), windows=True, env=None):
@@ -544,6 +545,56 @@ class DoctorShell(DoctorCase):
         self.assertNotIn("statusLine shell", out)
         self.assertNotIn("written for", out)
         self.predict.assert_not_called()
+
+
+class DoctorFromGitBash(DoctorCase):
+    """Review 15 (shells#0): in a Git Bash terminal, whose PATH puts Git's own git
+    first, the shell doctor predicts can differ from the one Claude Code finds when
+    started from the Desktop app or PowerShell: a note, never a call to reinstall."""
+
+    QUOTED, BARE = DoctorShell.QUOTED, DoctorShell.BARE
+    NOTE = ("; checked from Git Bash, so Claude Code started from the Desktop app or PowerShell may pick another shell: "
+            "run `ctempo doctor` from PowerShell to check")
+
+    def git_bash_doctor(self, *a, **kw):
+        with mock.patch.dict(os.environ, {"MSYSTEM": "MINGW64"}):
+            return self.doctor(*a, **kw)
+
+    def test_a_note_instead_of_a_repin(self):
+        out = self.git_bash_doctor(self.QUOTED, recorded="bash")
+        self.assertIn("WARN statusLine command is written for Git Bash, but Claude Code would run it in PowerShell  (%s%s)"
+                      % (self.PS51, self.NOTE), out)
+        self.assertNotIn("to rewrite it", out)
+        out = self.git_bash_doctor("& " + self.QUOTED, recorded="powershell")
+        self.assertIn("ok   statusLine shell: PowerShell  (%s%s)" % (self.PS51, self.NOTE), out)
+        # Bare words read the same in both shells: nothing to check.
+        out = self.git_bash_doctor(self.BARE, recorded="bash")
+        self.assertIn("ok   statusLine shell: PowerShell  (%s; install assumed Git Bash" % self.PS51, out)
+        self.assertNotIn("checked from Git Bash", out)
+
+
+class DoctorEncodedCompose(DoctorCase):
+    """Review 15 (shells#1, shells#2): doctor shows a composed command stored encoded
+    as the plain command, and asks for a reinstall when an older install left one
+    as plain text that Windows PowerShell 5.1 or Git Bash would change."""
+
+    BARE = DoctorShell.BARE
+    REPIN = ("WARN your previous statusLine can reach ctempo changed in Windows PowerShell 5.1 or Git Bash  "
+             "(run `ctempo install --apply` to store it encoded)")
+
+    def test_shown_decoded(self):
+        old = 'node "C:/Users/John Smith/sl.js"'
+        out = self.doctor(self.BARE + " --compose-b64 " + winshell.encoded(old), recorded="bash")
+        self.assertIn("ok   composing with your previous statusLine  (%s)" % old, out)
+        self.assertNotIn("store it encoded", out)
+
+    def test_an_older_plain_one_asks_for_a_reinstall(self):
+        for old in ('node "C:/Users/John Smith/sl.js"', "/bin/bash ~/x.sh", "dir C:\\x y\\"):
+            with self.subTest(old=old):
+                self.assertIn(self.REPIN, self.doctor(self.BARE + " --compose '%s'" % old))
+                self.assertNotIn("store it encoded", self.doctor(self.BARE + " --compose '%s'" % old, windows=False))
+        for old in ("~/x.sh", "node C:/x.js"):
+            self.assertNotIn("store it encoded", self.doctor(self.BARE + " --compose '%s'" % old))
 
 
 if __name__ == "__main__":

@@ -48,6 +48,10 @@ def parse_args(argv):
             opts["compose"] = False
         elif a == "--compose":
             opts["compose_cmd"] = next(it, None)
+        elif a == "--compose-b64":  # what install writes on Windows for a command a shell would change
+            from .winshell import decoded
+
+            opts["compose_cmd"] = decoded(next(it, None))
         elif a == "--now":
             opts["now"] = float(next(it, "0"))
     return opts
@@ -169,7 +173,8 @@ class Composer:
     own process group, so one still running at the deadline is killed with
     its children.
 
-    On Windows it runs in the shell Claude Code would pick (Git Bash, else
+    On Windows it runs in the shell that started ctempo, where Claude Code ran
+    the statusLine, else in the one Claude Code would pick (Git Bash, else
     PowerShell; never cmd.exe, which shell=True means there), the pipes are
     served by threads (select() takes sockets only), and a command still
     running at the deadline is killed with its tree by taskkill.
@@ -189,7 +194,7 @@ class Composer:
         if self.windows:
             from . import winshell
 
-            argv, env = winshell.shell_argv(cmd, env)
+            argv, env = winshell.shell_argv(cmd, env, winshell.parent_shell())
             # No console window of its own; a group of its own, as on POSIX.
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
             self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

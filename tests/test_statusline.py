@@ -24,14 +24,18 @@ ENTRY = os.path.join(ROOT, "bin", "ctempo")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 WINDOWS = os.name == "nt"
 # The compose tests are written in POSIX shell. On Windows they run in Git
-# Bash, as Claude Code runs a statusLine there; without it they cannot.
-posix_shell = unittest.skipUnless(not WINDOWS or winshell.predict_shell()[0] == "bash",
-                                  "needs Git Bash (the compose commands are POSIX shell)")
+# Bash, as Claude Code runs a statusLine there; without it they cannot. Git
+# for Windows in its default folder runs them whatever predict_shell says, so
+# a prediction that misses it fails them instead of skipping them.
+posix_shell = unittest.skipUnless(
+    not WINDOWS or os.path.exists(r"C:\Program Files\Git\bin\bash.exe") or winshell.predict_shell()[0] == "bash",
+    "needs Git Bash (the compose commands are POSIX shell)")
 # A compose timeout well above a normal render (two process starts plus the
 # 0.5 s quiet window) keeps "it ended well before the timeout" measurable on a
-# loaded runner; Git Bash and process startup are slower on Windows. The
-# background jobs in these tests run 3 s, so a render that waited for them
-# still fails the limit.
+# loaded runner; Git Bash and process startup are slower on Windows. On POSIX
+# the 3 s background jobs in these tests outlast the limit, so a render that
+# waited for them fails it; the Windows limit is above 3 s, and there
+# WindowsComposer's 4 s silent job is the one a reader waiting for EOF fails.
 QUICK_TIMEOUT_MS, QUICK_LIMIT = (5000, 3.5) if WINDOWS else (3000, 2.5)
 
 
@@ -601,6 +605,39 @@ class TildeHome(unittest.TestCase):
         self.assertEqual(os.listdir(self.cwd), [])  # no directory literally named "~" in the project
 
 
+class EncodedCompose(unittest.TestCase):
+    """Review 15 (shells#1, shells#2): on Windows install writes a composed
+    command that Windows PowerShell 5.1 or Git Bash would hand to Python changed
+    as `--compose-b64 b<token>`. ctempo statusline decodes it on any OS; a
+    malformed token composes nothing, and never raises."""
+
+    def test_parse_args_decodes_it(self):
+        from ctempo import statusline
+
+        for cmd in ('powershell -NoProfile -File "C:/Users/John Smith/sl.ps1"', "/bin/bash ~/x.sh", "dir C:\\",
+                    "echo \u25b2 J\u00fcrgen"):
+            self.assertEqual(statusline.parse_args(["--compose-b64", winshell.encoded(cmd)])["compose_cmd"], cmd)
+        for bad in (["--compose-b64"], ["--compose-b64", "b!!"], ["--compose-b64", "bZ"], ["--compose-b64", "b____"],
+                    ["--compose-b64", "xYQ"], ["--compose-b64", ""]):
+            self.assertIsNone(statusline.parse_args(bad)["compose_cmd"], bad)
+        # The last one wins, as with two --compose.
+        argv = ["--compose", "printf a", "--compose-b64", winshell.encoded("printf b")]
+        self.assertEqual(statusline.parse_args(argv)["compose_cmd"], "printf b")
+
+    @posix_shell
+    def test_the_decoded_command_runs(self):
+        home = tempfile.mkdtemp(prefix="ctempo-b64-")
+        self.addCleanup(shutil.rmtree, home, True)
+        now = time.time()
+        p = payload((42, int(now + 2 * H)), (31.5, int(now + 3 * D)))
+        out, _ = run(p, home, args=["--compose-b64", winshell.encoded("printf 'say \"hi\"'")], env={"COLUMNS": "200"})
+        self.assertTrue(ANSI.sub("", out.stdout.decode()).startswith('say "hi"  5h 42%'), out.stdout)
+        out, _ = run(p, home, args=["--compose-b64", "b!!"], env={"COLUMNS": "200"})
+        self.assertEqual(out.returncode, 0)
+        self.assertTrue(ANSI.sub("", out.stdout.decode()).startswith("5h 42%"), out.stdout)
+        self.assertFalse(os.path.exists(os.path.join(home, "errors.log")))
+
+
 class ComposeWidth(unittest.TestCase):
     """Review 9 (macos-readiness#0): Claude Code draws the status line in its
     prompt footer, 2 columns of padding on each side, and cuts it at the
@@ -644,7 +681,8 @@ class WindowsComposer(unittest.TestCase):
         self.dir = tempfile.mkdtemp(prefix="ctempo-wincomp-")
         self.addCleanup(shutil.rmtree, self.dir, True)
         patches = [mock.patch.object(config, "IS_WINDOWS", True),
-                   mock.patch.object(winshell, "kill_tree", wraps=winshell.kill_tree)]
+                   mock.patch.object(winshell, "kill_tree", wraps=winshell.kill_tree),
+                   mock.patch.object(winshell, "parent_shell", return_value=None)]  # the test runner's shell
         if not WINDOWS:
             patches.append(mock.patch.object(winshell, "predict_shell", return_value=("bash", "bash")))
         started = [p.start() for p in patches]
@@ -685,6 +723,24 @@ class WindowsComposer(unittest.TestCase):
         self.assertIsNotNone(c.p.wait(5))
         self.assertLess(el, 3.0)
 
+    def test_a_silent_background_job_is_not_waited_for(self):
+        # Review 15 (regress-ci#16): the shell exited and its job holds stdout open past
+        # QUICK_LIMIT on every OS, so a reader that waited for EOF fails here.
+        _, out, el = self.compose("echo a; (sleep 4; echo late) &", timeout=QUICK_TIMEOUT_MS / 1000.0)
+        self.assertEqual(out, "a")
+        self.assertLess(el, QUICK_LIMIT)
+        self.kill.assert_not_called()
+
+    def test_runs_in_the_shell_that_started_ctempo(self):
+        # Review 15 (shells#0): inside Git Bash, whose PATH puts its own git first, Claude
+        # Code's search can end in PowerShell; the shell that ran ctempo is the one to use.
+        bash = winshell.predict_shell()[1]  # Git Bash on Windows (never WSL's bash on PATH), else bash
+        with mock.patch.object(winshell, "parent_shell", return_value=("bash", bash)), \
+                mock.patch.object(winshell, "predict_shell", return_value=("powershell", None)):
+            c, out, _ = self.compose("printf x")
+        self.assertEqual(out, "x")
+        self.assertEqual(c.p.args, [bash, "-c", "printf x"])
+
     def test_main_joins_a_crlf_line(self):
         from ctempo import statusline
 
@@ -715,7 +771,8 @@ class PowerShellComposer(unittest.TestCase):
 
     def setUp(self):
         patches = [mock.patch.object(config, "IS_WINDOWS", True),
-                   mock.patch.object(winshell, "kill_tree", wraps=winshell.kill_tree)]
+                   mock.patch.object(winshell, "kill_tree", wraps=winshell.kill_tree),
+                   mock.patch.object(winshell, "parent_shell", return_value=None)]  # the test runner's shell
         self.kill = [p.start() for p in patches][1]
         for p in patches:
             self.addCleanup(p.stop)

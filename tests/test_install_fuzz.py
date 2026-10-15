@@ -271,6 +271,9 @@ class World:
             obj, x = load(text), COMPOSE[int(what.split("=")[1])]
             cmd = obj["statusLine"]["command"]
             argv = install.split_command(cmd)
+            if winshell.COMPOSE_B64 in argv[:-1]:  # stored encoded (Windows): the user writes it out plainly
+                i = argv.index(winshell.COMPOSE_B64)
+                del argv[i:i + 2]
             if "--compose" in argv:
                 argv[argv.index("--compose") + 1] = x
             else:
