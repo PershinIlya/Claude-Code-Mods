@@ -529,10 +529,10 @@ narrow symbol 2. Measured as `COLUMNS` code points, a joined line in the last
 unit; ctempo does not read it. Its output is complete once it has exited and
 its stdout has closed or stayed quiet for 500 ms (Claude Code waits the same
 for a hook's remaining output); a background job it started may keep stdout
-open, and is left running. Timeout 1.5 s (`compose.timeout_ms`, counted from
-ctempo's start): a command still running then is killed with its children and
-only our segment shows; one that already exited keeps the output that arrived.
-`CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces instead.
+open, and is left running. Timeout 1.5 s, 3 s on Windows (`compose.timeout_ms`,
+counted from ctempo's start): a command still running then is killed with its
+children and only our segment shows; one that already exited keeps the output
+that arrived. `CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces instead.
 `refreshInterval` becomes 60, or stays lower if the old one was lower.
 
 On Windows a command that a shell would hand to Python changed is stored
@@ -768,9 +768,10 @@ first word ending in `.sh`, and PowerShell gets Claude Code's flags (no
 `-ExecutionPolicy Bypass` under
 `CLAUDE_CODE_POWERSHELL_RESPECT_EXECUTION_POLICY`) and its
 `${CLAUDE_PROJECT_DIR}` style placeholders as `${env:...}`. A nested PowerShell
-took about 0.3 s warm and close to 1 s cold on CI runners, so the README
-advises a `compose.timeout_ms` of 3000 to 5000 for a previous status line that
-is a PowerShell or Git Bash script.
+took about 0.3 s warm and close to 1 s cold on CI runners, and a composed
+`echo mine` in Windows PowerShell 5.1 once missed the 1.5 s timeout there, so
+`compose.timeout_ms` defaults to 3000 on Windows (`config.compose_timeout_ms`);
+the README suggests 5000 for a slow script.
 
 **D-27. Windows: install.** Interpreters: `--python`, else the PEP 514 registry
 (HKCU, then HKLM in its 64-bit and 32-bit views; PythonCore first, newest

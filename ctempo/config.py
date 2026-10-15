@@ -14,6 +14,15 @@ import os
 # Windows rules apply (paths, shells, streams); tests patch it to run them anywhere.
 IS_WINDOWS = os.name == "nt"
 
+
+
+def compose_timeout_ms(windows=None):
+    """Default compose.timeout_ms. On Windows the previous statusLine runs in a
+    nested Git Bash or PowerShell, and a cold Windows PowerShell 5.1 start alone
+    took about 1 s on CI runners (1.5 s once): 3 s there, 1.5 s elsewhere."""
+    return 3000 if (IS_WINDOWS if windows is None else windows) else 1500
+
+
 FIVE_HOUR = "five_hour"
 SEVEN_DAY = "seven_day"
 WINDOWS = (FIVE_HOUR, SEVEN_DAY)
@@ -70,7 +79,7 @@ DEFAULTS = {
     # Composition with a pre-existing statusLine command (set by install).
     "compose": {
         "command": None,
-        "timeout_ms": 1500,
+        "timeout_ms": compose_timeout_ms(),
         "separator": "  ",
     },
     # Surfaces where the mod draws its band. The terminal already has the

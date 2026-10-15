@@ -218,9 +218,10 @@ needs nothing.
   when started from the Desktop app or PowerShell (Git Bash puts its own `git`
   first on PATH). install and doctor say so when run there; run
   `ctempo doctor` from PowerShell to check.
-- A previous status line that is a PowerShell or Git Bash script can take
-  longer than `compose.timeout_ms` (1500 ms) to start cold, and the line then
-  shows ctempo's segment alone: set it to 3000 to 5000 in `config.json`.
+- Your previous status line runs in a nested Git Bash or PowerShell, which
+  can take about 1 s to start cold, so `compose.timeout_ms` is 3000 on Windows.
+  If your part of the line still drops out (a slow script), set it to 5000 in
+  `config.json`.
 - Claude Code inside WSL is a separate Linux install: follow the macOS and
   Linux steps there. The Desktop app draws no band in WSL sessions, where
   plugins are not available.
@@ -293,7 +294,7 @@ leave out keeps its default):
 | `display.max_width` | 80 | the line drops optional parts to fit, then is cut with `…` (`...` in ascii mode); each part keeps its color |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
 | `mod.refresh_s` | 60 | how often the mod refreshes the band (15 to 3600) |
-| `compose.timeout_ms` | 1500 | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 3000 to 5000 for a PowerShell or Git Bash script |
+| `compose.timeout_ms` | 1500 (3000 on Windows) | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 5000 for a slow PowerShell or Git Bash script |
 | `retention_days` | 365 | history kept |
 
 `CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
@@ -333,7 +334,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 432 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 433 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 45 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
