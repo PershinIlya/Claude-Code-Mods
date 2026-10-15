@@ -8,12 +8,20 @@ file) so uninstall can put the original back. The record is saved before the
 settings file is written. When the file has not changed since install apart
 from what install and the plugin CLI did, uninstall restores it byte for
 byte (line endings and mode included).
+
+On Windows the statusLine runs in Git Bash or PowerShell (see winshell), so the
+command uses forward slashes and -X utf8, in a form both shells read the same
+when there is one, else in the syntax of the shell Claude Code will use (which
+the record keeps); the launcher is a ctempo.cmd.
 """
 
 import calendar
+import codecs
 import difflib
+import glob
 import hashlib
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -23,7 +31,7 @@ import subprocess
 import sys
 import time
 
-from . import __version__, config
+from . import __version__, config, winshell
 
 MARKETPLACE = "claude-tempo"
 PLUGIN = "ctempo"
@@ -31,6 +39,9 @@ PLUGIN_ID = PLUGIN + "@" + MARKETPLACE
 PLUGIN_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
 OWN_ENTRY = {"enabledPlugins": PLUGIN_ID, "extraKnownMarketplaces": MARKETPLACE}
 LAUNCHER_MARK = "# ctempo launcher"
+CMD_MARK = "rem ctempo launcher"  # the same, in the Windows ctempo.cmd
+CLAUDE_TIMEOUT = 120
+BOM = "\ufeff"
 
 
 def repo_root():
@@ -52,10 +63,11 @@ def state_path():
 
 # -- JSON with the file's own formatting ------------------------------------------
 class Fmt:
-    def __init__(self, indent=2, newline=False, eol="\n"):
+    def __init__(self, indent=2, newline=False, eol="\n", bom=False):
         self.indent = indent
         self.newline = newline
         self.eol = eol
+        self.bom = bom
 
 
 def detect_format(text):
@@ -65,19 +77,27 @@ def detect_format(text):
         ws = m.group(1)
         indent = "\t" if ws.startswith("\t") else len(ws)
     eol = "\r\n" if "\r\n" in text else "\n"
-    return Fmt(indent, text.endswith("\n"), eol)
+    return Fmt(indent, text.endswith("\n"), eol, text.startswith(BOM))
 
 
 def dumps(obj, fmt):
     # JSON strings cannot hold raw newlines, so only structural ones change.
     s = json.dumps(obj, indent=fmt.indent, ensure_ascii=False).replace("\n", fmt.eol)
-    return s + (fmt.eol if fmt.newline else "")
+    return (BOM if fmt.bom else "") + s + (fmt.eol if fmt.newline else "")
+
+
+def parse_json(text):
+    """A settings file's object from its text: a UTF-8 BOM (Windows editors write one)
+    is skipped, and a blank file is {}, as Claude Code reads them."""
+    body = text[1:] if text.startswith(BOM) else text
+    return json.loads(body) if body.strip() else {}
 
 
 def read_settings(path):
     """(object, raw text or None, Fmt). Raises ValueError on a file we must not touch.
 
-    Read with newline="" so CRLF files keep their bytes."""
+    Read with newline="" so CRLF files keep their bytes. The raw text keeps a
+    BOM, so a write keeps it too, and the hash is that of the file's bytes."""
     real = os.path.realpath(path)
     if os.path.islink(path) and not os.path.exists(real):
         raise ValueError("%s is a dangling symlink; refusing to touch it" % path)
@@ -88,10 +108,10 @@ def read_settings(path):
             raw = f.read()
     except UnicodeDecodeError:
         raise ValueError("%s is not UTF-8; refusing to touch it" % path)
-    if not raw.strip():
-        return {}, raw, Fmt(2, True)
+    if not raw.lstrip(BOM).strip():
+        return {}, raw, Fmt(2, True, bom=raw.startswith(BOM))
     try:
-        obj = json.loads(raw)
+        obj = parse_json(raw)
     except ValueError as e:
         raise ValueError("%s is not valid JSON (%s); refusing to touch it" % (path, e))
     if not isinstance(obj, dict):
@@ -110,6 +130,23 @@ def _umask():
     return m
 
 
+REPLACE_TRIES = 10
+
+
+def _replace(src, dst):
+    """os.replace. On Windows it fails while another process holds the target open
+    without sharing delete (Claude Code reading settings.json, an antivirus scan):
+    retried for a moment there."""
+    tries = REPLACE_TRIES if config.IS_WINDOWS else 1
+    for i in range(tries):
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            if i == tries - 1:
+                raise
+            time.sleep(0.05 * (i + 1))
+
+
 def atomic_write(path, data):
     """Write str or bytes via a private tmp file and rename; keeps the mode."""
     real = os.path.realpath(path)
@@ -123,9 +160,11 @@ def atomic_write(path, data):
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         os.chmod(tmp, mode)
-        os.replace(tmp, real)
+        _replace(tmp, real)
     except BaseException:
         try:
+            if config.IS_WINDOWS:  # the mode of a read-only target made it read-only, and Windows cannot delete that
+                os.chmod(tmp, stat.S_IREAD | stat.S_IWRITE)
             os.unlink(tmp)
         except OSError:
             pass
@@ -164,40 +203,127 @@ def diff(old, new, path):
     )
 
 
+# -- subprocesses --------------------------------------------------------------------
+def _run(argv, timeout, env=None, cwd=None):
+    """(exit code, stdout, stderr), decoded as UTF-8 (claude and the probe write UTF-8,
+    whatever the locale); raises OSError or subprocess.TimeoutExpired. On Windows a
+    timeout kills the whole tree: killing a .cmd shim or a launcher (py.exe, claude.cmd)
+    leaves its child holding the pipes, and the read would wait for that child."""
+    if not config.IS_WINDOWS:
+        r = subprocess.run(argv, capture_output=True, encoding="utf-8", errors="replace", env=env, cwd=cwd,
+                           timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
+                         env=env, cwd=cwd)
+    try:
+        so, se = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass  # something outside the tree still holds a pipe: give up on its output
+        raise e
+    return p.returncode, so, se
+
+
+def _kill_tree(p):
+    """The process and its children (taskkill /T), then the process itself in any case."""
+    winshell.kill_tree(p.pid)
+    try:
+        p.kill()
+    except OSError:
+        pass
+
+
 # -- interpreter ---------------------------------------------------------------------
-PROBE = "import sys, sqlite3, json; print('%d.%d %s' % (sys.version_info[0], sys.version_info[1], sqlite3.sqlite_version))"
+# One JSON line, ASCII whatever the code page: version, sqlite, and the interpreter's own path
+# (on Windows a Store alias or a launcher can stand in front of the real python.exe).
+PROBE = ("import sys, sqlite3, json; "
+         "print(json.dumps(['%d.%d' % sys.version_info[:2], sqlite3.sqlite_version, sys.executable]))")
+
+
+def _runnable(py):
+    """An absolute path to something the OS can start. On Windows os.access(X_OK) is
+    true for any file, and CreateProcess wants a .exe with a drive (or a UNC share)."""
+    if not isinstance(py, str) or not py:
+        return False
+    if config.IS_WINDOWS:
+        return bool(ntpath.splitdrive(py)[0]) and py.lower().endswith(".exe") and os.path.isfile(py)
+    return os.path.isabs(py) and os.access(py, os.X_OK)
+
+
+def _is_alias(path):
+    """A Microsoft Store app execution alias, or the Store package behind one: the python.exe
+    stub that opens the Store, or a Store Python, which writes under AppData to a private copy."""
+    if "\\windowsapps\\" in path.replace("/", "\\").lower():
+        return True
+    try:  # the stat module defines the tag on Windows only
+        return getattr(os.lstat(path), "st_reparse_tag", 0) == getattr(stat, "IO_REPARSE_TAG_APPEXECLINK", 0x8000001B)
+    except OSError:
+        return False
 
 
 def probe(py):
     """(ok, version, sqlite, startup_ms, note)."""
-    if not py or not os.path.isabs(py) or not os.access(py, os.X_OK):
-        return False, None, None, None, "not an executable absolute path"
+    return probe_full(py)[:5]
+
+
+def probe_full(py):
+    """(ok, version, sqlite, startup_ms, note, executable): probe() plus the interpreter's
+    own sys.executable. A candidate runs only with arguments: on Windows the python.exe
+    stub opens the Store when run without any, and with them it fails."""
+    if not _runnable(py):
+        return False, None, None, None, ("not an absolute path to a .exe" if config.IS_WINDOWS
+                                         else "not an executable absolute path"), None
     if sys.platform == "darwin" and py == "/usr/bin/python3":
         # Without the Command Line Tools this shim opens an install dialog.
         if subprocess.run(["xcode-select", "-p"], capture_output=True).returncode != 0:
-            return False, None, None, None, "Command Line Tools not installed"
+            return False, None, None, None, "Command Line Tools not installed", None
+    # The Python install manager's launchers install a runtime on first use unless told not to.
+    env = dict(os.environ, PYTHON_MANAGER_AUTOMATIC_INSTALL="0") if config.IS_WINDOWS else None
     best = None
     out = ""
     for _ in range(3):
         t = time.perf_counter()
         try:
-            r = subprocess.run([py, "-I", "-S", "-c", PROBE], capture_output=True, text=True, timeout=15)
+            code, so, se = _run([py, "-I", "-S", "-c", PROBE], timeout=15, env=env)
         except (OSError, subprocess.TimeoutExpired) as e:
-            return False, None, None, None, str(e)
+            return False, None, None, None, str(e), None
         ms = (time.perf_counter() - t) * 1000
-        if r.returncode != 0:
-            return False, None, None, None, (r.stderr.strip().splitlines() or ["failed"])[-1]
-        out = r.stdout.strip()
+        if code != 0:
+            return False, None, None, None, (se.strip().splitlines() or ["failed"])[-1], None
+        out = so.strip()
         best = ms if best is None else min(best, ms)
-    ver, sq = out.split(" ", 1)
-    major, minor = (int(x) for x in ver.split("."))
+    try:
+        ver, sq, exe = json.loads(out.splitlines()[-1])
+        major, minor = (int(x) for x in ver.split("."))
+    except (ValueError, TypeError, IndexError):
+        return False, None, None, best, "unexpected probe output: %s" % out[-80:], None
     if (major, minor) < (3, 8):
-        return False, ver, sq, best, "Python 3.8+ required"
-    return True, ver, sq, best, ""
+        return False, ver, sq, best, "Python 3.8+ required", exe
+    return True, ver, sq, best, "", exe
+
+
+def _pin(py, exe):
+    """What to pin for a candidate that passed. On Windows, what the interpreter reports
+    as itself when that is another real file (the candidate is a Store alias, py.exe or
+    another launcher in front of it), so no render pays for the extra hop."""
+    if not config.IS_WINDOWS or not isinstance(exe, str) or not exe:
+        return py
+    same = ntpath.normcase(ntpath.normpath(exe)) == ntpath.normcase(ntpath.normpath(py))
+    return py if same or _is_alias(exe) or not _runnable(exe) else exe
 
 
 def candidates():
     seen, out = set(), []
+    if config.IS_WINDOWS:
+        for p in windows_candidates():
+            key = ntpath.normcase(ntpath.normpath(p)) if p else None
+            if p and key not in seen and os.path.exists(p):
+                seen.add(key)
+                out.append(p)
+        return out
     for p in [
         "/usr/bin/python3",
         "/opt/homebrew/bin/python3",
@@ -211,24 +337,128 @@ def candidates():
     return out
 
 
+def _version_key(name):
+    """Sort key for a folder or registry tag such as Python312, "Python 3.12" or 3.13-64: newest first."""
+    m = re.search(r"(\d)\.?(\d+)", name)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def windows_candidates(env=None):
+    """Interpreters to probe on Windows, in this order: the PEP 514 registry (PythonCore
+    first, newest first), the py launcher's list, the default install folders, the one
+    running install, then python and python3 on PATH (often only the Store stub, which
+    fails the probe). The python.org installer leaves PATH alone by default, and the
+    Desktop app does not see a shell's PATH, so PATH comes last."""
+    env = os.environ if env is None else env
+    out = _registry_pythons() + _py_launcher_pythons(env)
+    local, pf, pf86 = (winshell.getenv(env, n) for n in ("LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"))
+    for base, pattern in ((local, ("Programs", "Python", "Python3*")), (pf, ("Python3*",)), (pf, ("Python 3*",)),
+                          (pf86, ("Python3*",)), (pf86, ("Python 3*",)), (local, ("Python", "*"))):
+        if base:  # the last one is the Python install manager's runtimes
+            found = glob.glob(os.path.join(base, *pattern + ("python.exe",)))
+            out += sorted(found, key=lambda p: _version_key(os.path.basename(os.path.dirname(p))), reverse=True)
+    return out + [sys.executable, shutil.which("python"), shutil.which("python3")]
+
+
+def _registry_pythons():
+    """python.exe paths from the PEP 514 keys (HKCU, then HKLM in its 64-bit and 32-bit views)."""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    out = []
+    for hive, view in ((winreg.HKEY_CURRENT_USER, 0), (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+                       (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY)):
+        try:
+            root = winreg.OpenKey(hive, r"Software\Python", 0, winreg.KEY_READ | view)
+        except OSError:
+            continue
+        with root:
+            for company in sorted(_subkeys(winreg, root), key=lambda c: c != "PythonCore"):
+                if company == "PyLauncher":
+                    continue
+                try:
+                    ck = winreg.OpenKey(root, company)
+                except OSError:
+                    continue
+                with ck:
+                    for tag in sorted(_subkeys(winreg, ck), key=_version_key, reverse=True):
+                        try:
+                            ip = winreg.OpenKey(ck, tag + r"\InstallPath")
+                        except OSError:
+                            continue
+                        with ip:
+                            exe = _reg_value(winreg, ip, "ExecutablePath")
+                            folder = _reg_value(winreg, ip, "")
+                        if not exe and folder:  # PEP 514: python.exe in the (Default) folder
+                            exe = os.path.join(folder, "python.exe")
+                        if exe:
+                            out.append(exe)
+    return out
+
+
+def _subkeys(winreg, key):
+    names, i = [], 0
+    while True:
+        try:
+            names.append(winreg.EnumKey(key, i))
+        except OSError:
+            return names
+        i += 1
+
+
+def _reg_value(winreg, key, name):
+    try:
+        value = winreg.QueryValueEx(key, name)[0]
+    except OSError:
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _py_launcher_pythons(env):
+    """The interpreters `py -0p` lists (the old py launcher and the install manager both keep that form)."""
+    py = shutil.which("py")
+    if not py:
+        return []
+    try:
+        code, so, _ = _run([py, "-0p"], timeout=10, env=dict(env, PYTHON_MANAGER_AUTOMATIC_INSTALL="0"))
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if code != 0:
+        return []
+    found = (re.search(r"[A-Za-z]:[\\/].*\.exe", line, re.I) for line in so.splitlines())
+    return [m.group(0).strip() for m in found if m]
+
+
 def choose_python(explicit=None):
     """Pick the interpreter: explicit, else the first stable one that passes.
 
     Order prefers system and Homebrew paths over the one running install
-    (often a conda env that may be activated, updated or removed).
+    (often a conda env that may be activated, updated or removed). On Windows
+    the pin is the real python.exe behind an alias or a launcher, and a Store
+    Python is used only when nothing else passes.
     """
     report = []
     if explicit:
-        ok, ver, sq, ms, note = probe(explicit)
-        report.append((explicit, ok, ver, sq, ms, note))
-        return (explicit if ok else None), report
-    chosen = None
+        ok, ver, sq, ms, note, exe = probe_full(explicit)
+        pin = _pin(explicit, exe) if ok else explicit
+        report.append((pin, ok, ver, sq, ms, _via(note, pin, explicit)))
+        return (pin if ok else None), report
+    chosen = fallback = None
     for p in candidates():
-        ok, ver, sq, ms, note = probe(p)
-        report.append((p, ok, ver, sq, ms, note))
-        if ok and chosen is None:
-            chosen = p
-    return chosen, report
+        ok, ver, sq, ms, note, exe = probe_full(p)
+        pin = _pin(p, exe) if ok else p
+        if ok and config.IS_WINDOWS and _is_alias(pin):
+            note = note or "Microsoft Store alias: used only when nothing else passes"
+            fallback = fallback or pin
+        elif ok and chosen is None:
+            chosen = pin
+        report.append((pin, ok, ver, sq, ms, _via(note, pin, p)))
+    return chosen or fallback, report
+
+
+def _via(note, pin, candidate):
+    return note if pin == candidate else ", ".join(x for x in (note, "via %s" % candidate) if x)
 
 
 # -- the statusLine command --------------------------------------------------------
@@ -236,32 +466,88 @@ def is_ours(cmd):
     return isinstance(cmd, str) and "ctempo" in cmd and " statusline" in cmd
 
 
-def our_command(python, entry, compose=None):
-    parts = [shlex.quote(python), "-I", "-S", shlex.quote(entry), "statusline"]
-    if compose:
-        parts += ["--compose", shlex.quote(compose)]
-    return " ".join(parts)
+def our_command(python, entry, compose=None, shell=None):
+    """The statusLine command. On Windows (see winshell): forward slashes (Git Bash
+    eats backslashes) and -X utf8, in a form Git Bash and PowerShell read the same
+    when there is one (the interpreter bare, the rest bare or in single quotes with
+    no quote inside), since the shell Claude Code uses changes when Git for Windows
+    comes or goes; otherwise in the syntax of `shell` (predicted when not given):
+    single quotes for bash, `& ...` for PowerShell, whose `&` no bash reads, so the
+    command says which shell it is for (winshell.written_for)."""
+    if not config.IS_WINDOWS:
+        parts = [shlex.quote(python), "-I", "-S", shlex.quote(entry), "statusline"]
+        if compose:
+            parts += ["--compose", shlex.quote(compose)]
+        return " ".join(parts)
+    argv = [winshell.slashes(python)] + winshell.python_flags() + [winshell.slashes(entry), "statusline"]
+    argv += ["--compose", compose] if compose else []
+    bash = winshell.command_line(argv, "bash")
+    if bash == winshell.command_line(argv, "powershell"):
+        return bash
+    if (shell or predicted_shell()) == "powershell":
+        return "& " + " ".join(winshell.quote(w, "powershell") for w in argv)
+    return bash
+
+
+def split_command(cmd):
+    """The argv of one of our statusLine commands, read with the rules of the shell it is
+    written for: PowerShell's when only PowerShell reads it (on Windows, or after a `&`
+    no sh reads), else POSIX sh's (Git Bash's), or None."""
+    if not isinstance(cmd, str):
+        return None
+    if (config.IS_WINDOWS or cmd.lstrip()[:1] == "&") and winshell.written_for(cmd) == "powershell":
+        return winshell.words(cmd, "powershell")
+    try:
+        return shlex.split(cmd)
+    except ValueError:
+        return None
+
+
+def command_shell(cmd):
+    """The one shell a statusLine command is written for on Windows ("bash" or
+    "powershell"), as doctor reads it from the syntax: None when Git Bash and
+    PowerShell read it the same (only such a command survives a change of shell
+    without a repin), or when the syntax does not tell (the install record does)."""
+    return winshell.written_for(cmd) if isinstance(cmd, str) else None
 
 
 def compose_of(cmd):
     """The composed command embedded in one of our statusLine commands."""
-    try:
-        argv = shlex.split(cmd)
-    except ValueError:
-        return None
-    if "--compose" in argv:
+    argv = split_command(cmd)
+    if argv and "--compose" in argv:
         i = argv.index("--compose")
         return argv[i + 1] if i + 1 < len(argv) else None
     return None
 
 
-def plan_statusline(current, python, entry, replace=False, refresh=60):
+def settings_env(obj=None):
+    """The `env` Claude Code lays over its environment for a settings file: the user file's,
+    then that file's own (a project's wins), as far as ctempo can read them."""
+    env = {}
+    try:
+        user = read_settings(settings_path(None))[0]
+    except (OSError, ValueError):
+        user = {}
+    for o in (user, obj or {}):
+        e = o.get("env") if isinstance(o, dict) else None
+        if isinstance(e, dict):
+            env.update((k, v) for k, v in e.items() if isinstance(k, str) and isinstance(v, str))
+    return env
+
+
+def predicted_shell(obj=None):
+    """The shell Claude Code will run the statusLine of settings `obj` with on Windows:
+    "bash" or "powershell" (winshell.predict_shell, with that file's settings env)."""
+    return winshell.predict_shell(os.environ, settings_env(obj))[0]
+
+
+def plan_statusline(current, python, entry, replace=False, refresh=60, shell=None):
     """New statusLine value and a note, or (None, note) when nothing changes."""
     if isinstance(current, dict) and is_ours(current.get("command")):
         had = compose_of(current["command"])
         compose = None if replace else had
         want = dict(current)
-        want["command"] = our_command(python, entry, compose)
+        want["command"] = our_command(python, entry, compose, shell)
         want.setdefault("refreshInterval", refresh)
         if want == current:
             return None, "statusLine already runs ctempo"
@@ -270,34 +556,41 @@ def plan_statusline(current, python, entry, replace=False, refresh=60):
         return want, "update ctempo's statusLine command (interpreter or path changed)"
     if isinstance(current, dict) and isinstance(current.get("command"), str) and current["command"].strip():
         if replace:
-            return {"type": "command", "command": our_command(python, entry), "refreshInterval": refresh}, (
+            return {"type": "command", "command": our_command(python, entry, None, shell), "refreshInterval": refresh}, (
                 "REPLACE existing statusLine (kept in the backup and in install.json)"
             )
         want = dict(current)
         want["type"] = "command"
-        want["command"] = our_command(python, entry, current["command"])
+        want["command"] = our_command(python, entry, current["command"], shell)
         theirs = current.get("refreshInterval")
         want["refreshInterval"] = min(refresh, theirs) if isinstance(theirs, (int, float)) and theirs >= 1 else refresh
         return want, "compose: run your existing statusLine command and append ctempo's segment"
-    return {"type": "command", "command": our_command(python, entry), "refreshInterval": refresh}, "add statusLine"
+    return {"type": "command", "command": our_command(python, entry, None, shell), "refreshInterval": refresh}, \
+        "add statusLine"
 
 
 # -- plugin (mod) via the claude CLI -----------------------------------------------
 def claude_bin():
+    if config.IS_WINDOWS:
+        # PATHEXT order in each PATH folder, as cmd.exe finds it: claude.exe (native, WinGet)
+        # or claude.cmd (npm). npm's extensionless sh shim is nothing CreateProcess can start.
+        found = shutil.which("claude")
+        if found and os.path.splitext(found)[1].lower() in (".exe", ".cmd", ".bat"):
+            return found
+        return shutil.which("claude.exe") or shutil.which("claude.cmd")
     return shutil.which("claude")
 
 
-def run_claude(args, env=None):
+def run_claude(args, env=None, cwd=None):
     exe = claude_bin()
     if not exe:
         return 127, "", "claude not found on PATH"
     try:
-        r = subprocess.run([exe] + args, capture_output=True, text=True, env=env, timeout=120)
+        return _run([exe] + args, timeout=CLAUDE_TIMEOUT, env=env, cwd=cwd)
     except subprocess.TimeoutExpired:
-        return 124, "", "claude %s timed out after 120 s" % " ".join(args[:3])
+        return 124, "", "claude %s timed out after %d s" % (" ".join(args[:3]), CLAUDE_TIMEOUT)
     except OSError as e:
         return 127, "", "could not run claude: %s" % e
-    return r.returncode, r.stdout, r.stderr
 
 
 def mod_commands(root):
@@ -305,6 +598,28 @@ def mod_commands(root):
         ["plugin", "marketplace", "add", root],
         ["plugin", "install", PLUGIN_ID, "--scope", "user"],
     ]
+
+
+def _shown(argv):
+    """A command line to print for the user to run: sh quoting, or on Windows double
+    quotes, which cmd.exe and PowerShell both read."""
+    return subprocess.list2cmdline(argv) if config.IS_WINDOWS else " ".join(shlex.quote(x) for x in argv)
+
+
+def _run_mod_command(c, root, out):
+    """Run one plugin command and print its outcome: (exit code, stdout, stderr). On Windows,
+    a marketplace add that claude rejects is run again as `./` from the repo: the parser
+    takes ./ on every OS, while whether it takes a drive path there is unconfirmed."""
+    code, so, se = run_claude(c)
+    if config.IS_WINDOWS and c[:3] == ["plugin", "marketplace", "add"] and code not in (0, 124, 127) \
+            and "already" not in (so + se).lower():
+        msg = (so.strip() or se.strip()).splitlines()
+        out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
+        out("  retrying from %s as: claude plugin marketplace add ./" % root)
+        code, so, se = run_claude(c[:3] + ["./"], cwd=root)
+    msg = (so.strip() or se.strip()).splitlines()
+    out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
+    return code, so, se
 
 
 def unmod_commands():
@@ -321,12 +636,48 @@ def _user_keys(obj):
 
 
 # -- launcher ------------------------------------------------------------------------
+def launcher_name():
+    return "ctempo.cmd" if config.IS_WINDOWS else "ctempo"
+
+
 def launcher_text(python, entry):
+    if config.IS_WINDOWS:
+        # For running ctempo by hand only: the statusLine and the mod run python.exe itself
+        # (Bun will not start a .cmd without a shell, and cmd.exe parses its arguments again).
+        def q(p):
+            return '"%s"' % p.replace("/", "\\").replace("%", "%%")
+
+        return "@echo off\r\n%s\r\n%s %s %s %%*\r\nexit /b %%ERRORLEVEL%%\r\n" % (
+            CMD_MARK, q(python), " ".join(winshell.python_flags()), q(entry))
     return '#!/bin/sh\n%s\nexec %s -I -S %s "$@"\n' % (LAUNCHER_MARK, shlex.quote(python), shlex.quote(entry))
 
 
+def _launcher_bytes(python, entry):
+    """cmd.exe reads a batch file in the console code page (the OEM one, unless chcp changed
+    it), so a path outside ASCII has to be written in it."""
+    text = launcher_text(python, entry)
+    if config.IS_WINDOWS:
+        try:
+            codecs.lookup("oem")
+            return text.encode("oem")
+        except (LookupError, UnicodeEncodeError):
+            pass
+    return text.encode("utf-8")
+
+
+def _is_launcher(path):
+    """The file is a launcher ctempo wrote (sh or cmd), not the user's."""
+    try:
+        text = read_text(path)
+    except OSError:
+        return False
+    return LAUNCHER_MARK in text or CMD_MARK in text
+
+
 def runtime_info(python, entry):
-    return {"python": python, "entry": entry, "repo": repo_root(), "version": __version__, "written_at": time.time()}
+    """runtime.json, read by the mod: it runs python with args, then entry."""
+    return {"python": python, "args": winshell.python_flags(), "entry": entry, "repo": repo_root(),
+            "version": __version__, "written_at": time.time()}
 
 
 # -- install records ---------------------------------------------------------------
@@ -336,7 +687,7 @@ STATE_VERSION = 2
 def load_state():
     """{"version": 2, "records": {abs settings path: record}, ...globals}."""
     try:
-        with open(state_path(), encoding="utf-8") as f:
+        with open(state_path(), encoding="utf-8-sig") as f:  # a BOM (a Windows editor) is fine
             state = json.load(f)
     except (OSError, ValueError):
         state = None
@@ -389,7 +740,7 @@ def save_state(state):
     tmp = state_path() + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
-    os.replace(tmp, state_path())
+    _replace(tmp, state_path())
 
 
 def installed_records(state):
@@ -433,8 +784,7 @@ def _original_from_backups(spath):
     composed = None
     for n in names:
         try:
-            text = read_text(os.path.join(folder, n))
-            obj = json.loads(text) if text.strip() else {}  # a blank file is {}, as in read_settings
+            obj = parse_json(read_text(os.path.join(folder, n)))  # a blank file is {}, as in read_settings
         except (OSError, ValueError):
             continue
         if not isinstance(obj, dict):
@@ -510,7 +860,9 @@ def install(args, out=print):
         return 1
     entry = entry_path()
     current = obj.get("statusLine")
-    want, note = plan_statusline(current, python, entry, replace=args.replace)
+    # On Windows the command's syntax may depend on the shell Claude Code will run it with.
+    shell, shell_path = winshell.predict_shell(os.environ, settings_env(obj)) if config.IS_WINDOWS else (None, None)
+    want, note = plan_statusline(current, python, entry, replace=args.replace, shell=shell)
     new_obj = dict(obj)
     if want is not None:
         new_obj["statusLine"] = want
@@ -518,6 +870,13 @@ def install(args, out=print):
     out("")
     out("Settings: %s" % spath)
     out("  statusLine: %s" % note)
+    if shell:
+        cmd = (want if want is not None else current)["command"]
+        out("  Claude Code runs it with %s here%s" % (
+            winshell.SHELLS[shell] + ("" if shell == "bash" else " (no Git Bash found)"),
+            "; the command reads the same in Git Bash and PowerShell" if winshell.reads_alike(cmd) else ""))
+        if shell_path is None:
+            out("  warning: no Git Bash and no PowerShell found, so Claude Code cannot run the statusLine here")
     if want is not None:
         d = diff(raw, new_raw, spath)
         out(d if d else "  (no textual change)")
@@ -526,16 +885,19 @@ def install(args, out=print):
     if use_mod:
         out("Mod (Desktop Code tab band), via the local marketplace in %s:" % root)
         for c in mod_commands(root):
-            out("  claude " + " ".join(shlex.quote(x) for x in c))
+            out("  claude " + _shown(c))
         if not claude_bin():
             out("  (claude is not on PATH: run these yourself later)")
+            if config.IS_WINDOWS:
+                out("  (if claude rejects the folder: cd %s, then run claude plugin marketplace add ./)" % _shown([root]))
     bin_dir = os.path.abspath(os.path.expanduser(args.bin_dir)) if args.bin_dir else None
     # Without --bin-dir, the launcher an earlier install wrote follows the new pin
-    # (one the user deleted since is not written again).
+    # (one the user deleted since is not written again), as ctempo.cmd on Windows.
     old_lp = load_state().get("launcher")
-    lp = os.path.join(bin_dir, "ctempo") if bin_dir else (old_lp if old_lp and os.path.exists(old_lp) else None)
+    lp = os.path.join(bin_dir if bin_dir else os.path.dirname(old_lp), launcher_name()) \
+        if bin_dir or (old_lp and os.path.exists(old_lp)) else None
     if lp:
-        out("Launcher: %s -> %s -I -S %s" % (lp, python, entry))
+        out("Launcher: %s -> %s %s %s" % (lp, python, " ".join(winshell.python_flags()), entry))
     out("Runtime info for the mod: %s" % config.runtime_path())
     if not args.no_bootstrap:
         out("Profile: bootstrap the prior from ~/.claude/projects transcripts (timestamps and token counts only)")
@@ -552,6 +914,8 @@ def install(args, out=print):
     if key != spath and rec is not None:  # the same file through another name: one record
         records[spath] = records.pop(key)
     cur_ours = isinstance(current, dict) and is_ours(current.get("command"))
+    # On Windows, the shell the command was written for, so doctor can tell when that changes.
+    shell_rec = {winshell.RECORD_KEY: shell} if shell else {}
     if want is not None:
         backup = make_backup(spath) if raw is not None else None
         user_file = os.path.realpath((state.get("mod") or {}).get("user_settings") or "") == os.path.realpath(spath)
@@ -581,7 +945,7 @@ def install(args, out=print):
             rec.update(_statusline_part(obj, spath))
         if cur_ours:
             rec = _with_compose(rec, current)  # a repin or --replace must not lose an edited --compose
-        rec.update(installed=True, written_statusLine=want)
+        rec.update(installed=True, written_statusLine=want, **shell_rec)
         records[spath] = rec
         state.update(python=python, entry=entry)
         save_state(state)
@@ -590,7 +954,10 @@ def install(args, out=print):
     elif rec is None and cur_ours:
         rec = {"settings_path": spath, "had_file": True, "had_keys": {}, "installed": True}
         rec.update(_statusline_part(obj, spath))
+        rec.update(shell_rec)
         records[spath] = rec
+    elif rec is not None and rec.get("installed"):
+        rec.update(shell_rec)  # the command is already the one for this shell
     rc = 0
     try:
         state.update(python=python, entry=entry)
@@ -602,16 +969,17 @@ def install(args, out=print):
             try:
                 if bin_dir:
                     os.makedirs(bin_dir, exist_ok=True)
-                if not os.path.exists(lp) or LAUNCHER_MARK in read_text(lp):
-                    with open(lp, "w", encoding="utf-8") as f:
-                        f.write(launcher_text(python, entry))
-                    os.chmod(lp, 0o755)
+                if not os.path.exists(lp) or _is_launcher(lp):
+                    with open(lp, "wb") as f:
+                        f.write(_launcher_bytes(python, entry))
+                    if not config.IS_WINDOWS:
+                        os.chmod(lp, 0o755)
                     state["launcher"] = lp
                     out("Wrote launcher %s" % lp)
-                    # Only the newest launcher is ctempo's: one in an earlier --bin-dir goes. The same
-                    # file under another name (case on macOS, a bind mount) is not one realpath can tell.
-                    if old_lp and os.path.exists(old_lp) and not os.path.samefile(old_lp, lp) \
-                            and LAUNCHER_MARK in read_text(old_lp):
+                    # Only the newest launcher is ctempo's: one in an earlier --bin-dir goes (and on
+                    # Windows a ctempo an older version wrote beside ctempo.cmd). The same file under
+                    # another name (case on macOS, a bind mount) is not one realpath can tell.
+                    if old_lp and os.path.exists(old_lp) and not os.path.samefile(old_lp, lp) and _is_launcher(old_lp):
                         os.remove(old_lp)
                         out("Removed launcher %s" % old_lp)
                 else:
@@ -654,9 +1022,7 @@ def install(args, out=print):
             before = _peek(us)
             if claude_bin():
                 for c in mod_commands(root):
-                    code, so, se = run_claude(c)
-                    msg = (so.strip() or se.strip()).splitlines()
-                    out("  claude %s -> exit %d %s" % (" ".join(c[:3]), code, msg[-1] if msg else ""))
+                    code, so, se = _run_mod_command(c, root, out)
                     if code != 0 and "already" not in (so + se).lower():
                         rc = 1
             else:
@@ -941,7 +1307,7 @@ def uninstall(args, out=print):
                     % config.runtime_path())
             else:
                 lp = state.pop("launcher", None)
-                if lp and os.path.exists(lp) and LAUNCHER_MARK in read_text(lp):
+                if lp and os.path.exists(lp) and _is_launcher(lp):
                     os.remove(lp)
                     out("Removed launcher %s" % lp)
                 if os.path.exists(config.runtime_path()):
@@ -995,8 +1361,7 @@ def restore(obj, raw, fmt, rec):
         try:
             with open(backup, "rb") as f:
                 orig_bytes = f.read()
-            text = orig_bytes.decode("utf-8")
-            orig_obj = json.loads(text) if text.strip() else {}  # a blank file is {}, as in read_settings
+            orig_obj = parse_json(orig_bytes.decode("utf-8"))  # a blank file is {}, as in read_settings
             if orig_obj == new and hashlib.sha256(orig_bytes).hexdigest() == snap.get("original_sha256"):
                 return new, orig_bytes
         except (OSError, ValueError):
