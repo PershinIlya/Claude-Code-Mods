@@ -231,7 +231,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 292 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 294 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
@@ -247,10 +247,12 @@ hanging, hand edits (the command inside ctempo's `--compose` included), the
 plugin commands run by hand and the data folder deleted in between. It checks
 after every step that `runtime.json` exists while a mod record does, and at
 the end that nothing of ctempo is left, each file holds the user's JSON, and a
-file the user never edited comes back byte for byte. Thirteen review passes
+file the user never edited comes back byte for byte. Fourteen review passes
 (two of them model-based fuzzers, for install and for reset detection) found
-137 defects; each one has a regression test that fails on the code before its
-fix.
+142 defects; 139 are fixed and 3, which need two Claude Code processes on one
+conversation, are documented limits (open a conversation in a second terminal
+with `--fork-session`); each one has a regression test that fails on the code
+before its fix.
 
 ## Layout
 

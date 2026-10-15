@@ -94,27 +94,43 @@ is the busy process's, and it breaks the stale one's pending run (D-10). A
 return to a later reset at the very level the session left stays fresh (a
 reset moved earlier and back, read by a maxed session), and a return to an
 earlier reset from a session that last read a later one is left to D-10. A
-replay also withdraws that reading's earlier render from a pending reset, so a
-later real reset cannot sweep it in. Idle twins faked drop resets below
-another session's max, reopened windows that a moved or an early reset had
-superseded, and rolled a window whose reset moved earlier back to the old
-reset on every render pair (found in review). Limits: the reading before last
-does not catch 3 or more processes cycling on 1 session id; a reading that
-another session's identical row deduplicated (D-07) leaves no sample to match;
-and a real reset whose `resets_at` lands on that of a window ctempo closed,
-read at levels the session already gave that window, waits for a level it did
-not give. A session's very first reading is stored as FIRST: when the
-statusLine is installed, every open session re-renders at once with whatever
-it last saw, so that reading is a real level but may be hours old. It counts
-for the window's max and for the weekly peak, cannot be an anomaly (two idle
-sessions would otherwise fake a drop reset), is not used for profile learning
-(except that one at 100 marks its window as capped, D-13), enters the 5h level
-path only as a lower bound (D-11), and never fixes the start of the weekly
-lookback (D-15). These rules were found in review. The line shows the level as
-judged and stored; the raw reading is used only when the write failed (an idle
-session's stale pre-reset value once showed "maxed"). Analysis uses the
-running max of fresh readings per window instance (usage is monotone within a
-window).
+replay of a reading the session gave a window that is no longer open also
+withdraws that reading's earlier render from a pending reset, so a later real
+reset cannot sweep it in. At the open window's reset it does not: there A, B,
+A is symmetric (the busy process's re-render of its own new reading matches it
+too), and withdrawing there deleted the busy process's real pending drop, so a
+real early reset was never taken; the statusline and the Desktop mod of one
+session, which share its id, did the same when their writes crossed (found in
+review). Instead the reading that completes a drop or a rise run must have
+moved forward from its own session's last reading, as a single process does.
+Idle twins faked drop resets below another session's max, reopened windows
+that a moved or an early reset had superseded, and rolled a window whose reset
+moved earlier back to the old reset on every render pair (found in review).
+Limits: the reading before last does not catch 3 or more processes cycling on
+1 session id; a reading that another session's identical row deduplicated
+(D-07) leaves no sample to match; and a real reset whose `resets_at` lands on
+that of a window ctempo closed, read at levels the session already gave that
+window, waits for a level it did not give. Three more cases are known and left
+as they are, since 2 processes on 1 session id are rare and ctempo cannot tell
+them apart without a process identity (Claude Code runs each statusLine render
+through a new `sh` in a new process group, so neither the parent nor the group
+says which process it is): an idle process's stale reading can complete a real
+drop run and set the new window's level until the real level passes it; with a
+light week near 0, idle processes of 2 sessions can reopen a week that was
+reset early; and a process's replay of a later reset it left can roll a window
+whose reset moved earlier back (found in review). Opening one conversation in
+a second terminal with `--fork-session` avoids all of them. A session's very
+first reading is stored as FIRST: when the statusLine is installed, every open
+session re-renders at once with whatever it last saw, so that reading is a
+real level but may be hours old. It counts for the window's max and for the
+weekly peak, cannot be an anomaly (two idle sessions would otherwise fake a
+drop reset), is not used for profile learning (except that one at 100 marks
+its window as capped, D-13), enters the 5h level path only as a lower bound
+(D-11), and never fixes the start of the weekly lookback (D-15). These rules
+were found in review. The line shows the level as judged and stored; the raw
+reading is used only when the write failed (an idle session's stale pre-reset
+value once showed "maxed"). Analysis uses the running max of fresh readings
+per window instance (usage is monotone within a window).
 
 **D-07. Write throttle and dedupe.** A fresh reading identical to the last
 stored row of that window within 60 s is not stored again (two sessions
@@ -764,6 +780,9 @@ findings verifiers checked, confirmed 5 and rejected none (2 idle processes on
 1 session id faking a drop reset, raising the window a drop opened back to the
 old level, rolling back a reset moved earlier, and undoing a reset moved later
 or an early reset, and a reset moved earlier that a maxed or idle session
-never got taken). All 137 are fixed, each with a regression test that was
-checked to fail on the code before its fix. Details in the commit messages
-from "Fix review findings" on.
+never got taken); a fourteenth, over those rules, confirmed 5 and rejected
+none: the withdrawal deleting a real pending drop (for a busy process with an
+idle twin, and for the statusline and mod of one session) is fixed, and 3 more
+cases for processes sharing a session id are documented limits (D-06). 139 are
+fixed, each with a regression test that was checked to fail on the code before
+its fix. Details in the commit messages from "Fix review findings" on.

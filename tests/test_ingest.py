@@ -721,6 +721,34 @@ class Record(TempHome):
         self.feed(MON + H, five=(5, self.R5))
         self.assertEqual(len(self.rows(FIVE_HOUR)), 1)
 
+    def test_a_busy_twin_still_takes_a_real_drop_reset(self):
+        # Review 14: the replay rule withdrew the busy twin's own pending drop
+        # reading. P1 idle at 80 and P2 at 85 share a session id; the window
+        # is reset early to 0 (resets_at unchanged). P2 reads 1, P1 re-renders
+        # 80, P2 re-renders 1 (A, B, A), then reads 2: the drop must be taken.
+        for k in range(8):
+            self.feed(MON + k * 300, five=(10 * (k + 1), self.R5), sid="s")  # P1 up to 80
+        t = MON + H
+        for dt, u in ((0, 85), (30, 80), (60, 85), (90, 80)):  # both re-render every minute
+            self.feed(t + dt, five=(u, self.R5), sid="s")
+        self.assertEqual(self.feed(t + 100, five=(1, self.R5), sid="s")[FIVE_HOUR], "anomaly")  # P2, after the drop
+        self.feed(t + 130, five=(80, self.R5), sid="s")  # P1's stale re-render
+        self.feed(t + 160, five=(1, self.R5), sid="s")  # P2's prompt-submit render
+        self.assertEqual(self.feed(t + 165, five=(2, self.R5), sid="s")[FIVE_HOUR], "reset_drop")
+
+    def test_statusline_and_mod_out_of_order_still_take_a_drop(self):
+        # Review 14: the statusline and the Desktop mod of one session share a
+        # reader row. After a real drop to 1, the mod wrote 1 first, then a
+        # statusline render that started earlier wrote the old 60, then 1: the
+        # replay rule withdrew the mod's pending drop and the reset came late.
+        for k in range(6):
+            self.feed(MON + k * 300, five=(10 * (k + 1), self.R5), sid="s", source="statusline")
+        t = MON + H
+        self.assertEqual(self.feed(t, five=(1, self.R5), sid="s", source="mod")[FIVE_HOUR], "anomaly")
+        self.feed(t + 1, five=(60, self.R5), sid="s", source="statusline")
+        self.feed(t + 2, five=(1, self.R5), sid="s", source="statusline")
+        self.assertEqual(self.feed(t + 120, five=(2, self.R5), sid="s", source="mod")[FIVE_HOUR], "reset_drop")
+
 
 if __name__ == "__main__":
     unittest.main()
