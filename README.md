@@ -73,7 +73,8 @@ below 100 keeps never counts; never while the 5h burn rate is not known yet).
   itself fades toward uniform with the same half-life from the day it was
   built, so a schedule that changed since then takes over. The hours from a
   week's last reading to its reset are learned as idle, at low confidence,
-  unless that week was maxed (blocked hours say nothing about your habits);
+  unless that week was maxed (by any reading, a new session's first one
+  included: blocked hours say nothing about your habits);
 - `E` = Σ w(h) from now to the reset: the share of a week's spend still ahead;
 - on-pace level = target × (1 − E); after an early reset that keeps the same
   reset time, it is paced from that reset instead: target × the share of the
@@ -117,9 +118,10 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
    `settings.json.ctempo-backup-<UTC time>` and sets only `statusLine`
    (`refreshInterval: 60`). If you already have a status line, ctempo
    **composes**: your command still runs, with the same input, and ctempo's
-   segment is appended to its output (`--replace` to replace it instead); a
-   background job your command starts keeps running, and a command still
-   running after `compose.timeout_ms` is stopped;
+   segment is appended to its last line, or put on a line of its own when the
+   joined line would not fit Claude Code's footer (`--replace` to replace it
+   instead); a background job your command starts keeps running, and a command
+   still running after `compose.timeout_ms` is stopped;
 3. installs the Desktop mod from the local marketplace in this repo:
    `claude plugin marketplace add <repo>` then
    `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip). If
@@ -163,7 +165,7 @@ marketplace (you ran them yourself), it completes. Your history stays in
 | `ctempo statusline` | reads the status-line JSON on stdin, records a sample, prints the line (`--format json` for the mod) |
 | `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate, and the age of the last reading (heartbeats shown apart) |
 | `ctempo report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
-| `ctempo profile [--rebuild]` | hour-of-week heatmap, lightest awake blocks, points vs pace by day before reset |
+| `ctempo profile [--rebuild]` | hour-of-week heatmap, the prior's age and weight now, lightest awake blocks, points vs pace by day before reset |
 | `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); spare quota is measured against each window's target (`spare` in the JSON), so a window at or above a target below 100, or one that should slow down, is never harvestable; `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
@@ -229,7 +231,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 257 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 271 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
 ```
 
@@ -245,8 +247,8 @@ hanging, hand edits (the command inside ctempo's `--compose` included), the
 plugin commands run by hand and the data folder deleted in between. It checks
 after every step that `runtime.json` exists while a mod record does, and at
 the end that nothing of ctempo is left, each file holds the user's JSON, and a
-file the user never edited comes back byte for byte. Eight adversarial review
-passes (and the fuzzer) found 114 defects; each one has a regression test that
+file the user never edited comes back byte for byte. Nine adversarial review
+passes (and the fuzzer) found 125 defects; each one has a regression test that
 fails on the code before its fix.
 
 ## Layout
