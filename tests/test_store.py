@@ -9,6 +9,7 @@ import time
 import unittest
 from unittest import mock
 
+from ctempo import config
 from ctempo.store import SCHEMA_VERSION, Store
 
 
@@ -62,6 +63,25 @@ class FirstOpen(unittest.TestCase):
         # keeps the file from being renamed or deleted.
         with self.assertRaises(sqlite3.ProgrammingError):
             opened[0].execute("SELECT 1")
+
+
+class CloseOnWindows(unittest.TestCase):
+    @unittest.skipUnless(hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE"), "needs Python 3.12+")
+    def test_windows_keeps_the_wal_when_the_last_connection_closes(self):
+        # Review 15 CI: on the Windows runner closing the database (a checkpoint into it and
+        # deleting the WAL) took 18 ms of a 30 ms render, p95 32 of 44.
+        for windows in (True, False):
+            with self.subTest(windows=windows), mock.patch.object(config, "IS_WINDOWS", windows):
+                d = tempfile.mkdtemp(prefix="ctempo-test-")
+                self.addCleanup(shutil.rmtree, d, True)
+                path = os.path.join(d, "tempo.db")
+                st = Store(path)
+                st.meta_set("k", {"v": 1})
+                st.close()
+                self.assertEqual(os.path.exists(path + "-wal"), windows)
+                st = Store(path)
+                self.assertEqual(st.meta_get("k"), {"v": 1})
+                st.close()
 
 
 if __name__ == "__main__":

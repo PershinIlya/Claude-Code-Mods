@@ -85,6 +85,12 @@ class Store:
             if self.db.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
                 self._migrate()
             self.db.execute("PRAGMA synchronous=NORMAL")
+            if config.IS_WINDOWS and hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE"):  # Python 3.12+
+                # Closing the last connection checkpointed the WAL into the database and deleted
+                # it, with the file syncs that takes on Windows: 18 ms of a 30 ms render on CI
+                # (p95 32 of 44). The WAL stays instead, and a commit checkpoints it once it holds
+                # 1000 pages (wal_autocheckpoint); synchronous=NORMAL keeps it as safe.
+                self.db.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
         except BaseException:
             # A failed open must not hold the file: on Windows an open
             # handle keeps it from being renamed or deleted.
