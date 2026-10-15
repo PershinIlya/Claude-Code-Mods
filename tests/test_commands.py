@@ -230,6 +230,27 @@ class ProfileText(TempHome):
         self.assertIn("  unused: profile.override replaces it (weight now 0%", out)
         self.assertNotIn("weight now 78%", out)
 
+    def test_an_override_is_the_prior_when_there_is_no_transcript_prior(self):
+        # Review 11: with profile.override set and no transcript prior,
+        # `ctempo profile` still said "run `ctempo bootstrap`", whose prior the
+        # override would leave unused.
+        self.cfg["profile"]["override"] = {"work_days": [0, 1, 2, 3, 4], "wake_hours": [8, 23], "off_day_factor": 0.5, "mode": "prior"}
+        out = self.profile(MON + 5 * D)
+        self.assertIn("Prior: profile.override (work days Mon,Tue,Wed,Thu,Fri, wake 8-23, mode prior)\n", out)
+        self.assertNotIn("run `ctempo bootstrap`", out)
+
+    def test_doctor_takes_an_override_for_the_prior(self):
+        # Review 11: doctor warned "no transcript prior, run `ctempo bootstrap`"
+        # under profile.override, which leaves such a prior unused.
+        self.cfg["profile"]["override"] = {"work_days": [0, 1, 2, 3, 4], "wake_hours": [8, 23], "off_day_factor": 0.5, "mode": "prior"}
+        from ctempo import install
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(install, "claude_bin", lambda: None):
+            commands.cmd_doctor(argparse.Namespace(json=False, settings=None), self.cfg)
+        self.assertIn("profile prior from profile.override", out.getvalue())
+        self.assertNotIn("no transcript prior", out.getvalue())
+
     def test_reset_column_note_follows_the_weekly_target(self):
         # Review 8 (mod-and-texts#1): the points-vs-pace columns are the level
         # minus the on-pace level for target_week, so at the reset it is peak

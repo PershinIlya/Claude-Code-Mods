@@ -247,25 +247,33 @@ def _undoes_rollover(store, w, inst, used, reset, source, session_id):
     # bogus reading sat at or above the closed window's max (a maxed session
     # reads no fresh value, so its bogus reset can begin after its last one),
     # it is undone all the same.
-    closed = store.db.execute(
-        "SELECT close_reason, max_used FROM windows WHERE window=? AND id!=? AND close_reason IN ('rollover', 'shift') "
-        "AND ABS(reset_ts - ?) <= ? AND closed_at >= ? ORDER BY id DESC LIMIT 1",
-        (w, inst["id"], reset, RESET_JITTER, inst["first_seen"]),
-    ).fetchone()
-    if closed is None:
-        return False
-    opener = store.db.execute(
-        "SELECT session_id, source, used_pct FROM samples WHERE window_id=? ORDER BY ts, id LIMIT 1", (inst["id"],)
-    ).fetchone()
-    # A session's real reading is never below its own reading of the moved
-    # reset; an idle twin's stale one (two processes can share a session id)
-    # can be.
-    return (
-        opener is not None
-        and (opener[0] or "~" + opener[1]) == (session_id or "~" + source)
-        and used >= opener[2]
-        and (closed[0] == "shift" or opener[2] >= (closed[1] or 0.0))
-    )
+    # Walk back through the instances this session's own rollovers opened (a
+    # maxed session can read several bogus later resets before its real one).
+    me = session_id or "~" + source
+    cur, top = inst, 0.0
+    for _ in range(16):
+        opener = store.db.execute(
+            "SELECT session_id, source, used_pct FROM samples WHERE window_id=? ORDER BY ts, id LIMIT 1", (cur["id"],)
+        ).fetchone()
+        # A session's real reading is never below its own reading of the moved
+        # reset; an idle twin's stale one (two processes can share a session
+        # id) can be.
+        if opener is None or (opener[0] or "~" + opener[1]) != me:
+            return False
+        top = max(top, opener[2])
+        if used < top:
+            return False
+        prev = store.db.execute(
+            "SELECT id, close_reason, max_used, reset_ts FROM windows WHERE window=? AND id<? "
+            "AND close_reason IN ('rollover', 'shift') AND closed_at >= ? ORDER BY id DESC LIMIT 1",
+            (w, cur["id"], cur["first_seen"]),
+        ).fetchone()
+        if prev is None:
+            return False
+        if abs(prev[3] - reset) <= RESET_JITTER:
+            return prev[1] == "shift" or opener[2] >= (prev[2] or 0.0)
+        cur = store.instance(prev[0])
+    return False
 
 
 def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted):
@@ -312,6 +320,11 @@ def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
         ).fetchone()
         if old is not None:
             store.reopen_instance(old[0])
+            # Every bogus instance between the real window and this one never ended.
+            store.db.execute(
+                "UPDATE windows SET close_reason='shift' WHERE window=? AND id>? AND id<? AND close_reason='rollover'",
+                (w, old[0], inst["id"]),
+            )
             store.move_samples([r[0] for r in run], old[0], FRESH)
             store.add_sample(now, w, used, reset, source, session_id, FRESH, old[0])
             store.recompute_max(old[0])
