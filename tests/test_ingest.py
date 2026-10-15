@@ -212,6 +212,27 @@ class Record(TempHome):
         self.assertEqual(self.feed(self.R5 + 800, five=(6, r), sid="a")[FIVE_HOUR], "anomaly")
         self.assertEqual(self.feed(self.R5 + 900, five=(7, r), sid="a")[FIVE_HOUR], "reset_reopen")
 
+    def test_a_maxed_session_undoes_a_bogus_reset_that_begins_after_its_last_reading(self):
+        # Review 10: a maxed session reads no fresh value after its 100, so a
+        # bogus later resets_at can begin after its last fresh reading. That
+        # closed the real window as a rollover, which the one-reading undo no
+        # longer matched: the line kept the bogus reset time again.
+        for i in range(10):  # session a maxes the 00:00-05:00 window by 00:45
+            self.feed(MON + i * 300, five=(10 * (i + 1), self.R5), sid="a")
+        t = MON + 2 * H
+        self.assertEqual(self.feed(t, five=(100, self.R5 + int(H)), sid="a")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(t + 60, five=(100, self.R5), sid="a")[FIVE_HOUR], "reset_reopen")
+        self.assertEqual(pace.five_hour(self.st, t + 120, self.cfg)["reset_ts"], self.R5)
+
+    def test_a_bogus_reset_a_whole_window_from_now_is_undone_by_one_reading(self):
+        # Review 10: the shape of bogus reset this suite uses elsewhere (a
+        # plausible window, starting now) always begins after the last reading.
+        for i in range(10):
+            self.feed(MON + i * 600, five=(10 * (i + 1), self.R5), sid="a")
+        t = MON + 2 * H
+        self.assertEqual(self.feed(t, five=(100, int(t + 5 * H)), sid="a")[FIVE_HOUR], "rollover")
+        self.assertEqual(self.feed(t + 60, five=(100, self.R5), sid="a")[FIVE_HOUR], "reset_reopen")
+
     def test_a_shared_session_id_cannot_undo_a_real_early_reset(self):
         # Review 8 (delta-core#0): two terminals on one conversation (`claude
         # -c` without --fork-session) share a session id. One sees a real

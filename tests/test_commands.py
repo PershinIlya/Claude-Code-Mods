@@ -217,6 +217,19 @@ class ProfileText(TempHome):
         self.assertIn("  built 28d 00h ago, weight now 25% (it halves every 14 days; "
                       "`ctempo bootstrap` builds a fresh one)\n", out)
 
+    def test_an_override_leaves_the_prior_unused(self):
+        # Review 10: under profile.override the transcript prior has no weight
+        # (Profile.rates takes the override), but `ctempo profile` printed its
+        # faded weight, 78% five days on.
+        prof = profile.load(self.st)
+        prof.prior = profile.uniform()
+        prof.prior_meta = {"built_at": MON, "days": 45.0, "messages": 1782, "active_hours": 296, "trust": 1.0}
+        profile.save(self.st, prof)
+        self.cfg["profile"]["override"] = {"work_days": [0, 1, 2, 3, 4], "wake_hours": [8, 23], "off_day_factor": 0.5, "mode": "prior"}
+        out = self.profile(MON + 5 * D)
+        self.assertIn("  unused: profile.override replaces it (weight now 0%", out)
+        self.assertNotIn("weight now 78%", out)
+
     def test_reset_column_note_follows_the_weekly_target(self):
         # Review 8 (mod-and-texts#1): the points-vs-pace columns are the level
         # minus the on-pace level for target_week, so at the reset it is peak
