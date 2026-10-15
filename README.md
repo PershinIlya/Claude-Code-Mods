@@ -369,8 +369,8 @@ Windows the launchers from cmd.exe, PowerShell and Git Bash, a drive-less
 `.gitattributes` keeps `bin/ctempo`, `*.py` and `*.sh` LF on a Windows
 checkout, where a CR breaks the `#!` line in Git Bash.
 
-The 15 review passes (2 of them model-based fuzzers, for install and for reset
-detection, the last on Windows) found 160 defects; 157 are fixed and 3, which
+The 17 review passes (2 of them model-based fuzzers, for install and for reset
+detection, the last 3 on Windows) found 171 defects; 168 are fixed and 3, which
 need 2 Claude Code processes on 1 conversation, are documented limits (open a
 conversation in a second terminal with `--fork-session`); each fixed one has a
 regression test that fails on the code before its fix (for the 3 in these docs,
