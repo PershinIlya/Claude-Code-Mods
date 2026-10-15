@@ -291,6 +291,22 @@ class LearnEdges(TempHome):
         self.assertEqual(closed, [("expired", 90), ("drop", 42), ("expired", 48), ("expired", 90)])
         self.assertAlmostEqual(profile.typical_week(self.st, now, 14 * D), 90.0)
 
+    def test_an_early_rollover_week_is_not_a_typical_week(self):
+        # Review 10: a real early reset on Wednesday 10:00 that moved resets_at
+        # a week on cut the window 23 h short, at 74%. Read in its last day, it
+        # counted as a whole week and pulled the typical week below 90.
+        R0 = int(MON - 4 * D + 9 * H)  # Thursday 09:00
+        early = R0 + 13 * D + H  # Wednesday 10:00 of the second week
+        now = R0 + 21 * D + H
+        self.known("s1")
+        self.work(R0, early, R0 + int(7 * D), 2.0)
+        self.work(early, now, early + int(7 * D), 2.0)  # from 0 again, a new reset a week on
+        closed = [(i["close_reason"], i["max_used"]) for i in self.windows(SEVEN_DAY) if i["closed_at"] is not None]
+        self.assertEqual(closed, [("expired", 90), ("rollover", 74), ("expired", 89)])
+        typical = profile.typical_week(self.st, now, 14 * D)  # the two whole weeks only
+        self.assertGreaterEqual(typical, 89.0)
+        self.assertLessEqual(typical, 90.0)
+
     def test_a_transcript_prior_fades_with_the_half_life(self):
         # Review 8 (long-horizon#2): the transcripts at install say Mon-Fri
         # 9-18 (trusted fully), then the user works Mon-Fri 14-23 for 8 weeks.

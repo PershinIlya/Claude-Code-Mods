@@ -282,10 +282,14 @@ def cmd_profile(args, cfg):
             trust = m.get("trust") or 0
             print("Prior: transcripts, %s days, %s messages, %s active hours, trusted %.0f%% when built (full at 14 days)" % (
                 m.get("days"), m.get("messages"), m.get("active_hours"), 100 * trust))
-            # It fades with the half-life from its build (D-14), as the weights use it.
-            hl = float(cfg["profile"]["half_life_days"]) * 86400
-            print("  built %s ago, weight now %.0f%% (it halves every %g days; `ctempo bootstrap` builds a fresh one)" % (
-                dur(now - float(m.get("built_at", now))), 100 * trust * prof.prior_fade(now, hl), hl / 86400))
+            if isinstance(cfg["profile"].get("override"), dict):
+                # Profile.rates takes the override instead of the transcript prior.
+                print("  unused: profile.override replaces it (weight now 0%; set the override to null to use it)")
+            else:
+                # It fades with the half-life from its build (D-14), as the weights use it.
+                hl = float(cfg["profile"]["half_life_days"]) * 86400
+                print("  built %s ago, weight now %.0f%% (it halves every %g days; `ctempo bootstrap` builds a fresh one)" % (
+                    dur(now - float(m.get("built_at", now))), 100 * trust * prof.prior_fade(now, hl), hl / 86400))
         else:
             print("Prior: none (run `ctempo bootstrap`)")
         print("Learned from usage %%: %d hours folded in, typical week %s" % (

@@ -141,15 +141,18 @@ maxed or idle session repeats its real reading only as heartbeats, so the
 second fresh one never came: the line kept the bogus reset time past the real
 reset, and `report` counted the window twice (found in review). The undo by
 one reading takes 4 conditions. First, the bogus instance's rollover closed
-the window that this reading's `resets_at` belongs to as `shift` (D-08: the
-reset moved and the level held). Second, the reading comes from the session
-whose reading opened the bogus instance. Third, it is not below that opening
-reading (a session's real reading never is). Fourth, it sits less than
-`drop_points` above the bogus instance's max. Two processes can share a
-session id (`claude -c` or `--resume` without `--fork-session`), and the idle
-one keeps re-rendering the old window. When the undo also matched a window
-closed as `rollover` (the level dropped, or the new window began after the
-last reading, which is what a real early reset looks like), only the
+the window that this reading's `resets_at` belongs to, either as `shift`
+(D-08: the reset moved and the level held) or as `rollover` with the bogus
+reading at or above that window's max (a maxed session reads no fresh value
+after its 100, so its bogus reset can begin after its last reading; matching
+`shift` only left it stuck again, found in review). Second, the reading comes
+from the session whose reading opened the bogus instance. Third, it is not
+below that opening reading (a session's real reading never is). Fourth, it
+sits less than `drop_points` above the bogus instance's max. Two processes can
+share a session id (`claude -c` or `--resume` without `--fork-session`), and
+the idle one keeps re-rendering the old window. When the undo also matched a
+window closed as `rollover` (the level dropped, or the new window began after
+the last reading, which is what a real early reset looks like), only the
 `drop_points` margin guarded it. That stale reading then flipped the line and
 `check` back to the dead window on every render pair: from the first render
 after a weekly window at 10% was reset early, and once a new 5-hour window
@@ -162,9 +165,10 @@ sessions (up to `drop_samples - 1`) into it. One was left behind in the
 superseded instance, and the reopened window showed a level too low until the
 next fresh reading (found in review). From any other session the undo still
 takes `drop_samples`, since that session may lag a real early reset, and so
-does a window closed as `rollover`. The superseded instance stays closed with
-reason `shift`. It never ended, so `report`, the profile's points-vs-pace
-table, the typical week and the weekly lookback all leave it out.
+does a window closed as `rollover` above the bogus reading (a real early reset
+shows a lower level). The superseded instance stays closed with reason
+`shift`. It never ended, so `report`, the profile's points-vs-pace table, the
+typical week and the weekly lookback all leave it out.
 
 ## 5-hour math
 
@@ -255,26 +259,29 @@ cut at local hour boundaries, so DST days with 23 or 25 hours are handled.
   (by the last fresh reading, not by heartbeats; an unobserved tail
   understates the peak, claumon's weak spot) and lasted a whole week (the
   window a drop reset opens holds only part of one: with one among 3 weeks at
-  90%, the typical week read 77%, found in review); without those, the
-  unweighted ratio `sum(m) / sum(p)` over observed bins. Unweighted because
-  busy hours are observed with more confidence (short gaps), which inflated
-  the weighted ratio from 40 to 106 in a test. The line, `ctempo profile`,
-  `profile --rebuild` and learning all build the weights this way
-  (`profile.current_weights`); `profile` used the ratio and printed a typical
-  week of 168% (found in review). `ctempo profile` names the three lightest
-  3-hour blocks whose hours are all awake by that rule, and none on a flat
-  profile. It listed "Mon 00-03, Mon 03-06, Mon 06-09" on a flat profile, and
-  wake-up or bedtime blocks that were two-thirds asleep (found in review). Its
-  points-vs-pace table is the level minus the on-pace level for `target_week`,
-  each window paced from its own start as on the line (D-15), so the reset
-  column is what expired (100 - peak) only at target 100. It leaves out a
-  window that an early reset cut short (a drop, D-10, or a rollover more than
-  1 hour before its reset). The window that replaced it holds the rest of that
-  week, so each week counts once. The table paced a drop's window from
-  `resets_at - 7 d`, set the closed window's frozen level against a rising
-  pace, and counted the drop week twice: up to 18 points of "surplus" for a
-  user on pace (found in review). Below 100 the note under the table says it
-  is the peak versus the target and points to `report` (found in review).
+  90%, the typical week read 77%, found in review; nor does one that an early
+  reset cut short more than 1 hour before its reset: read in its last day, a
+  window closed 23 h early at 74% pulled the typical week to 86%, found in
+  review); without those, the unweighted ratio `sum(m) / sum(p)` over observed
+  bins. Unweighted because busy hours are observed with more confidence (short
+  gaps), which inflated the weighted ratio from 40 to 106 in a test. The line,
+  `ctempo profile`, `profile --rebuild` and learning all build the weights
+  this way (`profile.current_weights`); `profile` used the ratio and printed a
+  typical week of 168% (found in review). `ctempo profile` names the three
+  lightest 3-hour blocks whose hours are all awake by that rule, and none on a
+  flat profile. It listed "Mon 00-03, Mon 03-06, Mon 06-09" on a flat profile,
+  and wake-up or bedtime blocks that were two-thirds asleep (found in review).
+  Its points-vs-pace table is the level minus the on-pace level for
+  `target_week`, each window paced from its own start as on the line (D-15),
+  so the reset column is what expired (100 - peak) only at target 100. It
+  leaves out a window that an early reset cut short (a drop, D-10, or a
+  rollover more than 1 hour before its reset). The window that replaced it
+  holds the rest of that week, so each week counts once. The table paced a
+  drop's window from `resets_at - 7 d`, set the closed window's frozen level
+  against a rising pace, and counted the drop week twice: up to 18 points of
+  "surplus" for a user on pace (found in review). Below 100 the note under the
+  table says it is the peak versus the target and points to `report` (found in
+  review).
 - floor: every bin is raised to `0.15 x typical`, typical = mean of the
   busiest third of the bins (ccpool's 0.15). An hour is "awake" when its rate
   is at least 0.25 x typical (thevibeworks' rest-hour threshold).
@@ -312,7 +319,9 @@ confidence and spread by the prior's own shape. So a prior of constant
 strength kept Mon-Fri 9-13 at 20% of the week 8 weeks after a move to 14-23
 (found in review). `ctempo profile` prints the prior's age and its weight now
 (trust times `a`) beside the trust it was built with. It printed the
-build-time trust for good: "trusted 100%" 8 weeks on (found in review).
+build-time trust for good: "trusted 100%" 8 weeks on (found in review). Under
+`profile.override` the transcript prior is unused, and `ctempo profile` says
+so; it printed the prior's faded weight there too (found in review).
 `ctempo bootstrap` builds a fresh one. `install --apply` runs the bootstrap
 too (`--no-bootstrap` skips it).
 
@@ -663,6 +672,9 @@ build-time trust printed for good, a shared session id still flipping the line
 to a dead window, a light user's early reset taken for a moved one, ctempo's
 segment cut off in a composed line, and three install cases: a manual mod's
 empty plugin key, an older version's local-time backup names, and a
-`--bin-dir` alias). All 125 are fixed, each with a regression test that was
-checked to fail on the code before its fix. Details in the commit messages
-from "Fix review findings" on.
+`--bin-dir` alias); a tenth, over those fixes only, confirmed 3 and rejected 1
+(a maxed session's bogus reset that began after its last reading no longer
+undone, an early-rollover week counted as a typical week, and the prior's
+weight printed under `profile.override`). All 128 are fixed, each with a
+regression test that was checked to fail on the code before its fix. Details
+in the commit messages from "Fix review findings" on.

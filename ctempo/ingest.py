@@ -242,12 +242,14 @@ def _undoes_rollover(store, w, inst, used, reset, source, session_id):
     """Whether the open instance came from this session's own moved resets_at,
     and this reading is from the window that the instance's rollover closed."""
     # A rollover closes the old window at the moment it opens the new one, as
-    # a shift when the reset moved. One closed as a rollover (the level
-    # dropped, or the new window began after the last reading) is what a real
-    # early reset looks like.
+    # a shift when the reset moved. One closed as a rollover is what a real
+    # early reset looks like when the new window shows a lower level; when the
+    # bogus reading sat at or above the closed window's max (a maxed session
+    # reads no fresh value, so its bogus reset can begin after its last one),
+    # it is undone all the same.
     closed = store.db.execute(
-        "SELECT 1 FROM windows WHERE window=? AND id!=? AND close_reason='shift' "
-        "AND ABS(reset_ts - ?) <= ? AND closed_at >= ? LIMIT 1",
+        "SELECT close_reason, max_used FROM windows WHERE window=? AND id!=? AND close_reason IN ('rollover', 'shift') "
+        "AND ABS(reset_ts - ?) <= ? AND closed_at >= ? ORDER BY id DESC LIMIT 1",
         (w, inst["id"], reset, RESET_JITTER, inst["first_seen"]),
     ).fetchone()
     if closed is None:
@@ -262,6 +264,7 @@ def _undoes_rollover(store, w, inst, used, reset, source, session_id):
         opener is not None
         and (opener[0] or "~" + opener[1]) == (session_id or "~" + source)
         and used >= opener[2]
+        and (closed[0] == "shift" or opener[2] >= (closed[1] or 0.0))
     )
 
 
