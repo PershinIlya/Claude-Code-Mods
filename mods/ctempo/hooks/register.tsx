@@ -86,15 +86,25 @@ function driveOf(path: string | undefined): string {
   return path?.match(/^(?:[A-Za-z]:|[\\/]{2}[^\\/]+[\\/][^\\/]+)/)?.[0] ?? ''
 }
 
+// Git Bash's spelling of a drive path: `/c/Users/x` is `C:/Users/x`, and `/d`
+// is `D:/` (a slash, one ASCII letter, then a slash or the end), as the CLI's
+// config.windows_home reads it. Anything else is returned as given.
+export function fromGitBash(path: string): string {
+  const drive = /^\/([A-Za-z])(?:\/|$)/.exec(path)?.[1]
+  return drive ? `${drive.toUpperCase()}:/${path.slice(3)}` : path
+}
+
 // The same rules as the CLI: an empty CTEMPO_HOME counts as unset, a leading
 // `~` is the user's home, and a relative path is taken from it, never from the
 // session's cwd (Claude Code copies settings.json env values as written). On
-// Windows `~\` works like `~/`, `C:\`, `C:/` and `\\server\share` are
-// absolute, a rooted path with no drive (`\x`, `/x`) takes the drive of the
-// user's home, as Python's ntpath.join does, and `C:x` (relative to that
-// drive's current folder) is refused.
-export function resolveHome(given: string | undefined, user: UserHome): string {
+// Windows `~\` works like `~/`, Git Bash's `/c/Users/x` is `C:/Users/x`,
+// `C:\`, `C:/` and `\\server\share` are absolute, any other rooted path with
+// no drive (`\x`, `/x`) takes the drive of the user's home, as Python's
+// ntpath.join does, and `C:x` (relative to that drive's current folder) is
+// refused.
+export function resolveHome(value: string | undefined, user: UserHome): string {
   const { windows, home } = user
+  const given = windows && value ? fromGitBash(value) : value
   if (given && (windows ? /^(?:[A-Za-z]:[\\/]|[\\/]{2})/ : /^\//).test(given)) return given
   if (windows && given && /^[A-Za-z]:/.test(given)) {
     throw new Error(`CTEMPO_HOME ${given} is relative to a drive's current folder; use an absolute path`)
