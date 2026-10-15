@@ -11,9 +11,13 @@ Mac, its `~/.claude`, its transcripts or its Keychain. So "install for
 real", "live samples" and "bootstrap from my transcripts" were done against
 the container's own `~/.claude` (one live session, this one), and the Mac
 install is a single command. The code has no Linux-only paths: it uses
-`time.localtime`, POSIX `sh` for composition, and probes `/usr/bin/python3`,
-`/opt/homebrew/bin/python3` and `/usr/local/bin/python3` (macOS locations)
-first.
+`time.localtime`, POSIX `sh` for composition (Git Bash or PowerShell on
+Windows, D-26), and probes `/usr/bin/python3`, `/opt/homebrew/bin/python3` and
+`/usr/local/bin/python3` (macOS locations) first. Windows support came later,
+also without a Windows machine: its branches run on Linux with the one
+platform flag (`config.IS_WINDOWS`) patched, and on real Windows in CI (the
+suite, the mod's tests, and `scripts/ci_integration.py` through Git Bash,
+pwsh, powershell.exe and cmd.exe); D-25 to D-29 hold its choices.
 
 **D-02. Python 3.8+, standard library only, package plus launcher.** The core
 is `ctempo/` (importable) and `bin/ctempo` (a launcher that puts the repo on
@@ -31,7 +35,8 @@ can be deactivated, updated or deleted, and the Desktop app does not inherit
 the shell's PATH. The chosen absolute path goes into the statusLine command
 and into `~/.claude-tempo/runtime.json` (read by the mod). `-I` ignores
 PYTHON* variables and the user site; `-S` skips `site` (faster, and stdlib
-needs nothing from it).
+needs nothing from it). On Windows the candidates, the probe and the pin
+differ (D-27), and every command adds `-X utf8` (D-25).
 
 ## Data
 
@@ -52,7 +57,8 @@ OAuth token (Keychain item "Claude Code-credentials"), it can be rate limited
 **D-05. Store.** SQLite at `~/.claude-tempo/tempo.db` (override with
 `CTEMPO_HOME`; a leading `~` is expanded and a relative path is taken from the
 home directory, because Claude Code passes settings.json `env` values as
-written and the statusLine runs in each session's folder), WAL,
+written and the statusLine runs in each session's folder; on Windows by the
+rules of D-28), WAL,
 `synchronous=NORMAL`, busy timeout 250 ms, schema version in `PRAGMA
 user_version`. The first open of a new database waits up to the busy timeout
 for another opener's switch to WAL. SQLite answers a concurrent switch with
@@ -529,23 +535,48 @@ only our segment shows; one that already exited keeps the output that arrived.
 `CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces instead.
 `refreshInterval` becomes 60, or stays lower if the old one was lower.
 
+On Windows a command that a shell would hand to Python changed is stored
+encoded instead (D-26). The old command runs in the shell Claude Code ran
+ctempo in (D-26), never through cmd.exe, which `shell=True` means there; it
+gets no console window, and a process group of its own as on POSIX. Threads
+serve its pipes (`select()` takes only sockets there) with the same
+exit-plus-quiet rule, and a command still running at the deadline is killed
+with its tree by `taskkill /T /F` (Git Bash's `bash.exe` runs the real bash as
+its child). On every system a `\r` at the end of each of its lines is dropped:
+a Windows command ends its lines with CRLF, and the `\r` left before our
+segment sent the cursor back over the user's text.
+
 **D-19. The mod.** Thin: it builds the statusLine-shaped payload from
 `rateLimits`, runs `python -I -S bin/ctempo statusline --source mod --format
-json` through `$.process.run` and draws the tone-tagged segments it gets back
-(no ANSI parsing). It calls the CLI after each `session.measure` whose
-`rateLimits` changed and every 60 s (time-dependent numbers), never on the
-start path, and coalesces calls that arrive while one runs
-(statusline-anywhere drops them). It draws on the surfaces in `mod.surfaces`
-(default `["desktop"]`; VS Code and mobile draw no band per the docs) and
-passes the band on in the terminal, where the statusLine already shows the
-line; it keeps what other mods draw below its own row. Every `kind` it sees is
-logged by the CLI in the `kinds` table. It resolves `CTEMPO_HOME` like the CLI
-(empty counts as unset, a leading `~` is `HOME`, a relative path is taken from
-`HOME`; `~user/...` is an error that asks for an absolute path), passes the
-home it resolved to the CLI, shows the CLI's stderr when it fails, and re-arms
-its timer to `mod.refresh_s` (clamped to 15..3600 s). Desktop does not inherit
-the shell environment: set `CTEMPO_HOME` in `settings.json` `env` if you move
-the home (Claude Code passes the value as written, without expanding `~`).
+json` through `$.process.run` (the flags are `runtime.json`'s `args`: `-I -S -X
+utf8` on Windows, and `-I -S` when a file written before `args` has none) and
+draws the tone-tagged segments it gets back (no ANSI parsing). It calls the CLI
+after each `session.measure` whose `rateLimits` changed and every 60 s
+(time-dependent numbers), never on the start path, and coalesces calls that
+arrive while one runs (statusline-anywhere drops them). It draws on the
+surfaces in `mod.surfaces` (default `["desktop"]`; VS Code and mobile draw no
+band per the docs) and passes the band on in the terminal, where the statusLine
+already shows the line; it keeps what other mods draw below its own row. Every
+`kind` it sees is logged by the CLI in the `kinds` table. It resolves
+`CTEMPO_HOME` like the CLI (empty counts as unset, a leading `~` is the home
+directory, a relative path is taken from it; `~user/...` is an error that asks
+for an absolute path), passes the home it resolved to the CLI, shows the CLI's
+stderr when it fails, and re-arms its timer to `mod.refresh_s` (clamped to
+15..3600 s). The home directory is `HOME`, and on Windows (`OS=Windows_NT`,
+since no `$` API names the OS) `USERPROFILE`, else `HOMEDRIVE` plus `HOMEPATH`,
+never `HOME`, as in Python 3.8+; the Windows forms are in D-28. A leading byte
+order mark in `runtime.json` is ignored. Desktop does not inherit the shell
+environment: set `CTEMPO_HOME` in `settings.json` `env` if you move the home
+(Claude Code passes the value as written, without expanding `~`). On Windows a
+missing interpreter does not fail to start: the spawn falls back to cmd.exe,
+whose message ("...operable program or batch file.", exit 9009) named neither
+Python nor the fix. So after a failed run the mod checks that the interpreter
+exists, says "Python not found at <path>: run `ctempo install --apply`", and
+reads `runtime.json` again on its next refresh; for exit 9009 it shows
+cmd.exe's whole message. That fallback is inferred from the engine's spawn
+code, not seen on Windows (the mod tests stub `$.process.run`). The band draws
+in the Desktop app's local sessions only: plugins are not available in WSL
+sessions.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
@@ -650,7 +681,190 @@ another `--bin-dir` replaces it: the earlier one is removed while it is still
 ctempo's, so uninstall removes the only one there is (found in review). A
 `--bin-dir` that names the same directory another way (another case on a
 case-insensitive macOS disk, a bind mount) holds the same file, which stays:
-install used to remove the launcher it had just written (found in review).
+install used to remove the launcher it had just written (found in review). On
+Windows the launcher is `ctempo.cmd`, with an sh `ctempo` beside it for Git
+Bash, and settings writes take care of held and read-only files (D-27).
+
+## Windows
+
+**D-25. Windows: which shell, and one command for both.** Claude Code runs the
+statusLine through Git Bash (`bash.exe -c`) when it finds one:
+`CLAUDE_CODE_GIT_BASH_PATH` (from its environment or settings.json `env`, when
+it names an existing bash or sh), `C:\Program Files\Git\bin\bash.exe`, the
+`(x86)` one, then the `git` on PATH (never one in the current folder) and
+`..\..\bin\bash.exe` from it. Otherwise it runs it through PowerShell (pwsh on
+PATH or in its usual installs, then Windows PowerShell 5.1) with `-NoProfile
+-NonInteractive -ExecutionPolicy Bypass -Command`. The statusLine setting has
+no `shell` or `args` field, and the shell changes when Git for Windows comes or
+goes. So `ctempo/winshell.py` repeats that search (`predict_shell`,
+settings.json `env` over the process environment), and install writes, when it
+can, a command both shells read alike: bare words (ASCII letters, digits and
+`_./:+=-`, non-ASCII letters and digits, a `~` after an ASCII letter or digit),
+which neither shell changes, and words in single quotes with no quote inside,
+which both keep literal, except as the first word. Paths use forward slashes:
+Git Bash drops an unquoted backslash, and Windows reads both. An interpreter or
+ctempo path that would need quotes (a space) is written with its folders' 8.3
+short names when those need none (`C:/PROGRA~1/PYTHON~1/python.exe`; the file
+name is kept, so the command still names ctempo), while `runtime.json`, the
+launchers and install's report keep the long paths. When there is no such form
+(a volume without short names, or a short form that still needs quotes), the
+command is written for the predicted shell: single quotes for bash, or `&
+'...'` with a quote doubled for PowerShell, where a quoted first word is a
+string, not a command. No bash reads that `&`, so the command says which shell
+it is for (`winshell.written_for`), and the install record keeps the shell too.
+install warns that such a command runs in that shell only, and `doctor` names
+the shell Claude Code would pick now and warns when the command was written for
+the other one; a command both shells read alike never warns. A Git Bash
+terminal puts its own `git` first on PATH, so the prediction there can differ
+from what Claude Code finds when started from the Desktop app or PowerShell:
+install and doctor run there say so, and point to `ctempo doctor` from
+PowerShell rather than to a reinstall. Every Python command ctempo writes (the
+statusLine, `runtime.json`'s `args`, the launchers) adds `-X utf8` on Windows:
+a pipe gets the ANSI code page there, and `-I` ignores `PYTHONUTF8` and
+`PYTHONIOENCODING`.
+
+**D-26. Windows: the composed command.** Windows PowerShell 5.1 and Git Bash
+can both hand the old command to python.exe changed. Windows PowerShell 5.1
+wraps an argument that holds whitespace in double quotes and escapes nothing,
+so a `"` inside, or a backslash ending such an argument, arrives altered (pwsh
+7.3+ escapes both). Git Bash's MSYS2 runtime converts what looks like a POSIX
+path in the text before the first whitespace, when a `/` or `\` comes before it
+and the text does not start with `~`: a first word that starts with `/` (also
+after a leading quote or `$(`), or holds a `=` or a colon other than a drive's
+(`FOO=/x`, `ab:/c`). `/bin/bash ~/.claude/statusline.sh` reached ctempo as
+`C:/Program Files/Git/usr/bin/bash ...` and broke at the space. Such a command
+(`winshell.needs_encoding`) is written as `--compose-b64 b<token>`, the
+URL-safe base64 of its UTF-8 without padding: only letters, digits, `_` and
+`-`, which every shell passes on as is, and the `b` keeps it from reading as an
+option or a number. Any other keeps `--compose '<command>'`, and macOS and
+Linux never encode. This departs from D-17's "settings.json shows exactly what
+runs" for those commands only: a readable form that the shell corrupts drops
+the user's line without a word, while the encoded one runs the same in Git
+Bash, pwsh and powershell.exe. To keep it in sight, install says when it
+encoded one and why, `doctor` shows it decoded, and a repin, `--replace`,
+uninstall's restore and the backup scan read it decoded (a repin of the same
+command changes nothing). A malformed token means no composed command (the
+config's `compose.command` applies if set), never an error, and with both flags
+the last one wins. A user may put `--compose '<command>'` back by hand; the
+next install encodes it again if need be. An older install's plain form that is
+at risk gets a `doctor` warning until `ctempo install --apply` rewrites it.
+
+The Composer (D-17) runs the old command in the shell that started ctempo, read
+from the parent process's image through kernel32 (`winshell.parent_shell`),
+since Claude Code ran the statusLine there. Repeating Claude Code's search went
+wrong inside Git Bash, whose PATH puts its own `git` first: with Git installed
+outside Program Files, a bash statusLine ran in PowerShell. Git Bash's
+`bin\bash.exe` runs `usr\bin\bash.exe`, the parent ctempo sees, so that one
+maps back to `bin\bash.exe` when it exists. Any other parent (a
+`CLAUDE_CODE_SHELL_PREFIX` wrapper, a venv's `python.exe` launcher) falls back
+to `predict_shell`. As Claude Code runs a statusLine, bash gets its own folder
+first on PATH and `bash ` before a first word ending in `.sh`, and PowerShell
+gets Claude Code's flags (no `-ExecutionPolicy Bypass` under
+`CLAUDE_CODE_POWERSHELL_RESPECT_EXECUTION_POLICY`) and its
+`${CLAUDE_PROJECT_DIR}` style placeholders as `${env:...}`. A nested PowerShell
+took about 0.3 s warm and close to 1 s cold on CI runners, so the README
+advises a `compose.timeout_ms` of 3000 to 5000 for a previous status line that
+is a PowerShell or Git Bash script.
+
+**D-27. Windows: install.** Interpreters: `--python`, else the PEP 514 registry
+(HKCU, then HKLM in its 64-bit and 32-bit views; PythonCore first, newest
+first; `ExecutablePath`, else `python.exe` in the key's folder), `py -0p`, the
+python.org and install manager folders, the interpreter running install, then
+`python` and `python3` on PATH. PATH comes last because the python.org
+installer leaves it alone by default and the Desktop app does not see a shell's
+PATH. `os.access(X_OK)` is true for any file on Windows, so a candidate must be
+a `.exe` with a drive or a UNC share, and it runs only with arguments (`-I -S
+-c`, 15 s timeout, `PYTHON_MANAGER_AUTOMATIC_INSTALL=0` so the install manager
+installs nothing on the way): the Store's `python.exe` stub opens the Store
+when run bare, and fails with arguments. The probe reports `sys.executable`,
+and behind a Store alias, `py.exe` or another launcher that real `python.exe`
+is pinned, so no render pays for the extra process. A Store Python, which
+writes under AppData to a private copy, is used only when nothing else passes.
+
+Launchers: `--bin-dir` writes `ctempo.cmd`, which cmd.exe and PowerShell find
+through PATHEXT, and an extensionless sh `ctempo` (LF, UTF-8, forward slashes,
+`exec` of the pinned interpreter), as npm's cmd-shim does: Git Bash, where
+Claude Code's Bash tool runs, looks a command up by its very name, never with
+`.cmd`, so `ctempo` was "command not found" there. install.json records it as
+`sh_launcher`. It follows `ctempo.cmd` (D-18): it is written only when that is,
+and moved and removed with it, a file of that name that is not ctempo's is
+never written over or removed, and the `ctempo` an older version wrote beside
+`ctempo.cmd` is rewritten as the sh launcher. `ctempo.cmd` is CRLF, in the
+console code page, with `%` doubled; its last line is `(goto) 2>nul &
+"<python>" -I -S -X utf8 "<entry>" %*`. cmd.exe reads a batch file a line at a
+time and opens it again after each command, so an install or uninstall run
+through it, which rewrites or deletes the file, ended with "The batch file
+cannot be found." while an `exit /b` line followed python, and a repin to a
+path of another length ran the middle of the new text. The `(goto)` ends the
+batch before python runs (`%*` is expanded already), so cmd.exe reads nothing
+after it and python's exit code is the caller's. The one install that replaces
+an older launcher, run through that launcher, can still show the message once.
+Neither launcher runs the statusLine or the mod: Bun will not start a `.cmd`
+without a shell, and cmd.exe parses its arguments again.
+
+`claude` is `claude.exe` (native, WinGet) or `claude.cmd` (npm), never npm's
+extensionless sh shim. Its output and the probe's are read as UTF-8 whatever
+the locale, and a timeout kills the whole tree (`taskkill /T /F`), since
+killing `claude.cmd` alone leaves node holding the pipes. Whether `claude
+plugin marketplace add` takes a drive path on Windows is unconfirmed, so when
+it is rejected, install runs it again as `./` from the repo, a form the parser
+takes on every OS.
+
+Settings writes: `os.replace` is retried for about 2 s while another process
+holds the target (Claude Code reading settings.json, an antivirus scan).
+Windows refuses to replace or delete a read-only file (`attrib +R`), which
+POSIX replaces like any other, and install and uninstall failed with a
+traceback there. They now clear the attribute for the move or the removal and
+put it back if that fails; the new file takes the old one's mode, so it stays
+read-only, and a backup copies the mode, as on every OS. A UTF-8 BOM in
+settings.json (Windows PowerShell 5.1 and old Notepad write one) is kept, and
+install.json, the backups and `runtime.json` are read with one.
+
+**D-28. Windows: `CTEMPO_HOME`.** The CLI (`config.windows_home`) and the mod
+(`resolveHome`) read it alike. `~` is USERPROFILE (else HOMEDRIVE and
+HOMEPATH), as Python reads it, never HOME, which Git Bash sets and PowerShell
+does not. `C:\x`, `C:/x`, `\\server\share\x` and `//server/share/x` are
+absolute, and Git Bash's `/c/x` and `/c` are `C:/x` and `C:\`. A path rooted
+with a backslash and no drive (`\x`) takes the home's drive, as `ntpath.join`
+does, and anything else is taken from the home directory; the result is
+normalized. `%VAR%` is not expanded, as Claude Code does not expand it either.
+Any other path that starts with a single `/` (`/srv/ctempo`) is refused, with
+the same message in both: Git Bash, which runs the terminal statusLine,
+rewrites such a value to a folder under its own install (`C:/Program
+Files/Git/srv/ctempo`) before python.exe sees it, while PowerShell passes it as
+given and the mod read it on the home's drive, so the line and the band used
+different folders (and the first one, under Program Files, is one a user cannot
+create). The statusline still prints its bare line and logs nothing (the log
+lives in the home), the other commands print the reason and exit 1, `doctor`
+fails its `CTEMPO_HOME` row, and install and uninstall refuse before writing
+anything. Under Git Bash the statusLine's Python only sees the rewritten
+folder, so install and doctor also check the raw value in the settings env.
+Only the mod refuses `C:x` (relative to a drive's current folder: write
+`C:\x`), and since `$.fs.read` refuses most network locations, a UNC home it
+cannot read says so and asks for a local folder.
+
+**D-29. Windows: text, time and long paths.** The statusline writes UTF-8 bytes
+(D-16). The other commands print through Python's text streams, and Windows
+gives a pipe or a file the ANSI code page, where cp1252 has no ▲ → ░: `now`,
+`profile` and `doctor` raised UnicodeEncodeError when piped. So the CLI
+switches a stream that is not UTF-8 to UTF-8 (a console already is) and turns
+on the console's VT processing for colors. `config.json` is read as bytes, so
+JSON's own detection takes UTF-8 with or without a BOM and UTF-16 or UTF-32
+with one (Windows PowerShell 5.1's `>` and `Out-File` write UTF-16); a file
+that does not parse is still ignored as a whole, and `ctempo config show` says
+why. Windows' C runtime reads `TZ` whenever it is set, in its own form only
+(`EST5EDT`, `UTC0`): an inherited IANA name (a Cygwin login shell exports
+`TZ=Europe/Berlin`) read as zone "Eur" at offset 0 with US daylight saving, and
+every local time ctempo showed was off. `bin/ctempo` and `python -m ctempo`
+drop such a `TZ` before anything reads local time and have the C runtime read
+the zone again (`ucrtbase._tzset`), so times follow the Windows time zone; a
+`TZ` in the C runtime's form is still honored. Transcripts deeper than 260
+characters were skipped without a word when long paths are not enabled (the
+Windows default), so the bootstrap walks from an extended-length root
+(`\\?\C:\...`); files and folders it cannot open are counted, and `ctempo
+bootstrap` says how many. `errors.log` rotates as on POSIX, but a rename that
+fails while another program holds the log without delete sharing no longer
+drops the entry being written; a later error rotates it.
 
 ## The scavenger hook
 
@@ -783,6 +997,18 @@ or an early reset, and a reset moved earlier that a maxed or idle session
 never got taken); a fourteenth, over those rules, confirmed 5 and rejected
 none: the withdrawal deleting a real pending drop (for a busy process with an
 idle twin, and for the statusline and mod of one session) is fixed, and 3 more
-cases for processes sharing a session id are documented limits (D-06). 139 are
-fixed, each with a regression test that was checked to fail on the code before
-its fix. Details in the commit messages from "Fix review findings" on.
+cases for processes sharing a session id are documented limits (D-06); a
+fifteenth, on Windows (6 reviewers: the shells, the installer, the runtime, the
+mod, CI, and a new user's first install), confirmed 18 distinct defects (26
+reports) and rejected none (D-25 to D-29): a composed command that Windows
+PowerShell 5.1 or Git Bash changed on its way to Python, the Composer
+predicting the shell inside Git Bash, a command written for a single shell
+without a warning, no launcher for Git Bash, `ctempo.cmd` read by cmd.exe after
+python had rewritten or deleted it, a drive-less `CTEMPO_HOME` read as 2
+folders, a read-only settings.json, a UTF-16 config.json, a missing interpreter
+named only by cmd.exe in the band, an IANA `TZ`, long transcript paths, a held
+errors.log, 2 tests that could skip or pass by accident, and 3 in the docs,
+which described a Mac install only. 157 are fixed, each with a regression test
+that was checked to fail on the code before its fix (the 3 in the docs share a
+single test: the README's Windows section must say what the code does). Details
+in the commit messages from "Fix review findings" on.
