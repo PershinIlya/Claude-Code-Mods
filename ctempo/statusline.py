@@ -21,12 +21,14 @@ def log_error(exc, where="statusline"):
     try:
         import traceback
 
+        from . import clock
+
         path = config.log_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX:
             os.replace(path, path + ".1")
         with open(path, "a", encoding="utf-8") as f:
-            f.write("%s %s: %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), where, exc))
+            f.write("%s %s: %s\n" % (clock.strftime("%Y-%m-%dT%H:%M:%S", time.time()), where, exc))
             f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)[-6:]))
     except Exception:
         pass

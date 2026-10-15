@@ -313,7 +313,7 @@ class FiveHour(TempHome):
         # unknown leftover still never passes.
         path = os.path.join(self.dir, "config.json")
         for given, kept in ((-5, 0.0), (1e9, 100.0)):
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8", newline="") as f:
                 json.dump({"min_free": given}, f)
             self.assertEqual(config.load(path)["min_free"], kept)
             self.assertEqual(pace.severity(base, dict(self.cfg, min_free=given)), "dim")

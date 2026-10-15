@@ -21,7 +21,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, ROOT)
 
-from ctempo import config, ingest, profile  # noqa: E402
+from ctempo import clock, config, ingest, profile  # noqa: E402
 from ctempo.store import Store  # noqa: E402
 
 
@@ -37,7 +37,7 @@ def seed(home, now, days=45):
     week_used = five_used = 0.0
     n = 0
     while t < now - 60:
-        lt = time.localtime(t)
+        lt = clock.localtime(t)
         if t >= week_reset:
             week_reset += 7 * 86400
             week_used = 0.0

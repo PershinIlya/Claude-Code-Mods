@@ -30,6 +30,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      # The DST tests read IANA zones with zoneinfo, and Windows has no zone
+      # database of its own: the tzdata package, for the tests only (ctempo
+      # stays stdlib only). Python 3.8 has no zoneinfo, so they skip there.
+      - name: Install a zone database for the tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pip install tzdata
       - name: Run the test suite
         run: python -m unittest discover -s tests -t . -v
 
@@ -51,3 +57,44 @@ jobs:
         run: claude plugin validate mods/ctempo
       - name: Test the mod
         run: claude plugin test mods/ctempo
+
+  # scripts/ci_integration.py, in throwaway folders: ctempo install, the
+  # statusLine command piped a payload through each shell Claude Code may run
+  # it with (Git Bash, pwsh and powershell.exe on Windows; /bin/sh on macOS),
+  # uninstall back to the same bytes; and which forms of the repo path
+  # `claude plugin marketplace add` accepts (reported, never failing).
+  windows-integration:
+    name: windows-integration
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Claude Code
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install, the statusLine through Git Bash, pwsh and powershell.exe, uninstall
+        run: python scripts/ci_integration.py
+
+  macos-integration:
+    name: macos-integration
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Claude Code
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Install, the statusLine through /bin/sh, uninstall
+        run: python scripts/ci_integration.py

@@ -17,7 +17,7 @@ from unittest import mock
 
 from ctempo import config, render, winshell
 
-from .helpers import MON, H, D, TempHome, payload, utc
+from .helpers import MON, H, D, TZ_UTC, TempHome, payload, utc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
@@ -40,7 +40,7 @@ def sh_path(path):
 
 def run(payload, home, args=(), env=None, raw=None):
     e = dict(os.environ)
-    e.update({"CTEMPO_HOME": home, "TZ": "UTC", "CLAUDE_CONFIG_DIR": os.path.join(home, "claude")})
+    e.update({"CTEMPO_HOME": home, "TZ": TZ_UTC, "CLAUDE_CONFIG_DIR": os.path.join(home, "claude")})
     e.pop("NO_COLOR", None)
     e.update(env or {})
     data = raw if raw is not None else json.dumps(payload).encode()
@@ -101,7 +101,7 @@ class Statusline(unittest.TestCase):
     def test_bare_line_follows_the_display_settings(self):
         # Review 4: with a broken database the bare line joined with " · " and
         # was never fitted: "5h 42% @HH:MM · wk 32% @Ddd HH:MM" is 33 columns.
-        with open(os.path.join(self.home, "config.json"), "w") as f:
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"display": {"symbols": "ascii", "max_width": 24}}, f)
         with open(os.path.join(self.home, "tempo.db"), "wb") as f:
             f.write(b"not a database " * 100)
@@ -117,13 +117,13 @@ class Statusline(unittest.TestCase):
         # Review 4: "ctempo: waiting for usage data" (30 columns) ignored max_width.
         no_limits = {"session_id": "abc"}
         for symbols, want in (("unicode", "ctempo: waiting for usa…"), ("ascii", "ctempo: waiting for u...")):
-            with open(os.path.join(self.home, "config.json"), "w") as f:
+            with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
                 json.dump({"display": {"symbols": symbols, "max_width": 24}}, f)
             p, _ = run(no_limits, self.home, env={"NO_COLOR": "1"})
             self.assertEqual(p.stdout.decode("utf-8"), want + "\n")
 
     def test_bad_config_types_fall_back_to_defaults(self):
-        with open(os.path.join(self.home, "config.json"), "w") as f:
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"verdict": 5, "display": {"max_width": "wide", "symbols": "ascii"}, "reset": None,
                        "target_5h": "lots", "min_free": True, "future_key": 1}, f)
         cfg = config.load(os.path.join(self.home, "config.json"))
@@ -137,7 +137,7 @@ class Statusline(unittest.TestCase):
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
 
     def test_non_utf8_stdout_encoding_still_prints(self):
-        e = dict(os.environ, CTEMPO_HOME=self.home, TZ="UTC", PYTHONIOENCODING="latin-1")
+        e = dict(os.environ, CTEMPO_HOME=self.home, TZ=TZ_UTC, PYTHONIOENCODING="latin-1")
         e.pop("NO_COLOR", None)
         p = subprocess.run([sys.executable, "-S", ENTRY, "statusline"], input=json.dumps(self.p).encode(),
                            capture_output=True, env=e, timeout=30)
@@ -146,7 +146,7 @@ class Statusline(unittest.TestCase):
         self.assertTrue(ANSI.sub("", out).startswith("5h 42%"))
 
     def compose_timeout(self, ms):
-        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"compose": {"timeout_ms": ms}}, f)
 
     @posix_shell
@@ -156,7 +156,7 @@ class Statusline(unittest.TestCase):
             self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("theirs"), (cols, p.stdout))
 
     def test_invalid_config_values_are_dropped_or_clamped(self):
-        with open(os.path.join(self.home, "config.json"), "w") as f:
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"profile": {"override": {"work_days": ["Mon", "Tue"], "wake_hours": [8, 23]}, "half_life_days": 0},
                        "compose": {"command": True, "timeout_ms": 1e9}, "display": {"max_width": 3, "symbols": "emoji"},
                        "target_5h": float("inf") if False else 100}, f)
@@ -175,7 +175,7 @@ class Statusline(unittest.TestCase):
         self.assertNotIn("error", line)
 
     def test_override_fields_are_checked_one_by_one_and_empty_surfaces_kept(self):
-        with open(os.path.join(self.home, "config.json"), "w") as f:
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"profile": {"override": {"work_days": [0, 1, 2.0, 9, "x"], "wake_hours": [7.5, 23],
                                                 "off_day_factor": 3, "mode": "REPLACE"}},
                        "mod": {"surfaces": []}}, f)
@@ -195,7 +195,7 @@ class Statusline(unittest.TestCase):
         self.assertEqual(config.load(os.path.join(self.home, "config.json"))["display"]["symbols"], "ascii")
 
     def test_pathological_config_falls_back_to_defaults(self):
-        with open(os.path.join(self.home, "config.json"), "w") as f:
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
             f.write("[" * 200000 + "]" * 200000)
         self.assertEqual(config.load(os.path.join(self.home, "config.json")), config.DEFAULTS)
         p, _ = run(self.p, self.home)
@@ -490,7 +490,7 @@ class WriteFailedAtRollover(TempHome):
     while the payload carried the new window's level."""
 
     def locked_render(self, now, five=None, week=None):
-        with open(os.path.join(self.dir, "config.json"), "w") as f:
+        with open(os.path.join(self.dir, "config.json"), "w", encoding="utf-8", newline="") as f:
             json.dump({"db_timeout_ms": 10}, f)
         lock = sqlite3.connect(os.path.join(self.dir, "tempo.db"), isolation_level=None)
         lock.execute("BEGIN IMMEDIATE")
@@ -589,7 +589,7 @@ class TildeHome(unittest.TestCase):
     def test_statusline_with_tilde_home_writes_under_home_not_cwd(self):
         now = time.time()
         payload = {"session_id": "s", "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": int(now + 2 * H)}}}
-        env = dict(os.environ, HOME=self.user, USERPROFILE=self.user, CTEMPO_HOME="~/.ctempo-moved", TZ="UTC",
+        env = dict(os.environ, HOME=self.user, USERPROFILE=self.user, CTEMPO_HOME="~/.ctempo-moved", TZ=TZ_UTC,
                    CLAUDE_CONFIG_DIR=os.path.join(self.dir, "claude"))
         p = subprocess.run([sys.executable, "-I", "-S", ENTRY, "statusline"], input=json.dumps(payload).encode(),
                            capture_output=True, env=env, cwd=self.cwd, timeout=30)

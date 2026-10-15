@@ -19,8 +19,8 @@ result is normalized. DECISIONS.md D-10..D-15 explain each choice.
 
 import json
 import math
-import time
 
+from . import clock
 from .config import SEVEN_DAY
 from .store import FIRST, FRESH
 
@@ -33,13 +33,13 @@ AWAKE_RATIO = 0.25  # an hour is awake when its rate is at least this share of t
 
 
 def bin_of(ts):
-    lt = time.localtime(ts)
+    lt = clock.localtime(ts)
     return lt.tm_wday * 24 + lt.tm_hour
 
 
 def hour_start(ts):
     """Start of the local clock hour containing ts (DST and half-hour zones safe)."""
-    lt = time.localtime(ts)
+    lt = clock.localtime(ts)
     return math.floor(ts) - lt.tm_min * 60 - lt.tm_sec
 
 

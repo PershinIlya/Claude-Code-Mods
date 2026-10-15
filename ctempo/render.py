@@ -9,7 +9,8 @@ but on pace, slow down without a dry time, or at or above a target below
 """
 
 import os
-import time
+
+from . import clock
 
 SYMBOLS = {
     "unicode": {"x": "×", "up": "▲", "down": "▼", "to": "→", "le": "≤", "sep": " · ", "pm": "±", "cut": "…"},
@@ -67,11 +68,11 @@ def rate(r):
 def hm(ts):
     # To the nearest minute: a window keeps the resets_at of its first
     # reading, which may have wobbled a few seconds early (D-08).
-    return time.strftime("%H:%M", time.localtime(ts + 30))
+    return clock.strftime("%H:%M", ts + 30)
 
 
 def dhm(ts):
-    return time.strftime("%a %H:%M", time.localtime(ts + 30))
+    return clock.strftime("%a %H:%M", ts + 30)
 
 
 def _glyph(verdict, s):

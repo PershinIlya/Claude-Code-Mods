@@ -50,12 +50,12 @@ class Bootstrap(TempHome):
         lines.append(assistant(MON + D + 10 * H + 55, "msg_stream", out=500))
         lines.append(json.dumps({"type": "user", "timestamp": iso(MON + D + 10 * H), "message": {"content": SECRET}}))
         lines.append('{"type":"assistant", "usage": broken json ' + SECRET)
-        with open(os.path.join(proj, "sess.jsonl"), "w") as f:
+        with open(os.path.join(proj, "sess.jsonl"), "w", encoding="utf-8", newline="") as f:  # LF on Windows too
             f.write("\n".join(lines) + "\n")
-        with open(os.path.join(proj, "sess", "subagents", "agent-1.jsonl"), "w") as f:
+        with open(os.path.join(proj, "sess", "subagents", "agent-1.jsonl"), "w", encoding="utf-8", newline="") as f:
             f.write(assistant(MON + 8 * D + 11 * H, "msg_sub") + "\n")
         old = os.path.join(proj, "old.jsonl")
-        with open(old, "w") as f:
+        with open(old, "w", encoding="utf-8", newline="") as f:
             f.write(assistant(MON - 200 * D, "msg_old") + "\n")
         os.utime(old, (MON - 200 * D, MON - 200 * D))
 
@@ -95,9 +95,9 @@ class Bootstrap(TempHome):
         self.assertLess(tue3, 0.001)
         self.assertEqual(prof.prior_meta["messages"], 26)
 
-    def test_hostile_lines_and_a_fifo_do_not_stop_the_scan(self):
+    def test_hostile_lines_do_not_stop_the_scan(self):
         proj = os.path.join(self.root, "-Users-me-work")
-        with open(os.path.join(proj, "weird.jsonl"), "w") as f:
+        with open(os.path.join(proj, "weird.jsonl"), "w", encoding="utf-8", newline="") as f:
             base = json.loads(assistant(MON + D + 10 * H, "x"))
             for bad in ({"id": ["a"]}, {"id": {"k": 1}}):
                 d = json.loads(json.dumps(base))
@@ -108,12 +108,21 @@ class Bootstrap(TempHome):
             d["message"]["id"] = "msg_huge"
             f.write(json.dumps(d) + "\n")
             f.write('{"type":"assistant","usage":' + "[" * 100000 + "]" * 100000 + "}\n")
-        os.mkfifo(os.path.join(proj, "pipe.jsonl"))
         t = time.time()
         events, stats = transcripts.scan(self.root, MON - D, self.now)
         self.assertLess(time.time() - t, 5)
         self.assertGreaterEqual(stats["bad_lines"], 2)
         self.assertEqual(stats["messages"], 27)  # 26 good + msg_huge (its huge count ignored)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFOs are POSIX only")
+    def test_a_fifo_does_not_stop_the_scan(self):
+        # Opened for reading, a FIFO with no writer blocks: the scan opens it
+        # non-blocking and skips anything that is not a regular file.
+        os.mkfifo(os.path.join(self.root, "-Users-me-work", "pipe.jsonl"))
+        t = time.time()
+        events, stats = transcripts.scan(self.root, MON - D, self.now)
+        self.assertLess(time.time() - t, 5)
+        self.assertEqual((stats["files"], stats["messages"]), (2, 26))
 
     def test_cost_weight_and_stream_dedupe(self):
         events, stats = transcripts.scan(self.root, MON - D, self.now)

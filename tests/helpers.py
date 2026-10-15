@@ -1,3 +1,5 @@
+import contextlib
+import datetime
 import json
 import math
 import os
@@ -6,17 +8,75 @@ import tempfile
 import time
 import unittest
 
-from ctempo import config, ingest
+from ctempo import clock, config, ingest
 from ctempo.store import Store
 
 MON = 1791763200  # Monday 2026-10-12 00:00 UTC
 H = 3600.0
 D = 86400.0
+# UTC as a TZ value in the POSIX form, which Windows' C runtime documents too
+# (tzn[+|-]hh[:mm[:ss]][dzn]): a child process started with it runs in UTC.
+TZ_UTC = "UTC0"
 
 
 def utc():
-    os.environ["TZ"] = "UTC"
-    time.tzset()
+    """Local time is UTC, on every OS: in this process through ctempo.clock;
+    TZ goes to child processes (and to the time module where time.tzset
+    exists), which read it at startup, Windows' C runtime included."""
+    os.environ["TZ"] = TZ_UTC
+    if hasattr(time, "tzset"):
+        time.tzset()
+    clock.localtime = time.gmtime
+
+
+utc()  # the suite runs in UTC whatever the machine's zone; zone() steps out of it
+
+
+def _zone_info(name):
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        try:
+            from backports.zoneinfo import ZoneInfo  # Python 3.8
+        except ImportError:
+            return None
+    try:
+        return ZoneInfo(name)
+    except Exception:  # ZoneInfoNotFoundError: no zone database (Windows without tzdata)
+        return None
+
+
+@contextlib.contextmanager
+def zone(name):
+    """Local time in the IANA zone `name` inside the block (DST tests).
+
+    zoneinfo reads the system's zone database or the tzdata package (CI
+    installs it on Windows, which has none); without zoneinfo (Python 3.8),
+    TZ and time.tzset do it on POSIX. With neither, the test is skipped."""
+    tz = _zone_info(name)
+    saved = clock.localtime, os.environ.get("TZ")
+    try:
+        if tz is not None:
+            # Floored to the second, as time.localtime does: fromtimestamp rounds.
+            clock.localtime = lambda ts: datetime.datetime.fromtimestamp(math.floor(ts), tz).timetuple()
+        elif hasattr(time, "tzset"):
+            os.environ["TZ"] = name
+            time.tzset()
+            if time.timezone == 0 and not time.daylight:  # a name the system does not know reads as UTC
+                raise unittest.SkipTest("no zone database has %s" % name)
+            clock.localtime = time.localtime
+        else:
+            raise unittest.SkipTest("no zone database for %s: needs zoneinfo (Python 3.9+, or backports.zoneinfo) "
+                                    "with the system's database or the tzdata package, or time.tzset" % name)
+        yield
+    finally:
+        clock.localtime = saved[0]
+        if saved[1] is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = saved[1]
+        if hasattr(time, "tzset"):
+            time.tzset()
 
 
 def payload(five=None, week=None, sid="s1"):
@@ -102,7 +162,7 @@ class TempHome(unittest.TestCase):
             if t >= R:
                 R += int(7 * D)
                 level = 0.0
-            lt = time.localtime(t)
+            lt = clock.localtime(t)
             if lt.tm_wday in days and hours[0] <= lt.tm_hour < hours[1]:
                 level = min(100.0, level + rate * every / H)
                 self.feed(t + every, week=(math.floor(level), R))
@@ -122,5 +182,5 @@ class TempHome(unittest.TestCase):
 
 
 def write_json(path, obj, indent=2, newline=True):
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="") as f:  # LF on Windows too
         f.write(json.dumps(obj, indent=indent) + ("\n" if newline else ""))
