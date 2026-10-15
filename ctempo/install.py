@@ -32,7 +32,7 @@ import subprocess
 import sys
 import time
 
-from . import __version__, config, winshell
+from . import __version__, config, statusline, winshell
 
 MARKETPLACE = "claude-tempo"
 PLUGIN = "ctempo"
@@ -281,6 +281,10 @@ def _kill_tree(p):
 # (on Windows a Store alias or a launcher can stand in front of the real python.exe).
 PROBE = ("import sys, sqlite3, json; "
          "print(json.dumps(['%d.%d' % sys.version_info[:2], sqlite3.sqlite_version, sys.executable]))")
+# On Windows the path is the base interpreter's: a venv's python.exe is a launcher that runs its
+# base python.exe as a child. ctempo runs -I -S, so a venv adds nothing but that process on every
+# render, and the process hides the shell that started ctempo from winshell.parent_shell.
+WINDOWS_PROBE = PROBE.replace("sys.executable", "getattr(sys, '_base_executable', None) or sys.executable")
 
 
 def _runnable(py):
@@ -327,7 +331,8 @@ def probe_full(py):
     for _ in range(3):
         t = time.perf_counter()
         try:
-            code, so, se = _run([py, "-I", "-S", "-c", PROBE], timeout=15, env=env)
+            code, so, se = _run([py, "-I", "-S", "-c", WINDOWS_PROBE if config.IS_WINDOWS else PROBE], timeout=15,
+                                env=env)
         except (OSError, subprocess.TimeoutExpired) as e:
             return False, None, None, None, str(e), None
         ms = (time.perf_counter() - t) * 1000
@@ -347,8 +352,8 @@ def probe_full(py):
 
 def _pin(py, exe):
     """What to pin for a candidate that passed. On Windows, what the interpreter reports
-    as itself when that is another real file (the candidate is a Store alias, py.exe or
-    another launcher in front of it), so no render pays for the extra hop."""
+    as itself when that is another real file (the candidate is a Store alias, py.exe, a
+    venv's python.exe or another launcher in front of it), so no render pays for the extra hop."""
     if not config.IS_WINDOWS or not isinstance(exe, str) or not exe:
         return py
     same = ntpath.normcase(ntpath.normpath(exe)) == ntpath.normcase(ntpath.normpath(py))
@@ -475,8 +480,8 @@ def choose_python(explicit=None):
 
     Order prefers system and Homebrew paths over the one running install
     (often a conda env that may be activated, updated or removed). On Windows
-    the pin is the real python.exe behind an alias or a launcher, and a Store
-    Python is used only when nothing else passes.
+    the pin is the real python.exe behind an alias or a launcher (a venv's
+    included), and a Store Python is used only when nothing else passes.
     """
     report = []
     if explicit:
@@ -568,15 +573,16 @@ def command_shell(cmd):
 
 
 def compose_of(cmd):
-    """The composed command embedded in one of our statusLine commands: what follows
-    --compose, or what follows --compose-b64 decoded (as ctempo statusline reads it)."""
+    """The composed command embedded in one of our statusLine commands, as ctempo statusline
+    reads it (statusline.parse_args, over the words after `statusline`): what follows the
+    last --compose, or the last --compose-b64 decoded. A repin, doctor and uninstall then
+    keep the command that runs, also after a hand edit that added a flag."""
     argv = split_command(cmd) or []
-    for i, a in enumerate(argv[:-1]):
-        if a == "--compose":
-            return argv[i + 1]
-        if a == winshell.COMPOSE_B64:
-            return winshell.decoded(argv[i + 1])
-    return None
+    words = argv[argv.index("statusline") + 1:] if "statusline" in argv else argv
+    try:
+        return statusline.parse_args(words)["compose_cmd"]
+    except ValueError:  # a --now that is no number: ctempo statusline fails open, composing nothing
+        return None
 
 
 def settings_env(obj=None):
@@ -740,13 +746,31 @@ def sh_launcher_text(python, entry):
 
 
 def _sh_launcher_path(lp, old_sh, explicit):
-    """Windows: the sh launcher to write beside ctempo.cmd at lp, or None. Git Bash (and Claude
-    Code's Bash tool, which runs in it) looks a command up by its very name, never with .cmd, so
-    `ctempo` there needs a file of that name, as npm's cmd-shim writes. As with ctempo.cmd, one
-    the user deleted since an earlier install comes back only with --bin-dir."""
-    if not (config.IS_WINDOWS and lp) or (not explicit and old_sh and not os.path.exists(old_sh)):
+    """Windows: the sh launcher to write, or None. Git Bash (and Claude Code's Bash tool, which
+    runs in it) looks a command up by its very name, never with .cmd, so `ctempo` there needs a
+    file of that name beside ctempo.cmd (lp), as npm's cmd-shim writes. As with ctempo.cmd, one
+    the user deleted since an earlier install comes back only with --bin-dir: install.json keeps
+    its record, so every repin leaves it out. One the user kept after deleting ctempo.cmd (lp is
+    None), or after putting a file of their own in its place, is still ctempo's, so it follows
+    the pin where it is: it never runs an old interpreter."""
+    if not config.IS_WINDOWS or (not explicit and old_sh and not os.path.exists(old_sh)):
         return None
-    return os.path.join(os.path.dirname(lp), "ctempo")
+    return os.path.join(os.path.dirname(lp), "ctempo") if lp else old_sh
+
+
+def _write_sh_launcher(sh, python, entry, state, out):
+    """Write the sh launcher at sh, unless a file of the user's is there. Its record follows the
+    file: it names the one just written, and goes for a file of the user's, which ctempo never
+    writes over or removes. True when written."""
+    if os.path.exists(sh) and not _is_launcher(sh):
+        out("Skipped launcher: %s exists and is not ours" % sh)
+        state.pop("sh_launcher", None)
+        return False
+    with open(sh, "wb") as f:  # LF and UTF-8, as Git Bash reads it
+        f.write(sh_launcher_text(python, entry).encode("utf-8"))
+    state["sh_launcher"] = sh
+    out("Wrote launcher %s" % sh)
+    return True
 
 
 def _launcher_bytes(python, entry):
@@ -1013,9 +1037,9 @@ def install(args, out=print):
             if config.IS_WINDOWS:
                 out("  (if claude rejects the folder: cd %s, then run claude plugin marketplace add ./)" % _shown([root]))
     bin_dir = os.path.abspath(os.path.expanduser(args.bin_dir)) if args.bin_dir else None
-    # Without --bin-dir, the launcher an earlier install wrote follows the new pin
-    # (one the user deleted since is not written again), as ctempo.cmd on Windows,
-    # with an sh launcher for Git Bash beside it.
+    # Without --bin-dir, each launcher an earlier install wrote follows the new pin,
+    # and one the user deleted since stays deleted until a --bin-dir. On Windows that
+    # holds for ctempo.cmd and the sh launcher for Git Bash beside it, each on its own.
     prev = load_state()
     old_lp, old_sh = prev.get("launcher"), prev.get("sh_launcher")
     lp = os.path.join(bin_dir if bin_dir else os.path.dirname(old_lp), launcher_name()) \
@@ -1104,17 +1128,9 @@ def install(args, out=print):
                     state["launcher"] = lp
                     out("Wrote launcher %s" % lp)
                     keep = [lp]
-                    if sh and os.path.exists(sh) and not _is_launcher(sh):
-                        out("Skipped launcher: %s exists and is not ours" % sh)
-                    elif sh:
-                        with open(sh, "wb") as f:  # LF and UTF-8, as Git Bash reads it
-                            f.write(sh_launcher_text(python, entry).encode("utf-8"))
+                    # sh is None on Windows when the user deleted ctempo's: its record stays for later repins.
+                    if sh and _write_sh_launcher(sh, python, entry, state, out):
                         keep.append(sh)
-                        out("Wrote launcher %s" % sh)
-                    if sh in keep:
-                        state["sh_launcher"] = sh
-                    else:
-                        state.pop("sh_launcher", None)
                     # Only the newest launchers are ctempo's: those in an earlier --bin-dir go (a ctempo
                     # an older version wrote beside ctempo.cmd on Windows is the sh launcher now). The
                     # same file under another name (case on macOS, a bind mount) is not one realpath can tell.
@@ -1125,11 +1141,20 @@ def install(args, out=print):
                             out("Removed launcher %s" % old)
                 else:
                     out("Skipped launcher: %s exists and is not ours" % lp)
+                    if not bin_dir and sh and os.path.exists(sh) and _is_launcher(sh):
+                        _write_sh_launcher(sh, python, entry, state, out)  # ours, beside the user's ctempo.cmd
             except OSError as e:
                 out("Skipped launcher: %s" % e)
                 rc = 1
-        elif old_lp:
-            state.pop("launcher", None)  # the user deleted it
+        else:
+            if old_lp:
+                state.pop("launcher", None)  # the user deleted it
+            if sh:  # Windows: the user deleted ctempo.cmd and kept the sh launcher, which follows the pin
+                try:
+                    _write_sh_launcher(sh, python, entry, state, out)
+                except OSError as e:
+                    out("Skipped launcher: %s" % e)
+                    rc = 1
         if use_mod:
             m = state.get("mod") or {}
             # No snapshot yet (or an early mod entry without one), or a manual mod

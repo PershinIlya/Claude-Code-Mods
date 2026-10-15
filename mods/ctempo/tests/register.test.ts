@@ -391,22 +391,47 @@ test('follows mod.refresh_s from the CLI', async ($, on) => {
 // Review 15: Git Bash, which runs the statusLine on Windows, rewrites a
 // CTEMPO_HOME rooted with a slash and no drive to a folder under its own
 // install (C:\Program Files\Git\srv\ctempo) before Python sees it, while the
-// mod hands Python the value as given: the band and the line would use two
-// folders. The CLI refuses the same values (tests/test_statusline.py, NoDriveHome).
+// mod hands Python the value as given: the band and the line would use 2
+// folders. The CLI refuses the same values (tests/test_config.py, NoDriveHome).
+// The example is on the home's drive, where older versions put the folder.
+const PROFILES: [string, Record<string, string>, string][] = [
+  ['a profile on C:', WINDOWS, 'C:'],
+  ['a profile on D:', { ...WINDOWS, USERPROFILE: 'D:\\Users\\u' }, 'D:'],
+]
 for (const value of ['/srv/ctempo', '/ctempo', '/tmp/x', '/']) {
-  test(`Windows: refuses the drive-less CTEMPO_HOME ${value}, naming the fix`, async ($, on) => {
-    const { runs, clock, reads } = stub(on, { env: { ...WINDOWS, CTEMPO_HOME: value } })
-    await $.session.start(start('desktop'))
-    await clock.advance(1)
-    expect(reads.length).toBe(0)
-    expect(runs.length).toBe(0)
-    const ui = await $.ui.mount(band('desktop'))
-    const why =
-      `CTEMPO_HOME ${value} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
-      `Write it with a drive, e.g. C:${value}, or as ~/...`
-    expect(await ui.find({ type: 'Text', text: ending(why) })).toBeDefined()
-  })
+  for (const [what, env, drive] of PROFILES) {
+    test(`Windows: refuses the drive-less CTEMPO_HOME ${value} with ${what}, naming the fix`, async ($, on) => {
+      const { runs, clock, reads } = stub(on, { env: { ...env, CTEMPO_HOME: value } })
+      await $.session.start(start('desktop'))
+      await clock.advance(1)
+      expect(reads.length).toBe(0)
+      expect(runs.length).toBe(0)
+      const ui = await $.ui.mount(band('desktop'))
+      const why =
+        `CTEMPO_HOME ${value} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
+        `Write it with a drive, e.g. ${drive}${value}, or as ~/...`
+      expect(await ui.find({ type: 'Text', text: ending(why) })).toBeDefined()
+    })
+  }
 }
+
+test("the drive-less example takes the home's drive, else C:", async () => {
+  const windows = (home: string | undefined) => ({ windows: true, home })
+  const example = (drive: string) =>
+    'CTEMPO_HOME /srv/ctempo has no drive; Git Bash rewrites such a path to a folder under its own install. ' +
+    `Write it with a drive, e.g. ${drive}/srv/ctempo, or as ~/...`
+  expect(() => resolveHome('/srv/ctempo', windows('D:\\Users\\me'))).toThrow({ message: example('D:') })
+  const unc = '\\\\srv\\share'
+  expect(() => resolveHome('/srv/ctempo', windows(`${unc}\\me`))).toThrow({ message: example(unc) })
+  expect(() => resolveHome('/srv/ctempo', windows('\\Users\\me'))).toThrow({ message: example('C:') })
+  expect(() => resolveHome('/srv/ctempo', windows(undefined))).toThrow({ message: example('C:') })
+  // C:x as the CLI refuses it, word for word (tests/test_config.py, NoDriveHome).
+  for (const given of ['C:x', 'c:ctempo', 'D:']) {
+    expect(() => resolveHome(given, windows('C:\\Users\\me'))).toThrow({
+      message: `CTEMPO_HOME ${given} is relative to a drive's current folder; use an absolute path`,
+    })
+  }
+})
 
 test('the drive-less rule is Windows only, and UNC, \\x and Git Bash drives still work', async () => {
   const windows = (home: string | undefined) => ({ windows: true, home })

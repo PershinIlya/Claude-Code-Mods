@@ -1800,7 +1800,9 @@ class WindowsProbe(unittest.TestCase):
     def test_the_probe_reports_the_interpreter_itself(self):
         ok, ver, sq, ms, note, exe = install.probe_full(sys.executable)
         self.assertTrue(ok, note)
-        self.assertTrue(os.path.samefile(exe, sys.executable))
+        # On Windows the base interpreter: a venv's python.exe only starts it.
+        base = getattr(sys, "_base_executable", None) or sys.executable
+        self.assertTrue(os.path.samefile(exe, base if config.IS_WINDOWS else sys.executable))
         self.assertEqual(install.probe(sys.executable)[:3], (ok, ver, sq))  # doctor's 5 values
         with mock.patch.object(install, "_run", lambda *a, **kw: (0, "Python 3.12\n", "")):
             self.assertIn("unexpected probe output", install.probe(sys.executable)[4])
@@ -1838,6 +1840,38 @@ class WindowsProbe(unittest.TestCase):
                 mock.patch.object(install, "_runnable", lambda p: True):
             install.probe_full("/opt/py/bin/python3")
         self.assertIsNone(calls[0][1])  # the environment as it is, off Windows
+
+    def test_windows_pins_a_venvs_base_interpreter(self):
+        # Review 15 verify: on Windows a venv's python.exe is a launcher that runs its base python.exe
+        # as a child, so the process running ctempo had python.exe as its parent, not the shell, and the
+        # Composer fell back to predicting the shell (winshell.parent_shell). ctempo runs -I -S: the venv
+        # adds nothing, so its base interpreter is pinned, and the report says which venv it came from.
+        venv = r"C:\Users\me\proj\.venv\Scripts\python.exe"
+
+        def run(argv, timeout, env=None, cwd=None):
+            """The probe, run here as a venv's interpreter: sys.executable is the venv's, and on
+            Windows (any Python 3.8+) sys._base_executable is the python.exe it started."""
+            buf = io.StringIO()
+            with mock.patch.object(sys, "executable", argv[0]), \
+                    mock.patch.object(sys, "_base_executable", PY if argv[0] == venv else argv[0], create=True), \
+                    redirect_stdout(buf):
+                exec(argv[-1], {})
+            return 0, buf.getvalue(), ""
+
+        with mock.patch.object(install, "_run", run), \
+                mock.patch.object(install, "_runnable", lambda p: p in (venv, PY)):
+            with windows():
+                self.assertEqual(install.probe_full(venv)[5], PY)
+                py, report = install.choose_python(venv)
+                self.assertEqual((py, report[0][0], report[0][5]), (PY, PY, "via %s" % venv))
+                with mock.patch.object(install, "candidates", lambda: [venv, PY]):
+                    py, report = install.choose_python()
+                self.assertEqual([(r[0], r[5]) for r in report], [(PY, "via %s" % venv), (PY, "")])
+                self.assertEqual(py, PY)
+                self.assertEqual(install.probe_full(PY)[5], PY)  # no venv: the interpreter itself
+            with windows(False):  # macOS and Linux: as before, the venv's own path
+                self.assertEqual(install.probe_full(venv)[5], venv)
+                self.assertEqual(install.choose_python(venv)[0], venv)
 
     def test_windows_wants_a_drive_and_a_exe(self):
         with windows(), mock.patch("os.path.isfile", lambda p: True):
@@ -2072,10 +2106,11 @@ class WindowsInstall(Sandbox):
         self.assertEqual(os.listdir(a), [])
         check(b, PY)
         os.remove(os.path.join(b, "ctempo"))  # the user deleted it: only --bin-dir brings it back
-        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=other))
-        self.assertEqual(rc, 0, out)
-        check(b, other, ("ctempo.cmd",))
-        self.assertNotIn("sh_launcher", install.load_state())
+        for python in (other, PY):  # Review 15 verify: the 2nd repin wrote it back
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=python))
+            self.assertEqual(rc, 0, out)
+            check(b, python, ("ctempo.cmd",))
+            self.assertEqual(install.load_state()["sh_launcher"], os.path.join(b, "ctempo"))  # remembered
         rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=b))
         self.assertEqual(rc, 0, out)
         check(b, PY)
@@ -2091,6 +2126,74 @@ class WindowsInstall(Sandbox):
         self.assertEqual(os.listdir(c), ["ctempo"])
         self.assertEqual(install.read_text(os.path.join(c, "ctempo")), "#!/bin/sh\necho mine\n")
         self.assertEqual(self.read(), before)
+
+    def test_an_sh_launcher_kept_without_ctempo_cmd_follows_the_pin(self):
+        # Review 15 verify: with ctempo.cmd deleted and the sh launcher kept, a repin (often because
+        # the old Python was uninstalled) left Git Bash's `ctempo` running the old interpreter.
+        before = self.write(SETTINGS)
+        a, b = (os.path.join(self.dir, n) for n in ("a", "b"))
+        sh_a, sh_b = os.path.join(a, "ctempo"), os.path.join(b, "ctempo")
+        other = r"C:\Python313\python.exe"
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=a))
+        self.assertEqual(rc, 0, out)
+        os.remove(os.path.join(a, "ctempo.cmd"))  # the user deleted it and kept the sh launcher
+        for python in (other, PY, other):
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=python))
+            self.assertEqual(rc, 0, out)
+            self.assertIn("Wrote launcher %s" % sh_a, out)
+            self.assertEqual(os.listdir(a), ["ctempo"])  # ctempo.cmd stays deleted
+            self.assertEqual(install.read_text(sh_a), install.sh_launcher_text(python, ENTRY))
+            self.assertNotIn("launcher", install.load_state())
+            self.assertEqual(install.load_state()["sh_launcher"], sh_a)
+        rc, out = self.run_cmd(install.install, args(self.path, python=PY))
+        self.assertIn("Launcher for Git Bash: %s" % sh_a, out)  # the dry run says so
+        self.assertEqual(install.read_text(sh_a), install.sh_launcher_text(other, ENTRY))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=b))  # both, and it moves
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((os.listdir(a), sorted(os.listdir(b))), ([], ["ctempo", "ctempo.cmd"]))
+        self.assertEqual(install.load_state()["sh_launcher"], sh_b)
+        # The same with a ctempo.cmd of the user's in place of ctempo's, which stays theirs.
+        put(os.path.join(b, "ctempo.cmd"), "@echo mine\r\n")
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=other))
+        self.assertIn("Skipped launcher: %s exists and is not ours" % os.path.join(b, "ctempo.cmd"), out)
+        self.assertEqual(install.read_text(sh_b), install.sh_launcher_text(other, ENTRY))
+        self.assertEqual(install.read_text(os.path.join(b, "ctempo.cmd")), "@echo mine\r\n")
+        # A file of the user's in place of the sh launcher is theirs: never written over, nor remembered.
+        os.remove(os.path.join(b, "ctempo.cmd"))
+        put(sh_b, "#!/bin/sh\necho mine\n")
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=other))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Skipped launcher: %s exists and is not ours" % sh_b, out)
+        self.assertNotIn("sh_launcher", install.load_state())
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(os.listdir(b), ["ctempo"])
+        self.assertEqual(install.read_text(sh_b), "#!/bin/sh\necho mine\n")
+        self.assertEqual(self.read(), before)
+
+    def test_a_deleted_sh_launcher_comes_back_with_a_bin_dir_only(self):
+        # Review 15 verify: the repin after the user deleted it dropped its record, so the next
+        # one wrote it back. It stays deleted however many repins follow, until a --bin-dir.
+        self.write(SETTINGS)
+        a, b = (os.path.join(self.dir, n) for n in ("a", "b"))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=a))
+        self.assertEqual(rc, 0, out)
+        os.remove(os.path.join(a, "ctempo"))
+        for python in (r"C:\Python313\python.exe", PY, r"C:\Python313\python.exe"):
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=python))
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn("Launcher for Git Bash", out)
+            self.assertEqual(os.listdir(a), ["ctempo.cmd"])
+            self.assertEqual(install.read_text(os.path.join(a, "ctempo.cmd")), install.launcher_text(python, ENTRY))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=b))  # a move brings it back
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((os.listdir(a), sorted(os.listdir(b))), ([], ["ctempo", "ctempo.cmd"]))
+        self.assertEqual(install.load_state()["sh_launcher"], os.path.join(b, "ctempo"))
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=PY))  # and it follows again
+        self.assertEqual(install.read_text(os.path.join(b, "ctempo")), install.sh_launcher_text(PY, ENTRY))
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(os.listdir(b), [])
 
     def test_marketplace_add_falls_back_to_dot_slash(self):
         # Whether claude on Windows takes a drive path for a local marketplace is unconfirmed:
@@ -2403,6 +2506,40 @@ class WindowsEncodedCompose(unittest.TestCase):
             self.assertEqual(dropped["command"], FWD)
             self.assertIn("REPLACE", note)
 
+    def test_with_both_flags_every_reader_takes_the_last_one(self):
+        # Review 15 verify: ctempo statusline runs the last --compose or --compose-b64, while install
+        # read the first, so after a hand edit that added one, doctor showed another command than the
+        # one running, and a repin wrote the old one back in its place.
+        from ctempo import statusline
+
+        def running(cmd):
+            words = install.split_command(cmd)
+            return statusline.parse_args(words[words.index("statusline") + 1:])["compose_cmd"]
+
+        old, mine = "/usr/bin/env bash ~/.claude/sl.sh", "node ~/mine.js"
+        with windows():
+            first = install.our_command(PY, ENTRY, old, "bash")
+            self.assertIn(winshell.COMPOSE_B64, first)
+            for cmd, want in ((first + " --compose '%s'" % mine, mine),  # the user's, added after
+                              (FWD + " --compose '%s' " % mine + first.split(" statusline ")[1], old),
+                              (first + " --compose", None),  # a last flag with nothing after it composes nothing
+                              (first + " --now x", None)):  # nor does a statusline that fails to read its flags
+                with self.subTest(cmd=cmd):
+                    try:
+                        runs = running(cmd)
+                    except ValueError:
+                        runs = None  # ctempo statusline prints its bare line: no composed command runs
+                    self.assertEqual((install.compose_of(cmd), runs), (want, want))
+                    repin, _ = install.plan_statusline({"type": "command", "command": cmd}, PY_SPACE, ENTRY,
+                                                       shell="bash")
+                    self.assertEqual((install.compose_of(repin["command"]), running(repin["command"])), (want, want))
+        with windows(False):
+            posix = install.our_command("/usr/bin/python3", "/x/bin/ctempo", old) + " --compose '%s'" % mine
+            self.assertEqual((install.compose_of(posix), running(posix)), (mine, mine))
+            repin, _ = install.plan_statusline({"type": "command", "command": posix}, "/opt/py/bin/python3",
+                                               "/x/bin/ctempo")
+            self.assertEqual(install.split_command(repin["command"])[4:], ["statusline", "--compose", mine])
+
     def test_8dot3_short_paths_when_they_need_no_quotes(self):
         # Review 15 (journey#22): the folders' short names make a spaced path bare, so the
         # command reads the same in both shells; one that still needs quotes is not used.
@@ -2552,6 +2689,9 @@ class WindowsReadme(unittest.TestCase):
                 self.assertEqual(config.windows_home(value), want, value)
             with self.assertRaises(config.HomeError):
                 config.windows_home("/srv/ctempo")
+            self.assertIn("`C:x`", sec)  # refused by the CLI too since review 15 verify
+            with self.assertRaises(config.HomeError):
+                config.windows_home("C:x")
 
     def test_its_commands_run_in_windows_powershell(self):
         # Windows PowerShell 5.1 has no &&, and reads an unquoted comma as a list.

@@ -15,18 +15,19 @@ a temporary folder for every step: the real ones are never read or written.
    statusLine of the user's to compose with, in plain form and, where a
    shell would change it on the way to Python, encoded; ctempo and its
    interpreter in folders with a space, where Windows may use their 8.3
-   short paths): `python bin/ctempo install --apply --settings
-   <tmp>/settings.json --no-bootstrap --no-mod`, then the statusLine command
-   is read back and a statusLine payload with rate limits is piped into it
-   through each shell Claude Code may use on this OS, with COLUMNS set
-   (Windows: Git Bash's `bash.exe -c`, and pwsh and powershell.exe with
-   -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command; elsewhere
-   `/bin/sh -c`). Each must exit 0 and print the ctempo line with its UTF-8
-   intact. A command that reads the same in every shell must work in every
-   one; one written for a single shell (a quoted interpreter on Windows), in
-   that shell, which must be the one Claude Code would use. Then `ctempo
-   uninstall --apply`, after which settings.json must be byte for byte what
-   it was.
+   short paths; the interpreter is a copy of this Python installation on
+   Windows, a venv elsewhere): `python bin/ctempo install --apply
+   --settings <tmp>/settings.json --no-bootstrap --no-mod`, then the
+   statusLine command is read back and a statusLine payload with rate
+   limits is piped into it through each shell Claude Code may use on this
+   OS, with COLUMNS set (Windows: Git Bash's `bash.exe -c`, and pwsh and
+   powershell.exe with -NoProfile -NonInteractive -ExecutionPolicy Bypass
+   -Command; elsewhere `/bin/sh -c`). Each must exit 0 and print the ctempo
+   line with its UTF-8 intact. A command that reads the same in every shell
+   must work in every one; one written for a single shell (a quoted
+   interpreter on Windows), in that shell, which must be the one Claude
+   Code would use. Then `ctempo uninstall --apply`, after which
+   settings.json must be byte for byte what it was.
 3. Which forms of this repo's path `claude plugin marketplace add` accepts
    (absolute; with forward slashes on Windows; ./ with the repo as the
    working directory), each in its own temporary config, and whether
@@ -35,18 +36,20 @@ a temporary folder for every step: the real ones are never read or written.
 4. Windows: the launchers `install --bin-dir` writes, with that folder on
    PATH: ctempo.cmd from `cmd /d /c`, pwsh and powershell.exe, and the sh
    ctempo beside it from Git Bash (`bash -lc`) run --version, check (exit
-   1), an install that repins to another interpreter and an uninstall, which
-   rewrite and delete the launcher while it runs. Each must exit with
-   ctempo's code, and cmd.exe must not say "The batch file cannot be found."
-   or "is not recognized".
+   1), an install that repins to this interpreter by a path of another
+   length and an uninstall, which rewrite and delete the launcher while it
+   runs. Each must exit with ctempo's code, and cmd.exe must not say "The
+   batch file cannot be found." or "is not recognized".
 5. A read-only settings.json (attrib +R on Windows): install and uninstall
    go through, and it comes back byte for byte, still read-only.
 6. Windows: a CTEMPO_HOME rooted with a slash and no drive (/srv/ctempo-ci)
    in the settings env. What Git Bash hands python.exe for it is reported
    only; `install --apply` must refuse it up front ("has no drive", exit 1),
    with settings.json byte for byte what it was and no ctempo home made.
+7. Windows: `install --python` with a venv's python.exe pins the venv's
+   base interpreter, and its report names the venv.
 
-Exit 1 when a check in 1, 2, 4, 5 or 6 fails.
+Exit 1 when a check in 1, 2, 4, 5, 6 or 7 fails.
 """
 
 import argparse
@@ -294,11 +297,54 @@ def scenario(name, tmp, before, entry, python=None, extra=None):
     return env
 
 
+def base_python():
+    """This interpreter's base python.exe: itself, unless it runs in a venv."""
+    return getattr(sys, "_base_executable", None) or sys.executable
+
+
+# Folders of a Python installation that ctempo never loads, left out of base_copy.
+NOT_COPIED = {"doc", "include", "libs", "tcl", "tools", "scripts"}
+
+
+def base_copy(dest):
+    """Windows: this Python installation (sys.base_prefix) copied to dest, and its python.exe
+    there, else None after a failure. A python.org installation runs from any folder: python.exe
+    finds the standard library by Lib\\os.py beside it. A venv will not do here, since install
+    pins a venv's base interpreter on Windows. Left out: what ctempo never loads (site-packages,
+    the docs, headers and import libraries, Tcl/Tk, Tools, Scripts, the test suites, __pycache__)."""
+    top, lib = (os.path.normcase(p) for p in (sys.base_prefix, os.path.join(sys.base_prefix, "Lib")))
+
+    def skip(folder, names):
+        here = os.path.normcase(folder)
+        return [n for n in names if n.lower() in ("test", "tests", "idle_test", "__pycache__")
+                or (here == top and n.lower() in NOT_COPIED) or (here == lib and n.lower() == "site-packages")]
+
+    python = os.path.join(dest, "python.exe")
+    try:
+        t = time.perf_counter()
+        shutil.copytree(sys.base_prefix, dest, ignore=skip)
+        p = subprocess.run([python, "-I", "-S", "-c", "import sqlite3, sys; print(sys.prefix)"], capture_output=True,
+                           timeout=120)
+        out = (p.stdout + p.stderr).decode("utf-8", "replace").strip()
+        secs = time.perf_counter() - t
+        print("  (%s copied to %s in %.1f s; its sys.prefix: %s)" % (sys.base_prefix, dest, secs, out))
+        if p.returncode == 0:
+            return python
+        fail("the copy of this Python installation in %s does not run: %s" % (dest, out))
+    except (OSError, shutil.Error, subprocess.SubprocessError) as e:
+        fail("could not copy this Python installation to %s: %r" % (dest, e))
+    return None
+
+
 def spaced_copy(base):
-    """ctempo copied into base (a folder with a space), and a venv interpreter there (None if no venv)."""
+    """ctempo copied into base (a folder with a space), and an interpreter there (None if none):
+    on Windows a copy of this Python installation (base_copy), elsewhere a venv, which macOS and
+    Linux pin as given."""
     for part in ("bin", "ctempo"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(base, "repo", part),
                         ignore=shutil.ignore_patterns("__pycache__"))
+    if WINDOWS:
+        return os.path.join(base, "repo", "bin", "ctempo"), base_copy(os.path.join(base, "python"))
     venv = os.path.join(base, "venv")
     p = subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], capture_output=True, timeout=300)
     python = os.path.join(venv, "Scripts", "python.exe") if WINDOWS else os.path.join(venv, "bin", "python")
@@ -428,16 +474,11 @@ def short_paths(python, entry):
         ROWS.append(("8.3 short path", what, "used" if used else "not used"))
 
 
-def other_python(tmp):
-    """An interpreter whose path has another length than this one's: a venv's, else this one
-    through a dotted path, so a repin through a launcher rewrites it with a line of another length."""
-    venv = os.path.join(tmp, "venv-for-a-longer-path")
-    p = subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], capture_output=True, timeout=300)
-    python = os.path.join(venv, "Scripts", "python.exe") if WINDOWS else os.path.join(venv, "bin", "python")
-    if p.returncode == 0 and os.path.exists(python):
-        return python
-    print("  (no venv, so this interpreter by a longer path: %s)" % p.stderr.decode("utf-8", "replace").strip())
-    folder, name = os.path.split(sys.executable)
+def other_python():
+    """This interpreter by a path of another length, with dotted folders, which install pins as
+    given (it is the same file), so a repin through a launcher rewrites it with a line of another
+    length. Not a venv's python.exe: install pins its base interpreter on Windows, this one."""
+    folder, name = os.path.split(base_python())
     return os.path.join(folder, *["."] * 8 + [name])
 
 
@@ -458,7 +499,7 @@ def launchers(tmp):
     settings = os.path.join(tmp, "settings.json")
     before = b'{\n  "theme": "dark"\n}\n'
     entry = os.path.join(ROOT, "bin", "ctempo")
-    other = other_python(tmp)
+    other = other_python()
     print("  interpreters: %s (%d characters), then %s (%d)" % (sys.executable, len(sys.executable), other, len(other)))
     cmd_exe = os.environ.get("ComSpec") or r"C:\Windows\System32\cmd.exe"
     callers = [("cmd", "ctempo.cmd", lambda words: '"%s" /d /c %s' % (cmd_exe, subprocess.list2cmdline(words)))]
@@ -617,6 +658,36 @@ def drive_less_home(tmp, entry):
         fail("install --apply with CTEMPO_HOME=/srv/ctempo-ci in the settings env: not refused up front")
 
 
+def venv_pin(tmp):
+    """Windows: `install --python` with a venv's python.exe pins the venv's base interpreter. That
+    python.exe is a launcher that starts the base one as a child process, which then sees the
+    launcher as its parent instead of the shell (winshell.parent_shell), on every render."""
+    print("\n== A venv's python.exe: install pins its base interpreter")
+    if not WINDOWS:
+        print("  (Windows only: macOS and Linux pin a venv's interpreter as given)")
+        return
+    venv = os.path.join(tmp, "venv")
+    p = subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], capture_output=True, timeout=300)
+    python = os.path.join(venv, "Scripts", "python.exe")
+    if p.returncode != 0 or not os.path.exists(python):
+        print("  (no venv, not checked: %s)" % p.stderr.decode("utf-8", "replace").strip())
+        ROWS.append(("venv pin", "install", "not checked (no venv)"))
+        return
+    from ctempo import install
+
+    pin, report = install.choose_python(python)
+    note = report[0][5] if report else ""
+    print("  install.choose_python(%s) -> %s (%s); base interpreter: %s" % (python, pin, note, base_python()))
+    try:
+        ok = bool(pin) and os.path.samefile(pin, base_python()) and note == "via %s" % python
+    except OSError:
+        ok = False
+    ROWS.append(("venv pin", "install", "base interpreter" if ok else "FAILED: %s" % pin))
+    if not ok:
+        fail("install --python %s pins %s, not the base interpreter %s with a note naming the venv (%r)"
+             % (python, pin, base_python(), note))
+
+
 def report(tmp):
     print("\n== The statusLine shell and the installer's interpreter report")
     env = sandbox(tmp)
@@ -716,6 +787,7 @@ def main(argv):
         launchers(os.path.join(tmp, "launchers"))
         read_only(os.path.join(tmp, "read-only"))
         drive_less_home(os.path.join(tmp, "nodrive"), os.path.join(ROOT, "bin", "ctempo"))
+        venv_pin(os.path.join(tmp, "venv-pin"))
         if not args.no_marketplace:
             marketplace(os.path.join(tmp, "marketplace"))
     finally:
