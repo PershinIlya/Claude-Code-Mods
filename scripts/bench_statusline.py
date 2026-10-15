@@ -5,6 +5,8 @@ render, payload on stdin, against a database with weeks of history.
     python3 scripts/bench_statusline.py [--runs 50] [--python /usr/bin/python3]
                                         [--home DIR]   # default: a seeded temp home
 
+--home DIR records the bench's synthetic readings in DIR: give it a copy.
+
 Prints p50 / p95 / max wall time in milliseconds for the interpreter's start
 alone, a render that writes nothing (--no-record), and a render that records a
 fresh reading (the budget: p95 under 100 ms); then, in this process, where a
@@ -69,6 +71,9 @@ def seed(home, now, days=45):
     return n, rows, five_reset, five_used, week_reset, week_used
 
 
+STEP = 0.1  # the 5-hour level a recording render adds: a fresh reading each time
+
+
 def pct(times, q):
     times = sorted(times)
     return times[min(len(times) - 1, int(round(q * (len(times) - 1))))]
@@ -123,7 +128,8 @@ def phases(payload, runs):
     for label, ms in sorted(spent.items(), key=lambda kv: -sum(kv[1])):
         report(label, ms)
     # Closing the last connection checkpoints the WAL into the database and deletes it,
-    # which costs most on Windows: the same renders with the store set up otherwise.
+    # which costs most on Windows: the same renders with the store set up otherwise (on
+    # Windows with Python 3.12+ the store already skips that checkpoint: D-05).
     import sqlite3
 
     init = store.Store.__init__
@@ -150,7 +156,7 @@ def renders(payload, runs):
     total, saved = [], (sys.stdin, sys.stdout)
     try:
         for _ in range(runs):
-            payload["rate_limits"]["five_hour"]["used_percentage"] += 0.1
+            payload["rate_limits"]["five_hour"]["used_percentage"] += STEP
             sys.stdin, sys.stdout = _Pipe(json.dumps(payload).encode()), _Pipe()
             t = time.perf_counter()
             statusline.main([])
@@ -161,6 +167,10 @@ def renders(payload, runs):
 
 
 def main():
+    try:  # a pipe or a file on Windows gets the ANSI code page, which has no ▲ or →
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=50)
     ap.add_argument("--python", default=sys.executable)
@@ -183,6 +193,21 @@ def main():
         payload = {"session_id": "bench", "rate_limits": {
             "five_hour": {"used_percentage": round(fu, 1), "resets_at": int(fr)},
             "seven_day": {"used_percentage": round(wu, 1), "resets_at": int(wr)}}}
+    # The in-process renders (phases) read CTEMPO_HOME from this process too.
+    os.environ["CTEMPO_HOME"] = home
+    try:
+        run_all(a, home, payload)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_all(a, home, payload):
+    global STEP
+    # Up to 4 series of recording renders: stay below 100%, where a reading stops changing.
+    five = payload["rate_limits"]["five_hour"]
+    five["used_percentage"] = min(five["used_percentage"], 40.0)
+    STEP = min(0.1, 55.0 / (4 * max(a.runs, 1)))
     env = dict(os.environ, CTEMPO_HOME=home)
     flags = winshell.python_flags()  # as installed
     argv = [a.python] + flags + [os.path.join(ROOT, "bin", "ctempo"), "statusline"]
@@ -191,7 +216,7 @@ def main():
         times, out = [], b""
         for i in range(a.runs):
             if fresh:
-                payload["rate_limits"]["five_hour"]["used_percentage"] += 0.1  # a fresh reading each run
+                payload["rate_limits"]["five_hour"]["used_percentage"] += STEP  # a fresh reading each run
             t = time.perf_counter()
             p = subprocess.run(cmd, input=json.dumps(payload).encode(), capture_output=True, env=env)
             times.append((time.perf_counter() - t) * 1000)
@@ -222,8 +247,6 @@ def main():
     print("slowest imports (cumulative):")
     for us, name in sorted(rows, reverse=True)[:12]:
         print("  %7.1f ms  %s" % (us / 1000.0, name))
-    if tmp:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

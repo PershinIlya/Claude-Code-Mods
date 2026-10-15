@@ -277,8 +277,10 @@ marketplace (you ran them yourself), it completes. Your history stays in
 
 ## Configuration
 
-`~/.claude-tempo/config.json` (written with defaults by install; any key you
-leave out keeps its default):
+`~/.claude-tempo/config.json` (written with defaults by the first install, and
+kept as it is after that: a key you leave out takes the default of the version
+you run, one in the file keeps its value, so delete a key to get a newer
+default):
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -338,7 +340,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 433 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 435 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 45 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
