@@ -5,10 +5,14 @@ render, payload on stdin, against a database with weeks of history.
     python3 scripts/bench_statusline.py [--runs 50] [--python /usr/bin/python3]
                                         [--home DIR]   # default: a seeded temp home
 
-Prints p50 / p95 / max wall time in milliseconds.
+Prints p50 / p95 / max wall time in milliseconds for the interpreter's start
+alone, a render that writes nothing (--no-record), and a render that records a
+fresh reading (the budget: p95 under 100 ms); then, in this process, where a
+render's time goes.
 """
 
 import argparse
+import io
 import json
 import os
 import random
@@ -65,6 +69,71 @@ def seed(home, now, days=45):
     return n, rows, five_reset, five_used, week_reset, week_used
 
 
+def pct(times, q):
+    times = sorted(times)
+    return times[min(len(times) - 1, int(round(q * (len(times) - 1))))]
+
+
+def report(label, times):
+    print("%-28s p50 %6.1f ms  p95 %6.1f ms  max %6.1f ms  (%d)" % (
+        label, pct(times, 0.5), pct(times, 0.95), max(times), len(times)))
+
+
+class _Pipe:
+    """stdin or stdout of an in-process render: bytes in .buffer, never a tty."""
+
+    def __init__(self, data=b""):
+        self.buffer = io.BytesIO(data)
+
+    def isatty(self):
+        return False
+
+    def write(self, s):
+        self.buffer.write(s.encode("utf-8"))
+
+    def flush(self):
+        pass
+
+
+def phases(payload, runs):
+    """Where a render's time goes, in this process (no interpreter start): each
+    phase over `runs` renders that each record a fresh reading."""
+    from ctempo import ingest, pace, profile, statusline, store, weekly
+
+    spent = {}
+
+    def timed(owner, name, label):
+        f = getattr(owner, name)
+
+        def run(*a, **kw):
+            t = time.perf_counter()
+            try:
+                return f(*a, **kw)
+            finally:
+                spent.setdefault(label, []).append((time.perf_counter() - t) * 1000)
+
+        setattr(owner, name, run)
+
+    for owner, name, label in ((store.Store, "__init__", "  open the database"), (ingest, "record", "  record the reading"),
+                               (profile, "load", "  load the profile"), (statusline, "maybe_learn", "  learn"),
+                               (pace, "five_hour", "  5-hour math"), (weekly, "weekly", "  weekly math"),
+                               (statusline, "note_render", "  note the line"), (store.Store, "close", "  close")):
+        timed(owner, name, label)
+    total, saved = [], (sys.stdin, sys.stdout)
+    try:
+        for _ in range(runs):
+            payload["rate_limits"]["five_hour"]["used_percentage"] += 0.1
+            sys.stdin, sys.stdout = _Pipe(json.dumps(payload).encode()), _Pipe()
+            t = time.perf_counter()
+            statusline.main([])
+            total.append((time.perf_counter() - t) * 1000)
+    finally:
+        sys.stdin, sys.stdout = saved
+    report("render in this process", total)
+    for label, ms in sorted(spent.items(), key=lambda kv: -sum(kv[1])):
+        report(label, ms)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=50)
@@ -89,25 +158,44 @@ def main():
             "five_hour": {"used_percentage": round(fu, 1), "resets_at": int(fr)},
             "seven_day": {"used_percentage": round(wu, 1), "resets_at": int(wr)}}}
     env = dict(os.environ, CTEMPO_HOME=home)
-    argv = [a.python] + winshell.python_flags() + [os.path.join(ROOT, "bin", "ctempo"), "statusline"]  # as installed
-    times, out = [], b""
-    for i in range(a.runs):
-        payload["rate_limits"]["five_hour"]["used_percentage"] += 0.1  # a fresh reading each run
-        data = json.dumps(payload).encode()
-        t = time.perf_counter()
-        p = subprocess.run(argv, input=data, capture_output=True, env=env)
-        times.append((time.perf_counter() - t) * 1000)
-        out = p.stdout
-        if p.returncode != 0:
-            print("run %d exited %d" % (i, p.returncode))
-    times.sort()
+    flags = winshell.python_flags()  # as installed
+    argv = [a.python] + flags + [os.path.join(ROOT, "bin", "ctempo"), "statusline"]
 
-    def pct(q):
-        return times[min(len(times) - 1, int(round(q * (len(times) - 1))))]
+    def series(cmd, fresh):
+        times, out = [], b""
+        for i in range(a.runs):
+            if fresh:
+                payload["rate_limits"]["five_hour"]["used_percentage"] += 0.1  # a fresh reading each run
+            t = time.perf_counter()
+            p = subprocess.run(cmd, input=json.dumps(payload).encode(), capture_output=True, env=env)
+            times.append((time.perf_counter() - t) * 1000)
+            out = p.stdout
+            if p.returncode != 0:
+                print("run %d of %s exited %d" % (i, cmd[-1], p.returncode))
+        return times, out
 
     print("python: %s" % a.python)
-    print("runs: %d  p50 %.1f ms  p95 %.1f ms  max %.1f ms" % (len(times), pct(0.5), pct(0.95), times[-1]))
+    report("interpreter start", series([a.python] + flags + ["-c", "pass"], False)[0])
+    imports = ("import sys; sys.path.insert(0, %r); import json, sqlite3; "
+               "from ctempo import config, ingest, pace, profile, render, statusline, store, weekly" % ROOT)
+    report("start and imports", series([a.python] + flags + ["-c", imports], False)[0])
+    report("render, no write", series(argv + ["--no-record"], False)[0])
+    times, out = series(argv, True)
+    report("render, a fresh reading", times)
+    print("runs: %d  p50 %.1f ms  p95 %.1f ms  max %.1f ms" % (len(times), pct(times, 0.5), pct(times, 0.95), max(times)))
     print("last line: %s" % out.decode("utf-8", "replace").strip())
+    phases(payload, a.runs)
+    # The slowest imports of one render (cumulative microseconds, -X importtime).
+    p = subprocess.run([a.python] + flags + ["-X", "importtime"] + argv[len(flags) + 1:], input=json.dumps(payload).encode(),
+                       capture_output=True, env=env)
+    rows = []
+    for line in p.stderr.decode("utf-8", "replace").splitlines():
+        parts = line.split("|")
+        if len(parts) == 3 and parts[1].strip().isdigit():
+            rows.append((int(parts[1]), parts[2].strip()))
+    print("slowest imports (cumulative):")
+    for us, name in sorted(rows, reverse=True)[:12]:
+        print("  %7.1f ms  %s" % (us / 1000.0, name))
     if tmp:
         shutil.rmtree(tmp, ignore_errors=True)
 
