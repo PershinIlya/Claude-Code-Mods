@@ -27,9 +27,12 @@ WINDOWS = os.name == "nt"
 # Bash, as Claude Code runs a statusLine there; without it they cannot.
 posix_shell = unittest.skipUnless(not WINDOWS or winshell.predict_shell()[0] == "bash",
                                   "needs Git Bash (the compose commands are POSIX shell)")
-# Git Bash and process startup are slower on Windows: a longer compose timeout
-# there keeps "it ended well before the timeout" measurable.
-QUICK_TIMEOUT_MS, QUICK_LIMIT = (5000, 3.5) if WINDOWS else (1500, 1.2)
+# A compose timeout well above a normal render (two process starts plus the
+# 0.5 s quiet window) keeps "it ended well before the timeout" measurable on a
+# loaded runner; Git Bash and process startup are slower on Windows. The
+# background jobs in these tests run 3 s, so a render that waited for them
+# still fails the limit.
+QUICK_TIMEOUT_MS, QUICK_LIMIT = (5000, 3.5) if WINDOWS else (3000, 2.5)
 
 
 def sh_path(path):
