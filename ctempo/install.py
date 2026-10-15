@@ -1141,7 +1141,7 @@ def install(args, out=print):
                             out("Removed launcher %s" % old)
                 else:
                     out("Skipped launcher: %s exists and is not ours" % lp)
-                    if not bin_dir and sh and os.path.exists(sh) and _is_launcher(sh):
+                    if sh and os.path.exists(sh) and _is_launcher(sh):  # with --bin-dir naming its folder too
                         _write_sh_launcher(sh, python, entry, state, out)  # ours, beside the user's ctempo.cmd
             except OSError as e:
                 out("Skipped launcher: %s" % e)

@@ -737,8 +737,16 @@ def _doctor_compose(add, cmd):
     from . import install, winshell
 
     argv = install.split_command(cmd) if install.is_ours(cmd) else None
-    i = argv.index("--compose") if argv and "--compose" in argv[:-1] else None
-    if i is not None and winshell.needs_encoding(argv[i + 1]):
+    plain = None  # the value ctempo statusline composes with, when a plain --compose gave it
+    if argv and "statusline" in argv:
+        it = iter(argv[argv.index("statusline") + 1:])
+        for a in it:  # the last flag wins, as in statusline.parse_args
+            if a in ("--compose", "--compose-b64"):
+                value = next(it, None)
+                plain = value if a == "--compose" else None
+            elif a in ("--source", "--format", "--now"):
+                next(it, None)
+    if plain is not None and winshell.needs_encoding(plain):
         add("warn", "your previous statusLine can reach ctempo changed in Windows PowerShell 5.1 or Git Bash",
             "run `ctempo install --apply` to store it encoded")
 

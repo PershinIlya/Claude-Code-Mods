@@ -2158,6 +2158,11 @@ class WindowsInstall(Sandbox):
         self.assertIn("Skipped launcher: %s exists and is not ours" % os.path.join(b, "ctempo.cmd"), out)
         self.assertEqual(install.read_text(sh_b), install.sh_launcher_text(other, ENTRY))
         self.assertEqual(install.read_text(os.path.join(b, "ctempo.cmd")), "@echo mine\r\n")
+        # Also when --bin-dir names that folder again (Review 15 verify: it was left on the old pin).
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=PY, bin_dir=b))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(install.read_text(sh_b), install.sh_launcher_text(PY, ENTRY))
+        self.assertEqual(install.read_text(os.path.join(b, "ctempo.cmd")), "@echo mine\r\n")
         # A file of the user's in place of the sh launcher is theirs: never written over, nor remembered.
         os.remove(os.path.join(b, "ctempo.cmd"))
         put(sh_b, "#!/bin/sh\necho mine\n")
