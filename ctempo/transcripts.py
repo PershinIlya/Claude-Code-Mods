@@ -77,15 +77,40 @@ def _message(line):
     return key, ts, cost_weight(msg.get("usage"))
 
 
+def long_root(root):
+    """`root` to walk from: on Windows in the extended-length form
+    (\\\\?\\C:\\..., \\\\?\\UNC\\server\\share\\...), which every path below it
+    inherits, so a transcript deeper than 260 characters is still read where
+    long paths are not enabled (the default). Claude Code writes them deeper:
+    a long project folder name, then <session>\\subagents\\agent-<id>.jsonl."""
+    if not config.IS_WINDOWS:
+        return root
+    import ntpath
+
+    if root.startswith(("\\\\?\\", "\\\\.\\")):
+        return root
+    root = ntpath.abspath(root)  # absolute, backslashes, no `..`: the form \\?\ needs
+    return "\\\\?\\UNC\\" + root[2:] if root.startswith("\\\\") else "\\\\?\\" + root
+
+
 def scan(root, since, now):
     """Cost weight per message, deduplicated. Returns (events, stats).
 
     events: list of (ts, weight). A message streamed over several lines
-    shares one message id; the largest usage seen for it wins.
+    shares one message id; the largest usage seen for it wins. A file or
+    folder that cannot be opened is counted in files_unreadable.
     """
-    stats = {"files": 0, "files_skipped_old": 0, "lines": 0, "bad_lines": 0, "messages": 0, "duplicates": 0}
+    stats = {"files": 0, "files_skipped_old": 0, "files_unreadable": 0, "lines": 0, "bad_lines": 0, "messages": 0,
+             "duplicates": 0}
     best = {}
-    for dirpath, dirnames, filenames in os.walk(root):
+    top = long_root(root)
+    if not os.path.isdir(top):  # no transcripts folder: nothing to read, nothing unreadable
+        return [], stats
+
+    def unreadable(_error):
+        stats["files_unreadable"] += 1
+
+    for dirpath, dirnames, filenames in os.walk(top, onerror=unreadable):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for fn in filenames:
             if not fn.endswith(".jsonl") or fn.startswith("."):
@@ -96,6 +121,7 @@ def scan(root, since, now):
                 # named *.jsonl must not hang the scan.
                 fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
             except OSError:
+                stats["files_unreadable"] += 1
                 continue
             try:
                 st = os.fstat(fd)
@@ -109,6 +135,7 @@ def scan(root, since, now):
                 f = os.fdopen(fd, "rb")
             except OSError:
                 os.close(fd)
+                stats["files_unreadable"] += 1
                 continue
             stats["files"] += 1
             with f:

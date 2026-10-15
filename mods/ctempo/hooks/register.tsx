@@ -98,10 +98,14 @@ export function fromGitBash(path: string): string {
 // `~` is the user's home, and a relative path is taken from it, never from the
 // session's cwd (Claude Code copies settings.json env values as written). On
 // Windows `~\` works like `~/`, Git Bash's `/c/Users/x` is `C:/Users/x`,
-// `C:\`, `C:/` and `\\server\share` are absolute, any other rooted path with
-// no drive (`\x`, `/x`) takes the drive of the user's home, as Python's
-// ntpath.join does, and `C:x` (relative to that drive's current folder) is
-// refused.
+// `C:\`, `C:/` and `\\server\share` are absolute, a path rooted with a
+// backslash and no drive (`\x`) takes the drive of the user's home, as
+// Python's ntpath.join does, and `C:x` (relative to that drive's current
+// folder) is refused. So is any other path rooted with a slash and no drive
+// (`/x`): Git Bash, which runs the statusLine, rewrites it to a folder under
+// its own install before Python sees it, so the band and the line would use
+// different folders. The CLI refuses it with the same message
+// (config.windows_home).
 export function resolveHome(value: string | undefined, user: UserHome): string {
   const { windows, home } = user
   const given = windows && value ? fromGitBash(value) : value
@@ -109,7 +113,13 @@ export function resolveHome(value: string | undefined, user: UserHome): string {
   if (windows && given && /^[A-Za-z]:/.test(given)) {
     throw new Error(`CTEMPO_HOME ${given} is relative to a drive's current folder; use an absolute path`)
   }
-  if (windows && given && /^[\\/]/.test(given)) return `${driveOf(home)}${given}`
+  if (windows && given?.startsWith('/')) {
+    throw new Error(
+      `CTEMPO_HOME ${given} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
+        `Write it with a drive, e.g. C:${given}, or as ~/...`,
+    )
+  }
+  if (windows && given && /^\\/.test(given)) return `${driveOf(home)}${given}`
   const tilde = windows ? /^~(?:[\\/]|$)/ : /^~(?:\/|$)/
   if (given?.startsWith('~') && !tilde.test(given)) {
     const forms = windows ? '~, ~/ and ~\\' : '~ and ~/'
@@ -170,7 +180,18 @@ async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] |
     { stdin: JSON.stringify(payload), timeoutMs: RUN_TIMEOUT_MS, env: { CTEMPO_HOME: rt.home } },
   )
   if (result.exitCode !== 0 || result.stdout.trim() === '') {
-    const why = result.stderr.trim().split('\n').pop()
+    // On Windows a missing interpreter does not fail to start: the spawn falls
+    // back to cmd.exe, which says only "...operable program or batch file."
+    // (exit 9009) or "The system cannot find the path specified.". Asked only
+    // after a failed run, so a Store alias exists() cannot see is not
+    // misreported while it works.
+    if (result.exitCode !== 0 && !(await $.fs.exists(rt.python).catch(() => true))) {
+      runtime = null // read runtime.json again on the next refresh, after a reinstall
+      throw new Error(`Python not found at ${rt.python}: run \`ctempo install --apply\``)
+    }
+    const lines = result.stderr.trim().split(/\r?\n/)
+    // cmd.exe's own message spans two lines.
+    const why = result.exitCode === 9009 ? lines.join(' ') : lines.pop()
     throw new Error(why || `ctempo exited ${result.exitCode}`)
   }
   const parsed = JSON.parse(result.stdout) as Partial<View>

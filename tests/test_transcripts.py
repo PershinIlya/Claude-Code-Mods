@@ -9,8 +9,9 @@ import time
 import unittest
 from contextlib import redirect_stdout
 from types import SimpleNamespace
+from unittest import mock
 
-from ctempo import commands, profile, transcripts
+from ctempo import commands, config, profile, transcripts
 
 from .helpers import MON, H, D, TempHome
 
@@ -150,6 +151,92 @@ class ShortHistory(unittest.TestCase):
         prior, meta = transcripts.build_prior(events, now - 45 * D, now, 14)
         self.assertLessEqual(meta["trust"], 0.5)  # two active days of four
         self.assertEqual(meta["active_days"], 3)
+
+
+class LongPaths(TempHome):
+    """Review 15: Windows without long paths enabled (the default) cannot open
+    a path past 260 characters, and Claude Code writes transcripts deeper (a
+    long project folder name, then <session>\\subagents\\agent-<id>.jsonl).
+    The scan skipped them without a word. It walks from an extended-length
+    root now, and counts what it still cannot open."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = tempfile.mkdtemp(prefix="ctempo-long-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+
+    def test_windows_walks_from_an_extended_length_root(self):
+        with mock.patch.object(config, "IS_WINDOWS", True):
+            for given, want in (("C:\\Users\\me\\.claude\\projects", "\\\\?\\C:\\Users\\me\\.claude\\projects"),
+                                ("C:/Users/me/.claude/projects/", "\\\\?\\C:\\Users\\me\\.claude\\projects"),
+                                ("C:\\Users\\me\\x\\..\\projects", "\\\\?\\C:\\Users\\me\\projects"),
+                                ("\\\\server\\share\\me\\projects", "\\\\?\\UNC\\server\\share\\me\\projects"),
+                                ("//server/share/projects", "\\\\?\\UNC\\server\\share\\projects"),
+                                ("\\\\?\\C:\\projects", "\\\\?\\C:\\projects"),
+                                ("\\\\?\\UNC\\server\\share\\projects", "\\\\?\\UNC\\server\\share\\projects"),
+                                ("\\\\.\\C:\\projects", "\\\\.\\C:\\projects")):
+                self.assertEqual(transcripts.long_root(given), want, given)
+            walked = []
+
+            def walk(top, onerror=None):
+                walked.append(top)
+                return iter(())
+
+            with mock.patch.object(os.path, "isdir", lambda p: True), mock.patch.object(os, "walk", walk):
+                transcripts.scan("C:\\Users\\me\\.claude\\projects", MON, MON + D)
+            self.assertEqual(walked, ["\\\\?\\C:\\Users\\me\\.claude\\projects"])
+        with mock.patch.object(config, "IS_WINDOWS", False):  # macOS and Linux: as given
+            self.assertEqual(transcripts.long_root("/home/me/.claude/projects"), "/home/me/.claude/projects")
+
+    def write(self, *parts):
+        path = os.path.join(self.root, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(assistant(MON + 10 * H, "msg_" + parts[-1]) + "\n")
+        return path
+
+    def test_what_cannot_be_opened_is_counted_and_reported(self):
+        self.write("-proj", "sess.jsonl")
+        held = self.write("-proj", "held.jsonl")
+        deep = os.path.dirname(self.write("-proj", "sess", "subagents", "agent-1.jsonl"))
+        real_open, real_scandir = os.open, os.scandir
+
+        def fake_open(path, *a, **kw):
+            if os.fspath(path) == held:  # in use by another program, say
+                raise PermissionError(13, "Permission denied", path)
+            return real_open(path, *a, **kw)
+
+        def fake_scandir(path="."):
+            if os.fspath(path) == deep:  # past MAX_PATH: ERROR_PATH_NOT_FOUND
+                raise FileNotFoundError(3, "The system cannot find the path specified", path)
+            return real_scandir(path)
+
+        out = io.StringIO()
+        with mock.patch.object(os, "open", fake_open), mock.patch.object(os, "scandir", fake_scandir):
+            events, stats = transcripts.scan(self.root, MON, MON + D)
+            self.assertEqual((stats["files"], stats["files_unreadable"], stats["messages"]), (1, 2, 1))
+            with redirect_stdout(out), mock.patch.object(time, "time", lambda: MON + D):
+                commands.cmd_bootstrap(SimpleNamespace(days=2, root=self.root, dry_run=True), self.cfg)
+        self.assertIn("Could not open 2 transcript files or folders: skipped.", out.getvalue())
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(time, "time", lambda: MON + D):
+            commands.cmd_bootstrap(SimpleNamespace(days=2, root=self.root, dry_run=True), self.cfg)
+        self.assertNotIn("Could not open", out.getvalue())
+        self.assertEqual(transcripts.scan(os.path.join(self.root, "missing"), MON, MON + D)[1]["files_unreadable"], 0)
+
+    @unittest.skipUnless(os.name == "nt", "Windows paths")
+    def test_on_windows_a_transcript_past_260_characters_is_read(self):
+        deep = ["-C-Users-me-" + "x" * 200, "sess", "subagents"]
+        path = "\\\\?\\" + os.path.join(os.path.abspath(self.root), *deep, "agent-1.jsonl")
+        self.assertGreater(len(path), 4 + 260)
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write(assistant(MON + 10 * H, "msg_deep") + "\n")
+        self.write("-short", "sess.jsonl")
+        events, stats = transcripts.scan(self.root, MON, MON + D)
+        self.assertEqual((stats["files"], stats["messages"], stats["files_unreadable"]), (2, 2, 0))
+        prior, meta, _ = transcripts.bootstrap(self.st, self.cfg, now=MON + D, days=2, root=self.root, dry_run=True)
+        self.assertEqual(meta["root"], self.root)  # as given, not the \\?\ form it walked
 
 
 if __name__ == "__main__":
