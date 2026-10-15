@@ -1553,9 +1553,11 @@ PS51 = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 def windows(on=True):
     """config.IS_WINDOWS, the one platform flag, set (or cleared). Off Windows the data folder
     stays the sandbox's CTEMPO_HOME: Windows rules would read a POSIX temp path as one
-    without a drive (and a test without a sandbox fails here rather than reach ~)."""
+    without a drive (and a test without a sandbox fails here rather than reach ~). No 8.3
+    short paths: the fake paths may exist on a real Windows (a test gives its own)."""
     with contextlib.ExitStack() as stack:
         stack.enter_context(mock.patch.object(config, "IS_WINDOWS", on))
+        stack.enter_context(mock.patch.object(winshell, "short_path", return_value=None))
         if on and os.name != "nt":
             stack.enter_context(mock.patch.object(config, "home", lambda: os.environ["CTEMPO_HOME"]))
         yield
@@ -1828,6 +1830,7 @@ class WindowsInstall(Sandbox):
 
     def setUp(self):
         super().setUp()
+        os.environ.pop("MSYSTEM", None)  # doctor in a Git Bash terminal says more; the Sandbox puts it back
         self.shell, self.shell_path = "bash", GIT_BASH
         win = windows()
         win.__enter__()
@@ -2073,6 +2076,185 @@ class WindowsFiles(Sandbox):
                 self.assertEqual(code, 124, se)
                 self.assertIn("timed out after", se)
                 self.assertLess(time.monotonic() - t, 4)  # killed, not waited for (the read gives up after 5 s)
+
+
+SHORT_PATH = winshell.short_path  # the real one, for tests that feed it their own 8.3 names
+
+
+class WindowsEncodedCompose(unittest.TestCase):
+    """Review 15 (shells#1, shells#2, installer#3, journey#20, runtime#7): on Windows a
+    composed command that Windows PowerShell 5.1 (a double quote, or whitespace and a final
+    backslash) or Git Bash's MSYS2 path conversion (a POSIX path in its first word) would
+    hand to python.exe changed goes as `--compose-b64 b<token>`; any other keeps the readable
+    `--compose <command>`. Every reader of the command sees it plain."""
+
+    CASES = (  # (the previous statusLine, written encoded)
+        ('powershell -NoProfile -File "C:/Users/John Smith/sl.ps1"', True),
+        ("/bin/bash ~/.claude/statusline.sh", True),
+        ("FOO=/x bash ~/s.sh", True),
+        ("node C:/x.js", False),
+        ("~/.claude/statusline.sh", False),
+        ("echo hi", False),
+        ("echo J\u00fcrgen \u2192", False),
+        ('printf "\u25b2 J\u00fcrgen"', True),
+        ("dir C:\\Users\\me\\", True),
+    )
+
+    def test_each_shell_hands_python_the_command_as_written(self):
+        from ctempo import statusline
+
+        with windows():
+            for compose, enc in self.CASES:
+                for shell in ("bash", "powershell"):
+                    with self.subTest(compose=compose, shell=shell):
+                        cmd = install.our_command(PY, ENTRY, compose, shell)
+                        tail = [winshell.COMPOSE_B64, winshell.encoded(compose)] if enc else ["--compose", compose]
+                        self.assertEqual(install.split_command(cmd)[7:], tail)
+                        self.assertTrue(winshell.reads_alike(cmd), cmd)
+                        self.assertTrue(install.is_ours(cmd))
+                        self.assertEqual(install.compose_of(cmd), compose)
+                        for sh in ("bash", "powershell"):
+                            words = winshell.words(cmd, sh)
+                            # No word that Windows PowerShell 5.1 or Git Bash would hand to python.exe changed.
+                            self.assertEqual([w for w in words if winshell.needs_encoding(w)], [], sh)
+                            self.assertEqual(statusline.parse_args(words[7:])["compose_cmd"], compose)
+
+    def test_macos_and_linux_never_encode(self):
+        with windows(False):
+            for compose, _ in self.CASES:
+                cmd = install.our_command("/usr/bin/python3", "/x/bin/ctempo", compose)
+                self.assertNotIn(winshell.COMPOSE_B64, cmd)
+                self.assertEqual(install.split_command(cmd)[4:], ["statusline", "--compose", compose])
+                self.assertEqual(install.compose_of(cmd), compose)
+            # One written on Windows and synced here reads the same.
+            cmd = "/usr/bin/python3 -I -S /x/bin/ctempo statusline --compose-b64 " + winshell.encoded('echo "x"')
+            self.assertEqual(install.compose_of(cmd), 'echo "x"')
+
+    def test_a_malformed_token_is_no_composed_command(self):
+        with windows():
+            for tail in (" --compose-b64 b!!", " --compose-b64", " --compose-b64 bZ", " --compose-b64 xYQ"):
+                self.assertIsNone(install.compose_of(FWD + tail), tail)
+
+    def test_a_repin_writes_an_older_plain_one_encoded_and_keeps_it(self):
+        old = "/bin/bash ~/.claude/statusline.sh"
+        with windows():
+            want, _ = install.plan_statusline({"type": "command", "command": old}, PY, ENTRY, shell="bash")
+            self.assertEqual(want["command"], FWD + " --compose-b64 " + winshell.encoded(old))
+            self.assertEqual(install.plan_statusline(want, PY, ENTRY, shell="powershell"),
+                             (None, "statusLine already runs ctempo"))
+            plain = dict(want, command=FWD + " --compose '%s'" % old)  # what an older install wrote
+            self.assertEqual(install.plan_statusline(plain, PY, ENTRY, shell="bash")[0], want)
+            dropped, note = install.plan_statusline(want, PY, ENTRY, replace=True, shell="bash")
+            self.assertEqual(dropped["command"], FWD)
+            self.assertIn("REPLACE", note)
+
+    def test_8dot3_short_paths_when_they_need_no_quotes(self):
+        # Review 15 (journey#22): the folders' short names make a spaced path bare, so the
+        # command reads the same in both shells; one that still needs quotes is not used.
+        shorts = {r"C:\Program Files\Python312": r"C:\PROGRA~1\PYTHON~1",
+                  r"C:\Users\me\My Repos\Claude-Code-Mods\bin": r"C:\Users\me\MYREPO~1\CLAUDE~1\bin"}
+        with windows():
+            with mock.patch.object(winshell, "short_path", lambda p: SHORT_PATH(p, shorts.get)):
+                cmd = install.our_command(PY_SPACE, ENTRY_SPACE, "echo hi", "powershell")
+                self.assertEqual(cmd, "C:/PROGRA~1/PYTHON~1/python.exe -I -S -X utf8 C:/Users/me/MYREPO~1/CLAUDE~1/bin/ctempo "
+                                      "statusline --compose 'echo hi'")
+                self.assertTrue(winshell.reads_alike(cmd))
+                self.assertTrue(install.is_ours(cmd))
+                self.assertEqual(install.our_command(PY, ENTRY, None, "bash"), FWD)  # a bare path stays as is
+            for short in (lambda d: d, lambda d: r"C:\A&B~1", lambda d: None):  # short names off, not bare, none
+                with mock.patch.object(winshell, "short_path", lambda p: SHORT_PATH(p, short)):
+                    self.assertEqual(install.our_command(PY_SPACE, ENTRY, None, "bash"),
+                                     "'C:/Program Files/Python312/python.exe' -I -S -X utf8 "
+                                     "C:/Users/me/Claude-Code-Mods/bin/ctempo statusline")
+
+
+class WindowsShellNotes(Sandbox):
+    """Review 15: what install says on Windows about the command it writes, and
+    uninstall after a composed command stored encoded."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("MSYSTEM", None)  # the Sandbox's patched environment puts it back
+        self.shell, self.shell_path = "bash", GIT_BASH
+        win = windows()
+        win.__enter__()
+        self.addCleanup(win.__exit__, None, None, None)
+        for p in (mock.patch.object(install, "entry_path", lambda: ENTRY),
+                  mock.patch.object(install, "choose_python", WindowsInstall.fake_choose),
+                  mock.patch.object(winshell, "predict_shell", lambda *a, **kw: (self.shell, self.shell_path))):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_a_composed_command_stored_encoded_is_said_and_comes_back(self):
+        for old, why in (('node "C:/Users/John Smith/sl.js"',
+                          "Windows PowerShell 5.1 would pass its double quotes (or final backslash) to Python changed"),
+                         ("/usr/bin/env bash ~/.claude/statusline.sh", "Git Bash would rewrite the POSIX path it starts with")):
+            with self.subTest(old=old):
+                self._reset()
+                before = self.write(dict(SETTINGS, statusLine={"type": "command", "command": old}))
+                rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(json.loads(self.read())["statusLine"]["command"],
+                                 FWD + " --compose-b64 " + winshell.encoded(old))
+                self.assertIn("note: your previous statusLine is stored base64-encoded after --compose-b64, since %s; "
+                              "`ctempo doctor` shows it decoded" % why, out)
+                self.assertIn("the command reads the same in Git Bash and PowerShell", out)
+                self.assertNotIn("warning", out)
+                rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+                self.assertIn("already runs ctempo", out)
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(self.read(), before)
+                # With install.json and the backups lost, the command inside it is still the original.
+                self.write(dict(SETTINGS, statusLine={"type": "command", "command": old}))
+                self.run_cmd(install.install, args(self.path, apply=True))
+                self._reset()
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(json.loads(self.read())["statusLine"]["command"], old)
+
+    def test_a_command_for_one_shell_says_when_to_reinstall(self):
+        # Review 15 (journey#22): installing or removing Git for Windows later changes the shell.
+        self.write(SETTINGS)
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))
+        self.assertIn("warning: this command runs only in Git Bash; after installing or removing Git for Windows, or "
+                      "setting CLAUDE_CODE_GIT_BASH_PATH, run `ctempo install --apply` again (`ctempo doctor` checks this)",
+                      out)
+        self.assertNotIn("Git Bash terminal", out)
+        self.shell, self.shell_path = "powershell", PS51
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))
+        self.assertIn("warning: this command runs only in PowerShell;", out)
+        # Review 15 (shells#0): in a Git Bash terminal, Git's own git comes first on PATH.
+        os.environ["MSYSTEM"] = "MINGW64"
+        rc, out = self.run_cmd(install.install, args(self.path, python=PY_SPACE))
+        self.assertIn("note: Claude Code started from this Git Bash terminal can pick another shell than when started "
+                      "from the Desktop app or PowerShell; run `ctempo doctor` from PowerShell to check", out)
+        # A command that reads the same in both shells needs neither.
+        self._reset()
+        self.write(SETTINGS)
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+        self.assertNotIn("runs only in", out)
+        self.assertNotIn("Git Bash terminal", out)
+
+    def test_short_paths_go_in_the_command_and_long_ones_in_runtime_json(self):
+        shorts = {r"C:\Program Files\Python312": r"C:\PROGRA~1\PYTHON~1",
+                  r"C:\Users\me\My Repos\Claude-Code-Mods\bin": r"C:\Users\me\MYREPO~1\CLAUDE~1\bin"}
+        before = self.write(SETTINGS)
+        with mock.patch.object(winshell, "short_path", lambda p: SHORT_PATH(p, shorts.get)), \
+                mock.patch.object(install, "entry_path", lambda: ENTRY_SPACE):
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(json.loads(self.read())["statusLine"]["command"],
+                             "C:/PROGRA~1/PYTHON~1/python.exe -I -S -X utf8 C:/Users/me/MYREPO~1/CLAUDE~1/bin/ctempo "
+                             "statusline")
+            self.assertIn("the command reads the same in Git Bash and PowerShell", out)
+            self.assertNotIn("warning", out)
+            with open(config.runtime_path(), encoding="utf-8") as f:
+                rt = json.load(f)
+            self.assertEqual((rt["python"], rt["entry"]), (PY_SPACE, ENTRY_SPACE))  # the mod runs argv, no shell
+            rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), before)
 
 
 if __name__ == "__main__":

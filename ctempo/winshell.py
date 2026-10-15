@@ -29,8 +29,12 @@ GIT_BASH = (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\b
 PS_PLACEHOLDERS = ("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA")
 # PowerShell reads each of these as a single quote, inside a quoted word too.
 PS_QUOTES = "'\u2018\u2019\u201a\u201b"
+ASCII_ALNUM = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
 # Characters that mean nothing to bash or PowerShell inside a word.
-BARE_ASCII = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:+=-")
+BARE_ASCII = ASCII_ALNUM | frozenset("_./:+=-")
+# ctempo statusline's flag for a composed command stored encoded (see encoded).
+COMPOSE_B64 = "--compose-b64"
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 
 def python_flags(windows=None):
@@ -157,12 +161,67 @@ def first_word(cmd):
     return "".join(out)
 
 
-def shell_argv(cmd, env):
+def process_image(pid):
+    """The full path of process `pid`'s executable (Windows), or None."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # its own handle: windll's is shared
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                               ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return None
+    try:
+        size = wintypes.DWORD(32768)
+        buf = ctypes.create_unicode_buffer(size.value)
+        return buf.value if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)) else None
+    finally:
+        k32.CloseHandle(h)
+
+
+def parent_shell(image=None, exists=os.path.exists):
+    """The shell that started this process: ("bash", path) for a bash.exe or
+    sh.exe, ("powershell", path) for pwsh.exe or powershell.exe, else None
+    (off Windows, on any error, or another parent such as a
+    CLAUDE_CODE_SHELL_PREFIX wrapper). Claude Code ran the statusLine there,
+    so the Composer runs the old command there too: inside Git Bash, whose
+    PATH puts its own git first, Claude Code's search (predict_shell) can end
+    elsewhere. Git Bash's bin\\bash.exe runs usr\\bin\\bash.exe, which is the
+    parent seen here; the bin one, which Claude Code runs, is returned when it
+    exists. `image` reads a pid's executable path (tests pass their own)."""
+    if not config.IS_WINDOWS:
+        return None
+    try:
+        path = (image or process_image)(os.getppid())
+        if not path:
+            return None
+        name = ntpath.basename(path).lower()
+        if name in ("pwsh.exe", "powershell.exe"):
+            return "powershell", path
+        if name not in ("bash.exe", "sh.exe"):
+            return None
+        folder = ntpath.dirname(path)
+        if ntpath.basename(folder).lower() == "bin" and ntpath.basename(ntpath.dirname(folder)).lower() == "usr":
+            top = ntpath.join(ntpath.dirname(ntpath.dirname(folder)), "bin", ntpath.basename(path))
+            if exists(top):
+                return "bash", top
+        return "bash", path
+    except Exception:
+        return None
+
+
+def shell_argv(cmd, env, shell=None):
     """(argv, env) that run `cmd` the way Claude Code runs a statusLine
     command on Windows: `bash -c` with bash's folder first on PATH (and `bash `
     before a first word ending in .sh), or PowerShell with Claude Code's flags
-    and its ${env:...} placeholders. Never cmd.exe."""
-    kind, path = predict_shell(env)
+    and its ${env:...} placeholders. Never cmd.exe. `shell` is the (kind,
+    path) to run it with (parent_shell's answer), else predict_shell's."""
+    kind, path = shell or predict_shell(env)
     env = dict(env)
     if kind == "bash":
         if path[:1] in ("/", "\\") or path[1:3] in (":/", ":\\"):  # path.win32.isAbsolute, as Claude Code checks
@@ -196,11 +255,51 @@ def slashes(path):
     return path.replace("\\", "/")
 
 
+def short_name(path):
+    """GetShortPathNameW: the 8.3 form of an existing path, or None."""
+    import ctypes
+    from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetShortPathNameW.restype = wintypes.DWORD
+    k32.GetShortPathNameW.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    n = k32.GetShortPathNameW(path, None, 0)
+    if not n:
+        return None
+    buf = ctypes.create_unicode_buffer(n)
+    got = k32.GetShortPathNameW(path, buf, n)
+    return buf.value if 0 < got < n else None
+
+
+def short_path(path, short=None):
+    """The path with its folders in their 8.3 short form (C:\\PROGRA~1\\
+    PYTHON~1\\python.exe) and its file name as is, so a command keeps naming
+    ctempo; or None: off Windows, on any error, or for a folder that does not
+    exist. A volume that keeps no short names gives the long folders back.
+    `short` maps an existing path to its 8.3 form (tests pass their own)."""
+    if not config.IS_WINDOWS:
+        return None
+    try:
+        path = ntpath.normpath(path)
+        folder = (short or short_name)(ntpath.dirname(path))
+    except Exception:
+        return None
+    return ntpath.join(folder, ntpath.basename(path)) if folder else None
+
+
+def _bare_at(s, i):
+    c = s[i]
+    if c == "~":  # not first, after a letter or digit (PROGRA~1): neither shell expands it there
+        return i > 0 and s[i - 1] in ASCII_ALNUM
+    return c in BARE_ASCII or (ord(c) > 127 and c.isalnum())
+
+
 def is_bare(word):
     """True when the word means the same unquoted in bash and in PowerShell:
-    ASCII letters, digits and _./:+=-, and non-ASCII letters and digits (so
-    C:/Users/Jürgen/... needs no quotes); never empty."""
-    return word != "" and all(c in BARE_ASCII or (ord(c) > 127 and c.isalnum()) for c in word)
+    ASCII letters, digits and _./:+=-, non-ASCII letters and digits (so
+    C:/Users/Jürgen/... needs no quotes), and a ~ after an ASCII letter or
+    digit (an 8.3 short name, C:/PROGRA~1/...); never empty."""
+    return word != "" and all(_bare_at(word, i) for i in range(len(word)))
 
 
 def quote(word, shell):
@@ -230,6 +329,56 @@ def passes_intact(word):
     escapes nothing, so a double quote inside, or a backslash ending such a
     word, reaches the program changed (pwsh 7.3+ escapes both)."""
     return '"' not in word and not (re.search(r"\s", word) and word.endswith("\\"))
+
+
+def msys_converts(arg):
+    """True when Git Bash may rewrite `arg` on its way to a native program
+    such as python.exe. Its MSYS2 runtime looks only at the text before the
+    first whitespace, and only when a / or \\ comes before that whitespace; it
+    leaves an argument starting with ~ alone. It rewrites a POSIX path there
+    (/bin/bash becomes C:/Program Files/Git/usr/bin/bash), also after a
+    leading quote or $(, and what follows a = or a colon (FOO=/x, ab:/c). A
+    drive path (C:/x), a relative one (bin/x, ./x) and $HOME/x pass as is."""
+    m = re.match(r"[^\s/\\]*[/\\]\S*", arg)
+    if not m or arg[:1] == "~":
+        return False
+    word = m.group(0)
+    # MSYS2 skips what cannot start a path: a quote, $, (, ...
+    word = word[next((i for i, c in enumerate(word) if c in ASCII_ALNUM or ord(c) > 127 or c in "/\\:.-"),
+                     len(word)):]
+    if word[:1] == "/":
+        return True
+    if re.match(r"[A-Za-z]:[/\\]", word):
+        return ":" in word[2:] or ";" in word
+    return "=" in word or ":" in word
+
+
+def needs_encoding(arg):
+    """True when a shell Claude Code may run the statusLine in can hand `arg`
+    to python.exe changed: Windows PowerShell 5.1 (passes_intact) or Git Bash
+    (msys_converts). Such a composed command is written encoded."""
+    return not passes_intact(arg) or msys_converts(arg)
+
+
+def encoded(cmd):
+    """cmd as one word every shell passes on unchanged: b and its UTF-8 in
+    URL-safe base64 without padding, so only letters, digits, _ and - (the b
+    keeps it from reading as an option or a number)."""
+    import base64
+
+    return "b" + base64.urlsafe_b64encode(cmd.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decoded(word):
+    """The command in a word `encoded` wrote, or None when it is not one."""
+    import base64
+
+    if not isinstance(word, str) or not re.match(r"b[A-Za-z0-9_-]*\Z", word):
+        return None
+    try:
+        return base64.urlsafe_b64decode(word[1:] + "=" * (-len(word[1:]) % 4)).decode("utf-8") or None
+    except ValueError:  # binascii.Error and UnicodeDecodeError are ValueErrors
+        return None
 
 
 def words(cmd, shell):
@@ -267,7 +416,7 @@ def _bash_words(s):
                 return None
             cur += s[i + 1:j]
             i = j + 1
-        elif is_bare(c):
+        elif _bare_at(s, i):
             cur += c
             i += 1
         else:
