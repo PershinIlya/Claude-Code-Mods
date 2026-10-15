@@ -13,7 +13,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from ctempo import install
+from ctempo import config, install, winshell
 
 SETTINGS = {
     "model": "opus",
@@ -31,11 +31,17 @@ WITH_PLUGINS = ('{\n  "model": "opus",\n  "enabledPlugins": {"other@mkt": true},
                 '  "extraKnownMarketplaces": {"mkt": {"source": {"source": "github", "repo": "a/b"}}}\n}\n')
 
 
+def put(path, text):
+    """Write a fixture byte for byte: UTF-8, and no newline translation (Windows would write CRLF)."""
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+
 def plugin_cli(user):
     """A fake `claude plugin` that edits the user settings file the way the real one does."""
-    def run(cmd, env=None):
+    def run(cmd, env=None, cwd=None):
         text = install.read_text(user) if os.path.exists(user) else ""
-        obj = json.loads(text) if text.strip() else {}  # a blank file is {}
+        obj = install.parse_json(text)  # a blank file is {}
         if cmd[:2] == ["plugin", "install"]:
             obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
         elif cmd[:3] == ["plugin", "marketplace", "add"]:
@@ -44,21 +50,20 @@ def plugin_cli(user):
             obj.get("enabledPlugins", {}).pop(install.PLUGIN_ID, None)
         elif cmd[:3] == ["plugin", "marketplace", "remove"]:
             obj.get("extraKnownMarketplaces", {}).pop(install.MARKETPLACE, None)
-        with open(user, "w") as f:
-            f.write(json.dumps(obj, indent=2))
+        put(user, json.dumps(obj, indent=2))
         return 0, "ok", ""
     return run
 
 
-def claude_missing(cmd, env=None):
+def claude_missing(cmd, env=None, cwd=None):
     return 127, "", "claude not found on PATH"
 
 
-def claude_hangs(cmd, env=None):
+def claude_hangs(cmd, env=None, cwd=None):
     return 124, "", "claude %s timed out after 120 s" % " ".join(cmd[:3])
 
 
-def nothing_installed(cmd, env=None):
+def nothing_installed(cmd, env=None, cwd=None):
     """The plugin CLI with nothing to remove: it says so and writes nothing."""
     if cmd[:2] == ["plugin", "uninstall"]:
         return 1, "", 'Plugin "%s" not found in installed plugins' % install.PLUGIN_ID
@@ -83,13 +88,16 @@ def time_zone(tz):
         time.tzset()
 
 
-class Install(unittest.TestCase):
+class Sandbox(unittest.TestCase):
+    """Throwaway settings files, data folder and home; no tests of its own."""
+
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="ctempo-inst-")
         self.home = os.path.join(self.dir, "home")
-        # Hermetic: no code path (old or new) can reach the real ~/.claude.
+        # Hermetic: no code path (old or new) can reach the real ~/.claude (Windows reads USERPROFILE).
         self.env = mock.patch.dict(os.environ, {"CTEMPO_HOME": self.home, "CLAUDE_CONFIG_DIR": os.path.join(self.dir, "claude"),
-                                                "HOME": os.path.join(self.dir, "userhome")})
+                                                "HOME": os.path.join(self.dir, "userhome"),
+                                                "USERPROFILE": os.path.join(self.dir, "userhome")})
         self.env.start()
         self.path = os.path.join(self.dir, "settings.json")
 
@@ -99,13 +107,11 @@ class Install(unittest.TestCase):
 
     def write(self, obj, indent=2, newline=False):
         text = json.dumps(obj, indent=indent, ensure_ascii=False) + ("\n" if newline else "")
-        with open(self.path, "w", encoding="utf-8") as f:
-            f.write(text)
+        put(self.path, text)
         return text
 
     def read(self):
-        with open(self.path, encoding="utf-8") as f:
-            return f.read()
+        return install.read_text(self.path)
 
     def run_cmd(self, fn, a):
         buf = io.StringIO()
@@ -113,6 +119,15 @@ class Install(unittest.TestCase):
             rc = fn(a)
         return rc, buf.getvalue()
 
+    def _reset(self):
+        """A clean slate between subtests: no install.json, no backups."""
+        shutil.rmtree(self.home, ignore_errors=True)
+        for n in os.listdir(self.dir):
+            if ".ctempo-backup-" in n:
+                os.remove(os.path.join(self.dir, n))
+
+
+class Install(Sandbox):
     def test_dry_run_writes_nothing(self):
         before = self.write(SETTINGS)
         rc, out = self.run_cmd(install.install, args(self.path))
@@ -134,8 +149,7 @@ class Install(unittest.TestCase):
                 self.assertEqual(after["statusLine"]["refreshInterval"], 60)
                 backups = [f for f in os.listdir(self.dir) if ".ctempo-backup-" in f]
                 self.assertTrue(backups)
-                with open(os.path.join(self.dir, backups[-1]), encoding="utf-8") as f:
-                    self.assertEqual(f.read(), before)
+                self.assertEqual(install.read_text(os.path.join(self.dir, backups[-1])), before)
                 rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
                 self.assertEqual(rc, 0, out)
                 self.assertEqual(self.read(), before)
@@ -178,8 +192,7 @@ class Install(unittest.TestCase):
         self.run_cmd(install.install, args(self.path, apply=True))
         obj = json.loads(self.read())
         obj["theme"] = "dark"
-        with open(self.path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(obj, indent=2))
+        put(self.path, json.dumps(obj, indent=2))
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         after = json.loads(self.read())
         self.assertEqual(after, dict(SETTINGS, theme="dark"))
@@ -191,8 +204,7 @@ class Install(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path))
 
     def test_refuses_invalid_json(self):
-        with open(self.path, "w") as f:
-            f.write("{ nope")
+        put(self.path, "{ nope")
         rc, out = self.run_cmd(install.install, args(self.path, apply=True))
         self.assertEqual(rc, 1)
         self.assertIn("refusing", out)
@@ -200,8 +212,7 @@ class Install(unittest.TestCase):
 
     def test_symlinked_settings_keep_the_link(self):
         real = os.path.join(self.dir, "dotfiles-settings.json")
-        with open(real, "w") as f:
-            f.write(json.dumps(SETTINGS, indent=2))
+        put(real, json.dumps(SETTINGS, indent=2))
         os.symlink(real, self.path)
         self.run_cmd(install.install, args(self.path, apply=True))
         self.assertTrue(os.path.islink(self.path))
@@ -213,7 +224,7 @@ class Install(unittest.TestCase):
         before = self.write(SETTINGS)
         calls = []
 
-        def fake(cmd, env=None):
+        def fake(cmd, env=None, cwd=None):
             calls.append(cmd)
             obj = json.loads(self.read())
             if cmd[:2] == ["plugin", "install"]:
@@ -224,8 +235,7 @@ class Install(unittest.TestCase):
                 obj["enabledPlugins"].pop(install.PLUGIN_ID)
             elif cmd[:3] == ["plugin", "marketplace", "remove"]:
                 obj["extraKnownMarketplaces"].pop(install.MARKETPLACE)
-            with open(self.path, "w") as f:
-                f.write(json.dumps(obj, indent=2))
+            put(self.path, json.dumps(obj, indent=2))
             return 0, "ok", ""
 
         with mock.patch.object(install, "run_claude", fake), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
@@ -240,18 +250,16 @@ class Install(unittest.TestCase):
         self.write(SETTINGS)
         bindir = os.path.join(self.dir, "bin")
         self.run_cmd(install.install, args(self.path, apply=True, bin_dir=bindir))
-        lp = os.path.join(bindir, "ctempo")
+        lp = os.path.join(bindir, install.launcher_name())
         self.assertTrue(os.access(lp, os.X_OK))
-        self.assertIn(install.LAUNCHER_MARK, install.read_text(lp))
+        self.assertEqual(install.read_text(lp), install.launcher_text(sys.executable, install.entry_path()))
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertFalse(os.path.exists(lp))
 
     def alt_python(self):
-        """Another absolute path to the same interpreter: forces a repin."""
-        alt = os.path.join(self.dir, "alt-python3")
-        if not os.path.exists(alt):
-            os.symlink(sys.executable, alt)
-        return alt
+        """Another absolute path to the same interpreter: forces a repin. A symlink would not
+        do on Windows, where python.exe finds its DLLs and library beside itself."""
+        return os.path.join(os.path.dirname(sys.executable), ".", os.path.basename(sys.executable))
 
     # -- review findings ---------------------------------------------------------------
     def test_reinstall_after_user_changed_statusline_restores_the_new_one(self):
@@ -260,8 +268,7 @@ class Install(unittest.TestCase):
         obj = json.loads(self.read())
         obj["statusLine"] = {"type": "command", "command": "~/.claude/statusline-command.sh"}
         changed = json.dumps(obj, indent=2)
-        with open(self.path, "w") as f:
-            f.write(changed)
+        put(self.path, changed)
         self.run_cmd(install.install, args(self.path, apply=True))
         self.assertEqual(install.compose_of(json.loads(self.read())["statusLine"]["command"]), "~/.claude/statusline-command.sh")
         self.run_cmd(install.uninstall, args(self.path, apply=True))
@@ -285,8 +292,7 @@ class Install(unittest.TestCase):
         b = os.path.join(self.dir, "project-settings.json")
         sa = dict(SETTINGS, statusLine={"type": "command", "command": "~/.claude/my-line.sh", "padding": 0})
         before_a = self.write(sa)
-        with open(b, "w") as f:
-            f.write(json.dumps({"model": "sonnet"}, indent=2))
+        put(b, json.dumps({"model": "sonnet"}, indent=2))
         self.run_cmd(install.install, args(a, apply=True))
         self.run_cmd(install.install, args(b, apply=True))
         rc, out = self.run_cmd(install.uninstall, args(None, apply=True))
@@ -301,7 +307,7 @@ class Install(unittest.TestCase):
         s = dict(SETTINGS, statusLine={"type": "command", "command": "~/bin/theirs.sh", "padding": 2})
         before = self.write(s)
 
-        def boom(cmd, env=None):
+        def boom(cmd, env=None, cwd=None):
             raise RuntimeError("claude died")
 
         with mock.patch.object(install, "run_claude", boom), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
@@ -360,23 +366,23 @@ class Install(unittest.TestCase):
         with open(self.path, "rb") as f:
             mid = f.read()
         self.assertNotIn(b"\n", mid.replace(b"\r\n", b""))  # every newline still CRLF
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        if os.name == "posix":  # Windows keeps only a read-only bit
+            self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         with open(self.path, "rb") as f:
             self.assertEqual(f.read(), raw)
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        if os.name == "posix":
+            self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
 
     # -- second review ---------------------------------------------------------------
     def test_v1_record_with_relative_path_is_recovered(self):
         s = dict(SETTINGS, statusLine={"type": "command", "command": "echo mine"})
         before = self.write(s)
         backup = os.path.realpath(self.path) + ".ctempo-backup-20261014-090000"
-        with open(backup, "w") as f:
-            f.write(before)
+        put(backup, before)
         obj = dict(SETTINGS, statusLine={"type": "command", "command": install.our_command(sys.executable, install.entry_path()),
                                          "refreshInterval": 60})
-        with open(self.path, "w") as f:
-            f.write(json.dumps(obj, indent=2))
+        put(self.path, json.dumps(obj, indent=2))
         os.makedirs(self.home)
         with open(install.state_path(), "w") as f:  # what version 1 wrote for `--settings settings.json`
             json.dump({"installed": True, "settings_path": "settings.json", "had_file": True, "backup_path": backup,
@@ -391,7 +397,7 @@ class Install(unittest.TestCase):
         self.env2 = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir})
         self.env2.start()
         try:
-            def ok(cmd, env=None):
+            def ok(cmd, env=None, cwd=None):
                 obj = json.loads(self.read())
                 if cmd[:2] == ["plugin", "install"]:
                     obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
@@ -401,13 +407,12 @@ class Install(unittest.TestCase):
                     obj["enabledPlugins"].pop(install.PLUGIN_ID, None)
                 elif cmd[:3] == ["plugin", "marketplace", "remove"]:
                     obj["extraKnownMarketplaces"].pop(install.MARKETPLACE, None)
-                with open(self.path, "w") as f:
-                    f.write(json.dumps(obj, indent=2))
+                put(self.path, json.dumps(obj, indent=2))
                 return 0, "ok", ""
 
             with mock.patch.object(install, "run_claude", ok), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
                 self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
-            with mock.patch.object(install, "run_claude", lambda c, env=None: (127, "", "claude not found on PATH")):
+            with mock.patch.object(install, "run_claude", lambda c, env=None, cwd=None: (127, "", "claude not found on PATH")):
                 rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
             self.assertEqual(rc, 1)
             self.assertIn("may still be installed", out)
@@ -424,10 +429,9 @@ class Install(unittest.TestCase):
         user = self.path  # CLAUDE_CONFIG_DIR/settings.json: the file the plugin CLI edits
         proj = os.path.join(self.dir, "proj-settings.json")
         before_user = self.write(SETTINGS)
-        with open(proj, "w") as f:
-            f.write(json.dumps({"model": "sonnet"}, indent=2))
+        put(proj, json.dumps({"model": "sonnet"}, indent=2))
 
-        def fake(cmd, env=None):
+        def fake(cmd, env=None, cwd=None):
             obj = json.loads(install.read_text(user))
             if cmd[:2] == ["plugin", "install"]:
                 obj.setdefault("enabledPlugins", {})[install.PLUGIN_ID] = True
@@ -437,8 +441,7 @@ class Install(unittest.TestCase):
                 obj["enabledPlugins"].pop(install.PLUGIN_ID, None)
             elif cmd[:3] == ["plugin", "marketplace", "remove"]:
                 obj["extraKnownMarketplaces"].pop(install.MARKETPLACE, None)
-            with open(user, "w") as f:
-                f.write(json.dumps(obj, indent=2))
+            put(user, json.dumps(obj, indent=2))
             return 0, "ok", ""
 
         with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir}), \
@@ -456,8 +459,7 @@ class Install(unittest.TestCase):
             if os.path.exists(self.path):
                 os.remove(self.path)
         else:
-            with open(self.path, "w", encoding="utf-8") as f:
-                f.write(text)
+            put(self.path, text)
         return mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir})  # self.path is the user file
 
     def test_retry_after_failed_plugin_uninstall_is_byte_identical(self):
@@ -465,7 +467,7 @@ class Install(unittest.TestCase):
         with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"):
             with mock.patch.object(install, "run_claude", plugin_cli(self.path)):
                 self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
-            with mock.patch.object(install, "run_claude", lambda c, env=None: (127, "", "claude not found")):
+            with mock.patch.object(install, "run_claude", lambda c, env=None, cwd=None: (127, "", "claude not found")):
                 rc, _ = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
             self.assertEqual(rc, 1)
             with mock.patch.object(install, "run_claude", plugin_cli(self.path)):
@@ -477,8 +479,7 @@ class Install(unittest.TestCase):
     def test_user_file_uninstalled_first_comes_back_byte_identical(self):
         # Review #5: the user file goes first, the mod stays for a project file.
         proj = os.path.join(self.dir, "proj-settings.json")
-        with open(proj, "w") as f:
-            f.write('{"model": "sonnet"}')
+        put(proj, '{"model": "sonnet"}')
         with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
                 mock.patch.object(install, "run_claude", plugin_cli(self.path)):
             self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
@@ -495,8 +496,7 @@ class Install(unittest.TestCase):
         # Review #5: no statusLine there, so no record; the baseline is the
         # snapshot taken before the plugin CLI first wrote to it.
         proj = os.path.join(self.dir, "proj-settings.json")
-        with open(proj, "w") as f:
-            f.write('{"model": "sonnet"}')
+        put(proj, '{"model": "sonnet"}')
         with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
                 mock.patch.object(install, "run_claude", plugin_cli(self.path)):
             self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
@@ -508,8 +508,7 @@ class Install(unittest.TestCase):
     def test_two_records_of_one_file_both_go(self):
         # Review #6: a version-1 record and a later one under another name.
         real = os.path.join(self.dir, "dot-settings.json")
-        with open(real, "w") as f:
-            f.write(IRREGULAR)
+        put(real, IRREGULAR)
         os.symlink(real, self.path)
         self.run_cmd(install.install, args(real, apply=True))
         st = install.load_state()
@@ -523,10 +522,8 @@ class Install(unittest.TestCase):
 
     def test_symlink_alias_is_one_record(self):
         real = os.path.join(self.dir, "dot-settings.json")
-        with open(real, "w") as f:
-            f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "echo X"}), indent=4))
-        with open(real) as f:
-            before = f.read()
+        put(real, json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "echo X"}), indent=4))
+        before = install.read_text(real)
         os.symlink(real, self.path)
         self.run_cmd(install.install, args(self.path, apply=True))
         self.run_cmd(install.install, args(real, apply=True))
@@ -544,17 +541,9 @@ class Install(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path))
 
     # -- fourth review ---------------------------------------------------------------
-    def _reset(self):
-        """A clean slate between subtests: no install.json, no backups."""
-        shutil.rmtree(self.home, ignore_errors=True)
-        for n in os.listdir(self.dir):
-            if ".ctempo-backup-" in n:
-                os.remove(os.path.join(self.dir, n))
-
     def _proj(self):
         proj = os.path.join(self.dir, "proj-settings.json")
-        with open(proj, "w") as f:
-            f.write('{"model": "sonnet"}')
+        put(proj, '{"model": "sonnet"}')
         return proj
 
     def _user_text(self):
@@ -628,8 +617,7 @@ class Install(unittest.TestCase):
                 self.run_cmd(install.install, args(self.path, apply=True))
                 obj = json.loads(self.read())
                 obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
-                with open(self.path, "w", encoding="utf-8") as f:
-                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                put(self.path, json.dumps(obj, indent=2, ensure_ascii=False))
                 if then is not None:
                     rc, out = self.run_cmd(install.install, args(self.path, apply=True, **then))
                     self.assertIn("REPLACE" if then else "already runs ctempo", out)
@@ -646,7 +634,7 @@ class Install(unittest.TestCase):
         cli = plugin_cli(self.path)
         calls = []
 
-        def recording(cmd, env=None):
+        def recording(cmd, env=None, cwd=None):
             calls.append(cmd)
             return cli(cmd)
 
@@ -711,8 +699,7 @@ class Install(unittest.TestCase):
         proj = self._proj()
         v1_text = '{"model": "opus"}\n'  # the user file when version 1 installed; edited since
         backup = os.path.realpath(self.path) + ".ctempo-backup-20261001-090000"
-        with open(backup, "w") as f:
-            f.write(v1_text)
+        put(backup, v1_text)
         os.makedirs(self.home)
         with open(install.state_path(), "w") as f:  # what c016f98's uninstall left
             json.dump({"installed": False, "settings_path": self.path, "had_file": True, "backup_path": backup,
@@ -748,8 +735,7 @@ class Install(unittest.TestCase):
                     obj = json.loads(self.read())
                     obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
                     obj["statusLine"]["padding"] = 0
-                    with open(self.path, "w", encoding="utf-8") as f:
-                        f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                    put(self.path, json.dumps(obj, indent=2, ensure_ascii=False))
                     if then is not None:
                         rc, out = self.run_cmd(install.install, args(self.path, apply=True, **then))
                         self.assertIn("REPLACE" if then else "already runs ctempo", out)
@@ -772,7 +758,7 @@ class Install(unittest.TestCase):
         runtime = os.path.join(self.home, "runtime.json")
         cli = plugin_cli(self.path)
 
-        def timed_out(cmd, env=None):
+        def timed_out(cmd, env=None, cwd=None):
             return 124, "", "claude %s timed out after 120 s" % " ".join(cmd[:3])
 
         for target in (self.path, proj):
@@ -823,8 +809,7 @@ class Install(unittest.TestCase):
                 with self._user_file(IRREGULAR):
                     self._steps(proj, *first)
                     edited = self._user_text().replace("{\n", '{\n  "sandbox": {"enabled": true},\n', 1)
-                    with open(self.path, "w", encoding="utf-8") as f:
-                        f.write(edited)
+                    put(self.path, edited)
                     rcs = self._steps(proj, *last)
                 self.assertEqual(rcs, [0] * len(last))
                 self.assertEqual(self._user_text(), edited)
@@ -836,7 +821,7 @@ class Install(unittest.TestCase):
         # back on PATH and reporting nothing to remove.
         proj = self._proj()
 
-        def not_installed(cmd, env=None):  # the plugin CLI with nothing to remove
+        def not_installed(cmd, env=None, cwd=None):  # the plugin CLI with nothing to remove
             if cmd[:2] == ["plugin", "uninstall"]:
                 return 1, "", 'Plugin "%s" not found in installed plugins' % install.PLUGIN_ID
             return 1, "", "Marketplace '%s' not found" % install.MARKETPLACE
@@ -850,8 +835,7 @@ class Install(unittest.TestCase):
                         with mock.patch.object(install, "claude_bin", lambda: None), \
                                 mock.patch.object(install, "run_claude", claude_missing):
                             self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
-                        with open(self.path, "w", encoding="utf-8") as f:
-                            f.write(now)
+                        put(self.path, now)
                         with mock.patch.object(install, "claude_bin", lambda: exe), mock.patch.object(install, "run_claude", cli):
                             rc, out = self.run_cmd(install.uninstall, args(None, apply=True, no_mod=False))
                     self.assertEqual(rc, 0, out)
@@ -869,8 +853,7 @@ class Install(unittest.TestCase):
         with self._user_file(IRREGULAR):
             self._steps(proj, "iP-nobin")
             edited = IRREGULAR.replace("{\n", '{\n  "sandbox": {"enabled": true},\n', 1)
-            with open(self.path, "w", encoding="utf-8") as f:
-                f.write(edited)
+            put(self.path, edited)
             rcs = self._steps(proj, "iP", "uP")
         self.assertEqual(rcs, [0, 0])
         self.assertEqual(self.read(), edited)
@@ -889,8 +872,7 @@ class Install(unittest.TestCase):
                 self.write(dict(SETTINGS, statusLine={"type": "command", "command": "~/old-line.sh"}))
                 self.run_cmd(install.install, args(self.path, apply=True))
                 self.run_cmd(install.uninstall, args(self.path, apply=True))
-                with open(self.path, "w") as f:
-                    f.write("")
+                put(self.path, "")
                 self.run_cmd(install.install, args(self.path, apply=True))
                 self.assertEqual(len([n for n in os.listdir(self.dir) if ".ctempo-backup-" in n]), 2)
                 shutil.rmtree(self.home)  # install.json gone
@@ -946,8 +928,7 @@ class Install(unittest.TestCase):
                 self._reset()
                 with self._user_file(before):
                     self._steps(proj, *first)
-                    with open(self.path, "w", encoding="utf-8") as f:
-                        f.write(now)
+                    put(self.path, now)
                     rcs = self._steps(proj, *last)
                 self.assertEqual(rcs[-1], 0)
                 self.assertEqual(self._user_text(), now)
@@ -971,8 +952,7 @@ class Install(unittest.TestCase):
                         rcs = self._steps(proj, *first)
                         self.assertEqual(rcs[-1], 0)
                         self._assert_clean(proj)
-                    with open(self.path, "w", encoding="utf-8") as f:
-                        f.write(IRREGULAR)
+                    put(self.path, IRREGULAR)
                     rcs = self._steps(proj, "iP", "iU", "uU", "uP")
                 self.assertEqual(rcs, [0, 0, 0, 0])
                 self.assertEqual(self._user_text(), IRREGULAR)
@@ -996,8 +976,7 @@ class Install(unittest.TestCase):
                     with self._user_file(before):
                         self._steps(proj, "iU-nobin", "iP-nobin", "uU-nobin")
                         edited = edit(self._user_text())
-                        with open(self.path, "w", encoding="utf-8") as f:
-                            f.write(edited)
+                        put(self.path, edited)
                         rcs = self._steps(proj, "iP", last)
                     self.assertEqual(rcs, [0, 0])
                     self.assertEqual(self._user_text(), edited)
@@ -1024,8 +1003,7 @@ class Install(unittest.TestCase):
                 obj = json.loads(self.read())
                 obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
                 obj["statusLine"]["padding"] = 0
-                with open(self.path, "w", encoding="utf-8") as f:
-                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                put(self.path, json.dumps(obj, indent=2, ensure_ascii=False))
                 rc, out = self.run_cmd(install.install, args(self.path, apply=True, replace=True))
                 self.assertIn("REPLACE", out)
                 self.assertIsNone(install.compose_of(json.loads(self.read())["statusLine"]["command"]))
@@ -1048,8 +1026,7 @@ class Install(unittest.TestCase):
                     self._reset()
                     with self._user_file(None):
                         self._steps(proj, "iP-nobin")
-                        with open(self.path, "w", encoding="utf-8") as f:
-                            f.write(created)
+                        put(self.path, created)
                         rcs = self._steps(proj, *steps)
                     self.assertEqual(rcs, [0] * len(steps))
                     self.assertEqual(self._user_text(), created)
@@ -1089,8 +1066,7 @@ class Install(unittest.TestCase):
                         i = steps.index("edit")
                         self._steps(proj, *steps[:i])
                         if how == "blank":
-                            with open(self.path, "w") as f:
-                                f.write("")
+                            put(self.path, "")
                         else:
                             os.remove(self.path)
                         rcs = self._steps(proj, *steps[i + 1:])
@@ -1127,14 +1103,12 @@ class Install(unittest.TestCase):
         # Review 6 follow-up: a user settings file that is not valid JSON made
         # the tidy raise out of uninstall.
         proj = os.path.join(self.dir, "proj-settings.json")
-        with open(proj, "w") as f:
-            f.write('{"model": "sonnet"}')
-        quiet = lambda cmd, env=None: (0, "ok", "")  # the plugin CLI, writing nothing
+        put(proj, '{"model": "sonnet"}')
+        quiet = lambda cmd, env=None, cwd=None: (0, "ok", "")  # the plugin CLI, writing nothing
         with self._user_file(IRREGULAR), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
                 mock.patch.object(install, "run_claude", plugin_cli(self.path)):
             self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
-            with open(self.path, "w") as f:
-                f.write('{"model": "opus",')  # the user broke it by hand
+            put(self.path, '{"model": "opus",')  # the user broke it by hand
             with mock.patch.object(install, "run_claude", quiet):
                 rc, out = self.run_cmd(install.uninstall, args(proj, apply=True, no_mod=False))
         self.assertEqual(rc, 0, out)
@@ -1145,9 +1119,8 @@ class Install(unittest.TestCase):
         # Review 6 follow-up: an invalid user file is not "absent": it exists,
         # and its plugin keys are unknown, so none is ever removed.
         proj = os.path.join(self.dir, "proj-settings.json")
-        with open(proj, "w") as f:
-            f.write('{"model": "sonnet"}')
-        quiet = lambda cmd, env=None: (0, "ok", "")
+        put(proj, '{"model": "sonnet"}')
+        quiet = lambda cmd, env=None, cwd=None: (0, "ok", "")
         with self._user_file('{"oops"'), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
                 mock.patch.object(install, "run_claude", quiet):
             self.run_cmd(install.install, args(proj, apply=True, no_mod=False))
@@ -1162,10 +1135,8 @@ class Install(unittest.TestCase):
         # Review 6 follow-up: names sorted as strings put "-9" after "-10".
         self.write(SETTINGS)
         for suffix, cmd in (("", "zero"), ("-9", "nine"), ("-10", "ten")):
-            with open(self.path + ".ctempo-backup-20261014-090000" + suffix, "w") as f:
-                f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": cmd})))
-        with open(self.path + ".ctempo-backup-20261013-235959-99", "w") as f:
-            f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "yesterday"})))
+            put(self.path + ".ctempo-backup-20261014-090000" + suffix, json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": cmd})))
+        put(self.path + ".ctempo-backup-20261013-235959-99", json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "yesterday"})))
         had, sl = install._original_from_backups(self.path)
         self.assertTrue(had)
         self.assertEqual(sl["command"], "ten")
@@ -1177,7 +1148,7 @@ class Install(unittest.TestCase):
         # that removes the mod later removes them too.
         proj = self._proj()
         runtime = os.path.join(self.home, "runtime.json")
-        lp = os.path.join(self.dir, "bin", "ctempo")
+        lp = os.path.join(self.dir, "bin", install.launcher_name())
         for target in (self.path, proj):
             with self.subTest(target=os.path.basename(target)):
                 self._reset()
@@ -1210,7 +1181,7 @@ class Install(unittest.TestCase):
                     self._reset()
                     calls = []
 
-                    def recording(cmd, env=None):
+                    def recording(cmd, env=None, cwd=None):
                         calls.append(cmd)
                         return cli(cmd)
 
@@ -1243,17 +1214,14 @@ class Install(unittest.TestCase):
         """What version 1 (c016f98) left after `install --apply` into the user file with
         claude on PATH: its backup, the file with the plugin CLI's keys, and its record."""
         backup = os.path.realpath(self.path) + ".ctempo-backup-20261001-090000"
-        with open(backup, "w", encoding="utf-8") as f:
-            f.write(text)
+        put(backup, text)
         sl = {"type": "command", "command": install.our_command(sys.executable, install.entry_path()),
               "refreshInterval": 60}
         obj = dict(json.loads(text), statusLine=sl, enabledPlugins={install.PLUGIN_ID: True},
                    extraKnownMarketplaces={install.MARKETPLACE: {"source": {}}})
-        with open(self.path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(obj, indent=2))
+        put(self.path, json.dumps(obj, indent=2))
         os.makedirs(self.home, exist_ok=True)
-        with open(os.path.join(self.home, "runtime.json"), "w") as f:
-            f.write("{}")
+        put(os.path.join(self.home, "runtime.json"), "{}")
         with open(install.state_path(), "w") as f:
             json.dump({"installed": True, "settings_path": self.path, "had_file": True, "backup_path": backup,
                        "original_sha256": install.sha(text), "had_statusLine": False, "original_statusLine": None,
@@ -1287,11 +1255,9 @@ class Install(unittest.TestCase):
         proj = self._proj()
         sl = {"type": "command", "command": install.our_command(sys.executable, install.entry_path()),
               "refreshInterval": 60}
-        with open(proj, "w") as f:
-            f.write(json.dumps({"model": "sonnet", "statusLine": sl}, indent=2))
+        put(proj, json.dumps({"model": "sonnet", "statusLine": sl}, indent=2))
         backup = os.path.realpath(proj) + ".ctempo-backup-20261001-090000"
-        with open(backup, "w") as f:
-            f.write('{"model": "sonnet"}')
+        put(backup, '{"model": "sonnet"}')
         os.makedirs(self.home)
         with open(install.state_path(), "w") as f:  # what version 1 wrote for `install --apply --settings proj`
             json.dump({"installed": True, "settings_path": proj, "had_file": True, "backup_path": backup,
@@ -1327,8 +1293,7 @@ class Install(unittest.TestCase):
                 obj = json.loads(self.read())
                 obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
                 obj["statusLine"]["padding"] = 0
-                with open(self.path, "w", encoding="utf-8") as f:
-                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                put(self.path, json.dumps(obj, indent=2, ensure_ascii=False))
                 rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
                 self.assertEqual(rc, 0, out)
                 after = json.loads(self.read())
@@ -1357,8 +1322,7 @@ class Install(unittest.TestCase):
                 obj = json.loads(self.read())
                 obj["statusLine"]["command"] = install.our_command(sys.executable, install.entry_path(), newer)
                 obj["statusLine"]["padding"] = 0
-                with open(self.path, "w", encoding="utf-8") as f:
-                    f.write(json.dumps(obj, indent=2, ensure_ascii=False))
+                put(self.path, json.dumps(obj, indent=2, ensure_ascii=False))
                 rc, out = self.run_cmd(install.install, args(self.path, apply=True, replace=True))
                 self.assertIn("REPLACE", out)
                 shutil.rmtree(self.home)  # install.json gone
@@ -1397,8 +1361,7 @@ class Install(unittest.TestCase):
         # its last plugin goes, so many user files hold it. Once the mod was in
         # it, uninstall took the key for the plugin CLI's and removed it.
         proj = os.path.join(self.dir, "proj-settings.json")
-        with open(proj, "w") as f:
-            f.write('{"model": "sonnet"}')
+        put(proj, '{"model": "sonnet"}')
         before = '{\n  "model": "opus",\n  "enabledPlugins": {}\n}\n'
         with self._user_file(before), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
                 mock.patch.object(install, "run_claude", plugin_cli(self.path)):
@@ -1414,7 +1377,7 @@ class Install(unittest.TestCase):
         # old interpreter, and a launcher in an earlier --bin-dir outlived the full uninstall.
         before = self.write(SETTINGS)
         first, second = os.path.join(self.dir, "bin"), os.path.join(self.dir, "bin2")
-        lp1, lp2 = os.path.join(first, "ctempo"), os.path.join(second, "ctempo")
+        lp1, lp2 = os.path.join(first, install.launcher_name()), os.path.join(second, install.launcher_name())
         alt = self.alt_python()
         self.run_cmd(install.install, args(self.path, apply=True, bin_dir=first))
         rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=alt))
@@ -1431,8 +1394,7 @@ class Install(unittest.TestCase):
         self.assertNotIn("launcher", install.load_state())
         # A file the user put in a launcher's place is theirs: never rewritten or removed.
         self.run_cmd(install.install, args(self.path, apply=True, bin_dir=first))
-        with open(lp1, "w") as f:
-            f.write("#!/bin/sh\necho mine\n")
+        put(lp1, "#!/bin/sh\necho mine\n")
         self.run_cmd(install.install, args(self.path, apply=True, python=alt))
         self.run_cmd(install.install, args(self.path, apply=True, bin_dir=second))
         rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
@@ -1468,8 +1430,7 @@ class Install(unittest.TestCase):
                 with self.subTest(legacy=legacy):
                     self._reset()
                     for name, cmd in ((legacy, "legacy"), ("20261014-050000Z", "utc")):
-                        with open(self.path + ".ctempo-backup-" + name, "w") as f:
-                            f.write(json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": cmd})))
+                        put(self.path + ".ctempo-backup-" + name, json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": cmd})))
                     self.assertEqual(install._original_from_backups(self.path)[1]["command"], want)
 
     def test_the_users_own_empty_plugin_key_survives_other_plugins_coming_and_going(self):
@@ -1483,8 +1444,7 @@ class Install(unittest.TestCase):
                 obj["enabledPlugins"]["other@mkt2"] = True
             else:
                 obj["enabledPlugins"] = {k: v for k, v in obj["enabledPlugins"].items() if not k.startswith("other@")}
-            with open(self.path, "w") as f:
-                f.write(json.dumps(obj, indent=2))
+            put(self.path, json.dumps(obj, indent=2))
 
         empty = '{\n  "model": "opus",\n  "enabledPlugins": {}\n}\n'
         listed = '{\n  "model": "opus",\n  "enabledPlugins": {"other@mkt": true}\n}\n'
@@ -1552,18 +1512,22 @@ class Install(unittest.TestCase):
         before = self.write(SETTINGS)
         first, alias = os.path.join(self.dir, "bin"), os.path.join(self.dir, "Bin")
         os.makedirs(first)
-        os.symlink(first, alias)  # one directory, two names
         realpath = os.path.realpath
 
         def case_blind(path, *a, **kw):
             """realpath as on a case-insensitive disk: Bin stays Bin."""
             return os.path.abspath(path) if os.path.abspath(path).startswith(alias + os.sep) else realpath(path, *a, **kw)
 
+        if os.path.exists(alias):  # a case-insensitive disk (macOS, Windows): Bin is the real alias already
+            disk = contextlib.nullcontext()
+        else:
+            os.symlink(first, alias)  # one directory, two names
+            disk = mock.patch.object(os.path, "realpath", case_blind)
         self.run_cmd(install.install, args(self.path, apply=True, bin_dir=alias))
-        with mock.patch.object(os.path, "realpath", case_blind):
+        with disk:
             rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=first))
         self.assertEqual(rc, 0, out)
-        lp = os.path.join(first, "ctempo")
+        lp = os.path.join(first, install.launcher_name())
         self.assertTrue(os.path.exists(lp), out)
         self.assertEqual(install.read_text(lp), install.launcher_text(sys.executable, install.entry_path()))
         self.assertEqual(install.load_state()["launcher"], lp)
@@ -1571,6 +1535,544 @@ class Install(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertFalse(os.path.exists(lp), out)
         self.assertEqual(self.read(), before)
+
+
+# -- Windows ------------------------------------------------------------------------
+# The Windows branches run here with config.IS_WINDOWS patched, on paths that only have
+# to look like Windows ones; the windows-latest CI job runs the suite for real.
+PY = r"C:\Users\me\AppData\Local\Programs\Python\Python312\python.exe"
+PY_SPACE = r"C:\Program Files\Python312\python.exe"
+ENTRY = r"C:\Users\me\Claude-Code-Mods\bin\ctempo"
+ENTRY_SPACE = r"C:\Users\me\My Repos\Claude-Code-Mods\bin\ctempo"
+FWD = "C:/Users/me/AppData/Local/Programs/Python/Python312/python.exe -I -S -X utf8 C:/Users/me/Claude-Code-Mods/bin/ctempo statusline"
+GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
+PS51 = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+
+@contextlib.contextmanager
+def windows(on=True):
+    """config.IS_WINDOWS, the one platform flag, set (or cleared). Off Windows the data folder
+    stays the sandbox's CTEMPO_HOME: Windows rules would read a POSIX temp path as one
+    without a drive (and a test without a sandbox fails here rather than reach ~)."""
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(config, "IS_WINDOWS", on))
+        if on and os.name != "nt":
+            stack.enter_context(mock.patch.object(config, "home", lambda: os.environ["CTEMPO_HOME"]))
+        yield
+
+
+class FakeWinreg:
+    """The part of winreg that PEP 514 discovery uses, over a dict tree: a dict is a key, a str a value."""
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE = "HKCU", "HKLM"
+    KEY_READ, KEY_WOW64_64KEY, KEY_WOW64_32KEY = 1, 2, 4
+
+    class Key:
+        def __init__(self, node):
+            self.node = node
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def __init__(self, hives):
+        self.hives = hives  # {(hive, view): tree}
+
+    def OpenKey(self, key, sub, reserved=0, access=1):
+        node = self.hives.get((key, access & 6)) if isinstance(key, str) else key.node
+        for part in sub.split("\\"):
+            if not isinstance(node, dict) or not isinstance(node.get(part), dict):
+                raise FileNotFoundError(sub)
+            node = node[part]
+        return self.Key(node)
+
+    def EnumKey(self, key, i):
+        subs = [k for k, v in key.node.items() if isinstance(v, dict)]
+        if i >= len(subs):
+            raise OSError("no more keys")
+        return subs[i]
+
+    def QueryValueEx(self, key, name):
+        if not isinstance(key.node.get(name), str):
+            raise FileNotFoundError(name)
+        return key.node[name], 1
+
+
+class WindowsCommand(unittest.TestCase):
+    def test_posix_command_and_flags_are_unchanged(self):
+        with windows(False):
+            self.assertEqual(install.our_command("/opt/my py/python3", "/x/bin/ctempo", "echo 'a b'"),
+                             "'/opt/my py/python3' -I -S /x/bin/ctempo statusline --compose 'echo '\"'\"'a b'\"'\"''")
+            self.assertEqual(winshell.python_flags(), ["-I", "-S"])
+            self.assertEqual(install.launcher_name(), "ctempo")
+            self.assertEqual(install.runtime_info("/usr/bin/python3", "/x/bin/ctempo")["args"], ["-I", "-S"])
+
+    def test_forms_for_git_bash_and_powershell(self):
+        # Unquoted forward-slash paths read the same in both shells; so do plain single quotes
+        # after a bare interpreter. A quoted interpreter, or a quote inside an argument, takes
+        # the predicted shell's syntax: single quotes for bash, `& ...` for PowerShell (always
+        # with the `&`, which bash rejects, so the command itself says which shell it is for).
+        cases = (
+            (PY, ENTRY, None, FWD, FWD, None),
+            (PY, ENTRY, "~/.claude/line.sh", FWD + " --compose '~/.claude/line.sh'", FWD + " --compose '~/.claude/line.sh'",
+             None),
+            (PY, ENTRY_SPACE, None,
+             "C:/Users/me/AppData/Local/Programs/Python/Python312/python.exe -I -S -X utf8 "
+             "'C:/Users/me/My Repos/Claude-Code-Mods/bin/ctempo' statusline", None, None),
+            (PY, ENTRY, "echo 'hi'", FWD + " --compose 'echo '\"'\"'hi'\"'\"''", "& " + FWD + " --compose 'echo ''hi'''",
+             "per shell"),
+            (PY, ENTRY, "echo \u2018hi\u2019", FWD + " --compose 'echo \u2018hi\u2019'",
+             "& " + FWD + " --compose 'echo \u2018\u2018hi\u2019\u2019'", "per shell"),
+            (PY_SPACE, ENTRY, None, "'C:/Program Files/Python312/python.exe' -I -S -X utf8 C:/Users/me/Claude-Code-Mods/bin/ctempo "
+             "statusline", "& 'C:/Program Files/Python312/python.exe' -I -S -X utf8 C:/Users/me/Claude-Code-Mods/bin/ctempo "
+             "statusline", "per shell"),
+            (PY_SPACE, ENTRY_SPACE, "echo \u2019x\u2019 \"q\" a,b", None, None, "per shell"),
+        )
+        with windows():
+            self.assertEqual(winshell.python_flags(), ["-I", "-S", "-X", "utf8"])
+            for py, entry, compose, bash, ps, specific in cases:
+                for shell, want in (("bash", bash), ("powershell", ps if specific else bash)):
+                    with self.subTest(py=py, entry=entry, compose=compose, shell=shell):
+                        cmd = install.our_command(py, entry, compose, shell)
+                        if want is not None:
+                            self.assertEqual(cmd, want)
+                        self.assertTrue(install.is_ours(cmd))
+                        self.assertEqual(install.compose_of(cmd), compose)
+                        argv = install.split_command(cmd)
+                        self.assertEqual(argv[:5], [py.replace("\\", "/"), "-I", "-S", "-X", "utf8"])
+                        self.assertEqual(argv[5], entry.replace("\\", "/"))
+                        # doctor reads the same from it: the shell it is for, or none when it reads alike
+                        self.assertEqual(install.command_shell(cmd), shell if specific else None)
+                        self.assertEqual(winshell.written_for(cmd), shell if specific else None)
+                        self.assertEqual(winshell.reads_alike(cmd), not specific)
+                        self.assertEqual(winshell.words(cmd, shell), argv)
+
+    def test_quote_for_each_shell(self):
+        self.assertEqual(winshell.quote("it's", "bash"), "'it'\"'\"'s'")
+        self.assertEqual(winshell.quote("it's", "powershell"), "'it''s'")
+        self.assertEqual(winshell.quote("\u2018x\u2019", "powershell"), "'\u2018\u2018x\u2019\u2019'")
+        self.assertEqual(install.split_command("& " + winshell.quote("it's \u2018x\u2019", "powershell")), ["it's \u2018x\u2019"])
+
+    def test_powershell_reading_rejects_what_it_would_not_read_as_written(self):
+        for cmd in ("a 'b'c", "a \"b\"", "a b,c", "a @b", "a $b", "'unterminated"):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(winshell.words("& " + cmd, "powershell"))
+        self.assertEqual(install.split_command("& a 'b c' '' 'it''s'"), ["a", "b c", "", "it's"])
+
+    def test_a_shell_change_rewrites_only_a_command_written_for_one_shell(self):
+        with windows():
+            for py, specific in ((PY, False), (PY_SPACE, True)):
+                current = {"type": "command", "command": install.our_command(py, ENTRY, None, "bash"), "refreshInterval": 60}
+                with self.subTest(py=py):
+                    want, note = install.plan_statusline(current, py, ENTRY, shell="powershell")
+                    if specific:
+                        self.assertEqual(want["command"], install.our_command(py, ENTRY, None, "powershell"))
+                        self.assertTrue(want["command"].startswith("& "))
+                    else:
+                        self.assertIsNone(want, note)
+
+    def test_predicted_shell_follows_claude_codes_search(self):
+        # What install records and doctor compares: the shell winshell predicts (the core's tests
+        # cover the PowerShell side), from the process env with settings.json `env` over it.
+        mine = r"D:\Git\bin\bash.exe"
+        portable_git, portable_bash = r"D:\PortableGit\cmd\git.exe", r"D:\PortableGit\bin\bash.exe"
+        cases = (  # (process env, settings env, existing files, shell, its path)
+            ({}, None, (), "powershell", None),
+            ({}, None, (GIT_BASH,), "bash", GIT_BASH),
+            ({"CLAUDE_CODE_GIT_BASH_PATH": mine}, None, (mine,), "bash", mine),
+            ({"CLAUDE_CODE_GIT_BASH_PATH": r"D:\tools\zsh.exe"}, None, (r"D:\tools\zsh.exe",), "powershell", None),
+            ({"CLAUDE_CODE_GIT_BASH_PATH": mine}, None, (GIT_BASH,), "bash", GIT_BASH),  # missing: auto-detection
+            ({}, {"CLAUDE_CODE_GIT_BASH_PATH": mine}, (mine,), "bash", mine),
+            # settings.json `env` is laid over the process environment, so its value is the one Claude Code checks
+            ({"CLAUDE_CODE_GIT_BASH_PATH": mine}, {"CLAUDE_CODE_GIT_BASH_PATH": r"E:\nope\bash.exe"}, (mine,), "powershell",
+             None),
+            ({"PATH": r"D:\PortableGit\cmd"}, None, (portable_git, portable_bash), "bash", portable_bash),
+            ({"PATH": r"D:\PortableGit\cmd"}, None, (portable_git,), "powershell", None),
+            ({"PATH": r"D:\PortableGit\cmd", "SYSTEMROOT": r"C:\Windows"}, None, (portable_git, PS51), "powershell", PS51),
+        )
+        for env, settings, present, shell, path in cases:
+            with self.subTest(env=env, settings=settings, present=present):
+                lower = {p.lower() for p in present}
+                fake = lambda p: p.lower() in lower  # noqa: E731
+                self.assertEqual(winshell.predict_shell(env, settings, exists=fake, is_file=fake), (shell, path))
+
+    def test_shown_commands_use_double_quotes_on_windows(self):
+        with windows():
+            self.assertEqual(install._shown(["plugin", "marketplace", "add", r"C:\My Repo"]),
+                             'plugin marketplace add "C:\\My Repo"')
+        with windows(False):
+            self.assertEqual(install._shown(["plugin", "marketplace", "add", "/my repo"]), "plugin marketplace add '/my repo'")
+
+    def test_claude_bin_on_windows_takes_a_program_cmd_can_start(self):
+        for found, want in (({"claude": r"C:\Users\me\.local\bin\claude.exe"}, r"C:\Users\me\.local\bin\claude.exe"),
+                            ({"claude": r"C:\npm\claude", "claude.cmd": r"C:\npm\claude.cmd"}, r"C:\npm\claude.cmd"),
+                            ({"claude.exe": r"C:\x\claude.exe", "claude.cmd": r"C:\npm\claude.cmd"}, r"C:\x\claude.exe"),
+                            ({}, None)):
+            with self.subTest(found=found), windows(), mock.patch("shutil.which", lambda n, *a, **kw: found.get(n)):
+                self.assertEqual(install.claude_bin(), want)
+
+    def test_launcher_cmd_text(self):
+        with windows():
+            text = install.launcher_text(r"C:\100%\python.exe", "C:/repo/bin/ctempo")
+        self.assertEqual(text, '@echo off\r\nrem ctempo launcher\r\n"C:\\100%%\\python.exe" -I -S -X utf8 '
+                               '"C:\\repo\\bin\\ctempo" %*\r\nexit /b %ERRORLEVEL%\r\n')
+
+
+class WindowsProbe(unittest.TestCase):
+    def fake_run(self, reports, calls):
+        """_run for the probe: candidate -> (exit code, sys.executable it reports)."""
+        def run(argv, timeout, env=None, cwd=None):
+            calls.append((argv, env))
+            code, exe = reports[argv[0]]
+            return code, json.dumps(["3.12", "3.45.1", exe]) + "\n" if code == 0 else "", "" if code == 0 else "stub"
+        return run
+
+    def test_the_probe_reports_the_interpreter_itself(self):
+        ok, ver, sq, ms, note, exe = install.probe_full(sys.executable)
+        self.assertTrue(ok, note)
+        self.assertTrue(os.path.samefile(exe, sys.executable))
+        self.assertEqual(install.probe(sys.executable)[:3], (ok, ver, sq))  # doctor's 5 values
+        with mock.patch.object(install, "_run", lambda *a, **kw: (0, "Python 3.12\n", "")):
+            self.assertIn("unexpected probe output", install.probe(sys.executable)[4])
+
+    def test_windows_pins_the_real_exe_behind_an_alias_or_a_launcher(self):
+        real = PY
+        alias = r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\python3.12.exe"
+        store = r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.12_x\python.exe"
+        dotted = r"C:\Users\me\AppData\Local\Programs\Python\Python312\.\python.exe"
+        reports = {alias: (0, real), r"C:\Windows\py.exe": (0, real), dotted: (0, real), store: (0, store),
+                   real: (0, real), r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\python.exe": (9009, None)}
+        calls = []
+        with windows(), mock.patch.object(install, "_run", self.fake_run(reports, calls)), \
+                mock.patch.object(install, "_runnable", lambda p: p in reports):
+            for cand, pin in ((alias, real), (r"C:\Windows\py.exe", real), (dotted, dotted), (store, store)):
+                with self.subTest(candidate=cand):
+                    py, report = install.choose_python(cand)
+                    self.assertEqual(py, pin)
+                    self.assertEqual(report[0][0], pin)
+                    self.assertEqual("via %s" % cand in report[0][5], pin != cand)
+            # Never without arguments, and the install manager may not install a runtime on the way.
+            self.assertTrue(all(argv[1:4] == ["-I", "-S", "-c"] for argv, env in calls))
+            self.assertTrue(all(env["PYTHON_MANAGER_AUTOMATIC_INSTALL"] == "0" for argv, env in calls))
+            stub = r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\python.exe"
+            self.assertEqual(install.choose_python(stub)[0], None)
+            # A Store Python only when nothing else passes.
+            with mock.patch.object(install, "candidates", lambda: [stub, store, alias]):
+                py, report = install.choose_python()
+            self.assertEqual(py, real)
+            self.assertIn("used only when nothing else passes", report[1][5])
+            with mock.patch.object(install, "candidates", lambda: [stub, store]):
+                self.assertEqual(install.choose_python()[0], store)
+        calls.clear()
+        with mock.patch.object(install, "_run", self.fake_run({"/opt/py/bin/python3": (0, "/opt/py/bin/python3")}, calls)), \
+                mock.patch.object(install, "_runnable", lambda p: True):
+            install.probe_full("/opt/py/bin/python3")
+        self.assertIsNone(calls[0][1])  # the environment as it is, off Windows
+
+    def test_windows_wants_a_drive_and_a_exe(self):
+        with windows(), mock.patch("os.path.isfile", lambda p: True):
+            self.assertTrue(install._runnable(PY))
+            self.assertTrue(install._runnable(r"\\server\share\python.exe"))
+            self.assertFalse(install._runnable(r"\Python312\python.exe"))  # Git Bash reads / as its own root
+            self.assertFalse(install._runnable(r"C:\Python312\python"))
+            self.assertFalse(install._runnable("python.exe"))
+            self.assertEqual(install.probe(r"C:\x\python")[4], "not an absolute path to a .exe")
+
+    def test_windows_candidates_in_order(self):
+        tmp = tempfile.mkdtemp(prefix="ctempo-win-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        local, pf = os.path.join(tmp, "Local"), os.path.join(tmp, "Program Files")
+        made = []
+        for parts in (("Programs", "Python", "Python311"), ("Programs", "Python", "Python312"), ("Python", "pythoncore-3.14-64")):
+            made.append(os.path.join(local, *parts, "python.exe"))
+        made.append(os.path.join(pf, "Python 3.10", "python.exe"))
+        for p in made:
+            os.makedirs(os.path.dirname(p))
+            put(p, "")
+        core = {"3.12": {"InstallPath": {"": r"C:\Py312", "ExecutablePath": r"C:\Py312\python.exe"}},
+                "3.13": {"InstallPath": {"": r"C:\Py313"}}, "3.9": {"Help": {}}}
+        reg = FakeWinreg({("HKCU", 0): {"Software": {"Python": {
+                              "ContinuumAnalytics": {"Anaconda3-64": {"InstallPath": {"ExecutablePath": r"C:\conda\python.exe"}}},
+                              "PyLauncher": {"x": {"InstallPath": {"": r"C:\nope"}}}, "PythonCore": core}}},
+                          ("HKLM", 2): {"Software": {"Python": {"PythonCore": {"3.11": {"InstallPath": {"": r"C:\Py311"}}}}}}})
+        stub = r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\python.exe"
+        with mock.patch.dict(sys.modules, {"winreg": reg}), \
+                mock.patch("shutil.which", lambda n, *a, **kw: {"python": stub}.get(n)):
+            got = install.windows_candidates({"LOCALAPPDATA": local, "PROGRAMFILES": pf})
+        self.assertEqual(got, [os.path.join(r"C:\Py313", "python.exe"), r"C:\Py312\python.exe", r"C:\conda\python.exe",
+                               os.path.join(r"C:\Py311", "python.exe"), made[1], made[0], made[3], made[2],
+                               sys.executable, stub, None])
+
+    def test_py_launcher_list(self):
+        listing = (" -V:3.13 *        C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python313\\python.exe\n"
+                   " -V:3.12          C:\\Program Files\\Python312\\python.exe\n"
+                   " -V:ContinuumAnalytics/Anaconda3-64 C:/conda/python.exe\n")
+        seen = []
+
+        def run(argv, timeout, env=None, cwd=None):
+            seen.append((argv, env))
+            return 0, listing, ""
+
+        with mock.patch("shutil.which", lambda n, *a, **kw: r"C:\Windows\py.exe" if n == "py" else None), \
+                mock.patch.object(install, "_run", run):
+            got = install._py_launcher_pythons({"PATH": "x"})
+        self.assertEqual(got, [r"C:\Users\me\AppData\Local\Programs\Python\Python313\python.exe",
+                               r"C:\Program Files\Python312\python.exe", "C:/conda/python.exe"])
+        self.assertEqual(seen[0][0], [r"C:\Windows\py.exe", "-0p"])
+        self.assertEqual(seen[0][1]["PYTHON_MANAGER_AUTOMATIC_INSTALL"], "0")
+
+
+class WindowsInstall(Sandbox):
+    """install / uninstall through the Windows branches."""
+
+    def setUp(self):
+        super().setUp()
+        self.shell, self.shell_path = "bash", GIT_BASH
+        win = windows()
+        win.__enter__()
+        self.addCleanup(win.__exit__, None, None, None)
+        for p in (mock.patch.object(install, "entry_path", lambda: ENTRY),
+                  mock.patch.object(install, "choose_python", self.fake_choose),
+                  mock.patch.object(winshell, "predict_shell", self.fake_predict)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def fake_predict(self, env=None, settings_env=None, *a, **kw):
+        return self.shell, self.shell_path
+
+    @staticmethod
+    def fake_choose(explicit=None):
+        py = explicit if explicit and explicit != sys.executable else PY
+        return py, [(py, True, "3.12", "3.45.1", 20.0, "")]
+
+    def test_portable_command_shell_record_runtime_and_cmd_launcher(self):
+        before = self.write(SETTINGS)
+        bindir = os.path.join(self.dir, "bin")
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=bindir))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Claude Code runs it with Git Bash here; the command reads the same in Git Bash and PowerShell", out)
+        self.assertEqual(json.loads(self.read())["statusLine"]["command"], FWD)
+        self.assertEqual(install.load_state()["records"][self.path][winshell.RECORD_KEY], "bash")
+        with open(install.config.runtime_path(), encoding="utf-8") as f:
+            rt = json.load(f)
+        self.assertEqual((rt["python"], rt["args"], rt["entry"]), (PY, ["-I", "-S", "-X", "utf8"], ENTRY))
+        lp = os.path.join(bindir, "ctempo.cmd")
+        with open(lp, "rb") as f:
+            self.assertEqual(f.read(), install.launcher_text(PY, ENTRY).encode("utf-8"))
+        self.assertFalse(os.path.exists(os.path.join(bindir, "ctempo")))
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(lp), out)
+        self.assertEqual(self.read(), before)
+
+    def test_a_shell_change_repins_a_command_written_for_one_shell(self):
+        before = self.write(dict(SETTINGS, statusLine={"type": "command", "command": "echo 'mine'"}))
+        self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))
+        cmd = json.loads(self.read())["statusLine"]["command"]
+        self.assertEqual(install.command_shell(cmd), "bash")
+        self.shell, self.shell_path = "powershell", PS51  # Git for Windows was uninstalled since
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))
+        self.assertIn("PowerShell (no Git Bash found)", out)
+        cmd = json.loads(self.read())["statusLine"]["command"]
+        self.assertTrue(cmd.startswith("& 'C:/Program Files/Python312/python.exe' -I -S -X utf8 "), cmd)
+        self.assertEqual(install.compose_of(cmd), "echo 'mine'")
+        self.assertEqual(install.load_state()["records"][self.path][winshell.RECORD_KEY], "powershell")
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), before)
+
+    def test_a_shell_change_leaves_a_portable_command_and_updates_the_record(self):
+        self.write(SETTINGS)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        once = self.read()
+        self.shell, self.shell_path = "powershell", PS51
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+        self.assertIn("already runs ctempo", out)
+        self.assertEqual(self.read(), once)
+        self.assertEqual(install.load_state()["records"][self.path][winshell.RECORD_KEY], "powershell")
+
+    def doctor(self):
+        from ctempo import commands
+
+        buf = io.StringIO()
+        with redirect_stdout(buf), mock.patch.object(install, "claude_bin", lambda: None):
+            commands.cmd_doctor(argparse.Namespace(json=False, settings=self.path), config.load(os.devnull))
+        return buf.getvalue()
+
+    def test_doctor_reads_the_record_and_the_shell_names_install_writes(self):
+        # A command for one shell (a quoted interpreter): doctor warns once Claude Code would use the other.
+        self.write(SETTINGS)
+        self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))
+        self.assertIn("ok   statusLine shell: Git Bash  (%s)" % GIT_BASH, self.doctor())
+        self.shell, self.shell_path = "powershell", PS51
+        self.assertIn("WARN statusLine command is written for Git Bash, but Claude Code would run it in PowerShell",
+                      self.doctor())
+        self.run_cmd(install.install, args(self.path, apply=True, python=PY_SPACE))  # the repin doctor asks for
+        out = self.doctor()
+        self.assertIn("ok   statusLine shell: PowerShell  (%s)" % PS51, out)
+        self.assertNotIn("written for", out)
+        # A portable command: doctor names the shell install assumed, and never warns.
+        self._reset()
+        self.shell, self.shell_path = "bash", GIT_BASH
+        self.write(SETTINGS)
+        self.run_cmd(install.install, args(self.path, apply=True))
+        self.shell, self.shell_path = "powershell", PS51
+        self.assertIn("ok   statusLine shell: PowerShell  (%s; install assumed Git Bash, and the command reads the same "
+                      "in both)" % PS51, self.doctor())
+
+    def test_no_shell_at_all_is_said(self):
+        self.shell, self.shell_path = "powershell", None
+        self.write(SETTINGS)
+        rc, out = self.run_cmd(install.install, args(self.path))
+        self.assertIn("warning: no Git Bash and no PowerShell found", out)
+
+    def test_settings_env_names_the_git_bash(self):
+        # CLAUDE_CODE_GIT_BASH_PATH counts from the user file's env and the target file's own (which wins).
+        seen = []
+        proj = os.path.join(self.dir, "proj-settings.json")
+        put(proj, json.dumps({"env": {"CLAUDE_CODE_GIT_BASH_PATH": r"E:\proj\bash.exe"}}))
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir}), \
+                mock.patch.object(winshell, "predict_shell",
+                                  lambda env=None, settings_env=None: seen.append(settings_env) or ("bash", GIT_BASH)):
+            self.write({"env": {"CLAUDE_CODE_GIT_BASH_PATH": r"D:\user\bash.exe", "OTHER": "1"}})
+            self.run_cmd(install.install, args(self.path))
+            self.run_cmd(install.install, args(proj))
+            self.path = proj
+            self.doctor()  # doctor predicts with the same env as install
+        self.assertEqual(seen[0]["CLAUDE_CODE_GIT_BASH_PATH"], r"D:\user\bash.exe")
+        self.assertEqual(seen[1]["CLAUDE_CODE_GIT_BASH_PATH"], r"E:\proj\bash.exe")
+        self.assertEqual(seen[1]["OTHER"], "1")
+        self.assertEqual(seen[2], seen[1])
+
+    def test_a_repin_moves_an_older_sh_launcher_to_ctempo_cmd(self):
+        bindir = os.path.join(self.dir, "bin")
+        os.makedirs(bindir)
+        old = os.path.join(bindir, "ctempo")
+        put(old, "#!/bin/sh\n# ctempo launcher\nexec python3 x \"$@\"\n")  # what an older version wrote there
+        os.makedirs(self.home)
+        install.save_state({"launcher": old, "records": {}})
+        self.write(SETTINGS)
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(old), out)
+        self.assertTrue(os.path.exists(os.path.join(bindir, "ctempo.cmd")), out)
+        self.assertEqual(install.load_state()["launcher"], os.path.join(bindir, "ctempo.cmd"))
+        # A file of the user's in its place is theirs.
+        put(os.path.join(bindir, "ctempo.cmd"), "@echo mine\r\n")
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=bindir))
+        self.assertIn("exists and is not ours", out)
+        self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(install.read_text(os.path.join(bindir, "ctempo.cmd")), "@echo mine\r\n")
+
+    def test_marketplace_add_falls_back_to_dot_slash(self):
+        # Whether claude on Windows takes a drive path for a local marketplace is unconfirmed:
+        # when it rejects one, the documented ./ form runs from the repo instead.
+        root = install.repo_root()
+        cli, calls = plugin_cli(self.path), []
+
+        def picky(cmd, env=None, cwd=None):
+            calls.append((cmd, cwd))
+            if cmd[:3] == ["plugin", "marketplace", "add"] and cmd[3] != "./":
+                return 1, "", "Invalid marketplace source format. Try: owner/repo, https://..., or ./path"
+            return cli(cmd)
+
+        before = self.write(SETTINGS)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir}), \
+                mock.patch.object(install, "claude_bin", lambda: r"C:\x\claude.exe"), \
+                mock.patch.object(install, "run_claude", picky):
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True, no_mod=False))
+            self.assertEqual(rc, 0, out)
+            self.assertIn("retrying from", out)
+            self.assertEqual(calls, [(["plugin", "marketplace", "add", root], None), (["plugin", "marketplace", "add", "./"], root),
+                                     (["plugin", "install", install.PLUGIN_ID, "--scope", "user"], None)])
+            self.assertIn(install.PLUGIN_ID, json.loads(self.read())["enabledPlugins"])
+            rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True, no_mod=False))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.read(), before)
+        with windows(False), mock.patch.object(install, "claude_bin", lambda: "/bin/claude"), \
+                mock.patch.object(install, "run_claude", picky):
+            self.assertEqual(install._run_mod_command(install.mod_commands(root)[0], root, lambda s: None)[0], 1)
+
+    def test_manual_commands_say_how_to_add_the_folder_if_claude_rejects_it(self):
+        self.write(SETTINGS)
+        with mock.patch.object(install, "claude_bin", lambda: None):
+            rc, out = self.run_cmd(install.install, args(self.path, no_mod=False))
+        self.assertIn("run claude plugin marketplace add ./", out)
+
+
+class WindowsFiles(Sandbox):
+    """BOMs, held files and the subprocess helper, on any OS."""
+
+    def test_a_bom_is_kept_and_the_file_comes_back_byte_for_byte(self):
+        for text in (install.BOM + IRREGULAR, install.BOM, install.BOM + '{"statusLine": {"type": "command", "command": "x"}}'):
+            with self.subTest(text=text):
+                self._reset()
+                put(self.path, text)
+                rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                with open(self.path, "rb") as f:
+                    mid = f.read()
+                self.assertTrue(mid.startswith(b"\xef\xbb\xbf"), mid)
+                self.assertTrue(install.is_ours(install.parse_json(mid.decode("utf-8"))["statusLine"]["command"]))
+                rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+                self.assertEqual(rc, 0, out)
+                with open(self.path, "rb") as f:
+                    self.assertEqual(f.read(), text.encode("utf-8"))
+
+    def test_a_bom_backup_is_read_when_the_record_is_lost(self):
+        text = install.BOM + json.dumps(dict(SETTINGS, statusLine={"type": "command", "command": "~/mine.sh"}), indent=2,
+                                        ensure_ascii=False)
+        put(self.path, text)
+        self.run_cmd(install.install, args(self.path, apply=True, replace=True))
+        shutil.rmtree(self.home)  # install.json gone: only the backup knows
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(install.read_text(self.path), text)
+
+    def test_install_json_with_a_bom(self):
+        os.makedirs(self.home)
+        with open(install.state_path(), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps({"version": 2, "records": {}, "launcher": "x"}).encode())
+        self.assertEqual(install.load_state()["launcher"], "x")
+
+    def test_a_held_file_is_retried_on_windows_only(self):
+        self.write(SETTINGS)
+        real_replace = os.replace
+        for win, fails, ok in ((True, 2, True), (True, install.REPLACE_TRIES, False), (False, 1, False)):
+            with self.subTest(windows=win, fails=fails):
+                tries = []
+
+                def held(src, dst):
+                    tries.append(dst)
+                    if len(tries) <= fails:
+                        raise PermissionError(13, "in use by another process")
+                    return real_replace(src, dst)
+
+                with windows(win), mock.patch("os.replace", held), \
+                        mock.patch.object(install.time, "sleep", lambda s: None):
+                    if ok:
+                        install.atomic_write(self.path, "{}\n")
+                    else:
+                        with self.assertRaises(PermissionError):
+                            install.atomic_write(self.path, "{}\n")
+                self.assertEqual(len(tries), fails + 1 if ok else fails)
+                self.assertEqual(self.read() == "{}\n", ok)
+                self.assertEqual([n for n in os.listdir(self.dir) if n.endswith(".tmp")], [])  # no temp file left
+                self.write(SETTINGS)
+
+    def test_run_decodes_utf8_and_stops_on_timeout(self):
+        say = "import sys; sys.stdout.buffer.write(b'\\xe2\\x8f\\xba ok \\xff'); sys.stderr.buffer.write(b'\\xc3\\xa4')"
+        for win in (False, True):
+            with self.subTest(windows=win), windows(win), \
+                    mock.patch.object(install, "claude_bin", lambda: sys.executable):
+                self.assertEqual(install.run_claude(["-c", say]), (0, "\u23fa ok \ufffd", "\u00e4"))
+                with mock.patch.object(install, "CLAUDE_TIMEOUT", 0.5):
+                    t = time.monotonic()
+                    code, so, se = install.run_claude(["-c", "import time; time.sleep(30)"])
+                self.assertEqual(code, 124, se)
+                self.assertIn("timed out after", se)
+                self.assertLess(time.monotonic() - t, 4)  # killed, not waited for (the read gives up after 5 s)
 
 
 if __name__ == "__main__":

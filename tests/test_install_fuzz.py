@@ -33,7 +33,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from ctempo import config, install
+from ctempo import config, install, winshell
 
 from . import test_install as ti
 
@@ -56,7 +56,7 @@ CLAUDE = ("ok", "missing", "hang")
 COMPOSE = ("~/bin/other.sh", "echo 'hi there'", "~/bin/line.sh")
 
 
-def hang(cmd, env=None):
+def hang(cmd, env=None, cwd=None):
     return 124, "", "claude %s timed out after 120 s" % " ".join(cmd[:3])
 
 
@@ -79,6 +79,15 @@ def lists_mod(text):
 def fast_python(explicit=None):
     """The interpreter probe is not under test here, and it is slow."""
     return sys.executable, [(sys.executable, True, "3", "3", 1.0, "")]
+
+
+def quoted(cmd, argv):
+    """argv written back as the user would edit it, in the syntax cmd is written in: sh
+    quoting, or on Windows PowerShell's (`& '...'`) when ctempo wrote that."""
+    if install.command_shell(cmd) == "powershell":
+        return "& " + " ".join(a if a.startswith("-") or a in ("utf8", "statusline") else winshell.quote(a, "powershell")
+                               for a in argv)
+    return " ".join(shlex.quote(a) for a in argv)
 
 
 def load(text):
@@ -260,12 +269,13 @@ class World:
             if not self.ours(f):
                 return
             obj, x = load(text), COMPOSE[int(what.split("=")[1])]
-            argv = shlex.split(obj["statusLine"]["command"])
+            cmd = obj["statusLine"]["command"]
+            argv = install.split_command(cmd)
             if "--compose" in argv:
                 argv[argv.index("--compose") + 1] = x
             else:
                 argv += ["--compose", x]
-            obj["statusLine"] = dict(obj["statusLine"], command=" ".join(shlex.quote(a) for a in argv))
+            obj["statusLine"] = dict(obj["statusLine"], command=quoted(cmd, argv))
             self.write(f, install.dumps(obj, install.detect_format(text)))
             prev = self.user[f].get("statusLine")
             self.user[f]["statusLine"] = dict(prev if isinstance(prev, dict) else {"type": "command"}, command=x)
@@ -350,7 +360,7 @@ def run_sequence(seed):
     initial, claude, steps = generate(seed)
     root = tempfile.mkdtemp(prefix="ctempo-fuzz-")
     env = {"CTEMPO_HOME": os.path.join(root, "home"), "CLAUDE_CONFIG_DIR": os.path.join(root, "claude"),
-           "HOME": os.path.join(root, "userhome")}
+           "HOME": os.path.join(root, "userhome"), "USERPROFILE": os.path.join(root, "userhome")}
     problems, world = [], None
     try:
         with mock.patch.dict(os.environ, env), mock.patch.object(install, "choose_python", fast_python):

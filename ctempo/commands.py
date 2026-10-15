@@ -684,8 +684,8 @@ def _doctor_shell(add, spath, obj, cmd):
     for the other one (Git Bash installed or removed since install)."""
     from . import install, winshell
 
-    env = obj.get("env") if isinstance(obj.get("env"), dict) else None
-    kind, path = winshell.predict_shell(os.environ, env)
+    # The settings env install predicted with: the user file's, then this file's own.
+    kind, path = winshell.predict_shell(os.environ, install.settings_env(obj))
     if path is None:
         add("warn", "statusLine shell: no Git Bash and no PowerShell found", "Claude Code cannot run the statusLine")
         return
