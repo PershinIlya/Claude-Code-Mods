@@ -569,7 +569,7 @@ def cmd_doctor(args, cfg):
     add("ok", "ctempo %s" % _version(), "repo %s" % install.repo_root())
     rt = None
     try:
-        with open(config.runtime_path(), encoding="utf-8") as f:
+        with open(config.runtime_path(), encoding="utf-8-sig") as f:
             rt = json.load(f)
     except (OSError, ValueError):
         pass
@@ -597,6 +597,8 @@ def cmd_doctor(args, cfg):
             add("warn", "statusLine is not ctempo", cmd)
         else:
             add("warn", "no statusLine in %s" % sp)
+        if config.IS_WINDOWS:
+            _doctor_shell(add, sp, obj, cmd)
         if obj.get("disableAllHooks"):
             add("warn", "disableAllHooks is set", "the statusLine and mods do not run")
     except ValueError as e:
@@ -674,6 +676,38 @@ def cmd_doctor(args, cfg):
         for lvl, what, detail in results:
             print("%s %s%s" % (mark[lvl], what, ("  (" + detail + ")") if detail else ""))
     return 1 if any(r[0] == "fail" for r in results) else 0
+
+
+def _doctor_shell(add, spath, obj, cmd):
+    """Windows: the shell Claude Code will run the statusLine in (Git Bash if
+    it finds one, else PowerShell), and whether ctempo's command was written
+    for the other one (Git Bash installed or removed since install)."""
+    from . import install, winshell
+
+    env = obj.get("env") if isinstance(obj.get("env"), dict) else None
+    kind, path = winshell.predict_shell(os.environ, env)
+    if path is None:
+        add("warn", "statusLine shell: no Git Bash and no PowerShell found", "Claude Code cannot run the statusLine")
+        return
+    name = winshell.SHELLS[kind]
+    if not install.is_ours(cmd):
+        add("ok", "statusLine shell: %s" % name, path)
+        return
+    rec = install.find_record(install.load_state(), spath)[1]
+    was = rec.get(winshell.RECORD_KEY) if isinstance(rec, dict) else None
+    was = was if isinstance(was, str) and was in winshell.SHELLS else None
+    if winshell.reads_alike(cmd):
+        # Bare words: the same command whichever shell runs it.
+        note = "; install assumed %s, and the command reads the same in both" % winshell.SHELLS[was] if (
+            was and was != kind) else ""
+        add("ok", "statusLine shell: %s" % name, path + note)
+        return
+    need = winshell.written_for(cmd) or was
+    if need and need != kind:
+        add("warn", "statusLine command is written for %s, but Claude Code would run it in %s" % (
+            winshell.SHELLS[need], name), "run `ctempo install --apply` to rewrite it (%s)" % path)
+    else:
+        add("ok", "statusLine shell: %s" % name, path)
 
 
 def _version():

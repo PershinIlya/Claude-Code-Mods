@@ -58,7 +58,35 @@ def build_parser():
     return p
 
 
+def utf8_output():
+    """Windows: a pipe or a file gets the ANSI code page, which has no ▲ → ░
+    (`now`, `profile` and `doctor` raised UnicodeEncodeError), and -I ignores
+    PYTHONIOENCODING and PYTHONUTF8: such a stream is switched to UTF-8. The
+    console is UTF-8 already (PEP 528); macOS and Linux are left alone."""
+    if not config.IS_WINDOWS:
+        return
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
+        if enc != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+    try:  # colors on the Windows 10+ console: turn on its VT processing (best effort)
+        import ctypes
+
+        k = ctypes.windll.kernel32
+        k.GetStdHandle.restype = ctypes.c_void_p  # a HANDLE, pointer-sized
+        h, mode = ctypes.c_void_p(k.GetStdHandle(-11)), ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, mode.value | 0x0004)
+    except Exception:
+        pass
+
+
 def main(argv):
+    utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.cmd is None:
