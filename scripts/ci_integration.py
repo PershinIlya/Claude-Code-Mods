@@ -32,8 +32,17 @@ a temporary folder for every step: the real ones are never read or written.
    working directory), each in its own temporary config, and whether
    `claude plugin install` works from the first accepted one. Reported
    only: this part never fails the run.
+4. Windows: the launchers `install --bin-dir` writes, with that folder on
+   PATH: ctempo.cmd from `cmd /d /c`, pwsh and powershell.exe, and the sh
+   ctempo beside it from Git Bash (`bash -lc`) run --version, check (exit
+   1), an install that repins to another interpreter and an uninstall, which
+   rewrite and delete the launcher while it runs. Each must exit with
+   ctempo's code, and cmd.exe must not say "The batch file cannot be found."
+   or "is not recognized".
+5. A read-only settings.json (attrib +R on Windows): install and uninstall
+   go through, and it comes back byte for byte, still read-only.
 
-Exit 1 when a check in 1 or 2 fails.
+Exit 1 when a check in 1, 2, 4 or 5 fails.
 """
 
 import argparse
@@ -41,6 +50,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -414,6 +424,161 @@ def short_paths(python, entry):
         ROWS.append(("8.3 short path", what, "used" if used else "not used"))
 
 
+def other_python(tmp):
+    """An interpreter whose path has another length than this one's: a venv's, else this one
+    through a dotted path, so a repin through a launcher rewrites it with a line of another length."""
+    venv = os.path.join(tmp, "venv-for-a-longer-path")
+    p = subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], capture_output=True, timeout=300)
+    python = os.path.join(venv, "Scripts", "python.exe") if WINDOWS else os.path.join(venv, "bin", "python")
+    if p.returncode == 0 and os.path.exists(python):
+        return python
+    print("  (no venv, so this interpreter by a longer path: %s)" % p.stderr.decode("utf-8", "replace").strip())
+    folder, name = os.path.split(sys.executable)
+    return os.path.join(folder, *["."] * 8 + [name])
+
+
+def launchers(tmp):
+    """Windows: ctempo.cmd from cmd.exe, pwsh and powershell.exe, and the sh ctempo beside it
+    from Git Bash, with the --bin-dir folder on PATH: --version, check (its exit 1 must reach
+    the caller), an install that repins to an interpreter whose path has another length (it
+    rewrites the launchers while one runs) and an uninstall (it deletes them while one runs).
+    Each must exit with ctempo's own code, and cmd.exe must not read the batch file again after
+    python returned ("The batch file cannot be found.", or a piece of the new text run as a
+    command: "is not recognized")."""
+    if not WINDOWS:
+        return
+    print("\n== The launchers: ctempo.cmd from cmd.exe and PowerShell, ctempo from Git Bash")
+    env = sandbox(tmp)
+    bindir = os.path.join(tmp, "bin")
+    env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    settings = os.path.join(tmp, "settings.json")
+    before = b'{\n  "theme": "dark"\n}\n'
+    entry = os.path.join(ROOT, "bin", "ctempo")
+    other = other_python(tmp)
+    print("  interpreters: %s (%d characters), then %s (%d)" % (sys.executable, len(sys.executable), other, len(other)))
+    cmd_exe = os.environ.get("ComSpec") or r"C:\Windows\System32\cmd.exe"
+    callers = [("cmd", "ctempo.cmd", lambda words: '"%s" /d /c %s' % (cmd_exe, subprocess.list2cmdline(words)))]
+    for ps in ("pwsh", "powershell"):
+        exe = shutil.which(ps, path=env["PATH"])
+        if exe:  # shell_versions() fails the run for a missing one
+            callers.append((ps, "ctempo.cmd", lambda words, exe=exe: [exe] + PS_FLAGS + [
+                "& %s; exit $LASTEXITCODE" % " ".join(winshell.quote(w, "powershell") for w in words)]))
+    if os.path.exists(GIT_BASH):
+        callers.append(("Git Bash", "ctempo", lambda words: [GIT_BASH, "-lc", " ".join(
+            winshell.quote(winshell.slashes(w), "bash") for w in words)]))
+    inst = ["install", "--apply", "--no-mod", "--no-bootstrap", "--settings", settings]
+    for caller, name, line in callers:
+        print("\n  -- %s, running %s" % (caller, name))
+        with open(settings, "wb") as f:
+            f.write(before)
+        if ctempo(entry, env, inst + ["--bin-dir", bindir]) != 0:
+            fail("launchers, %s: install --bin-dir failed" % caller)
+            continue
+        steps = [([name, "--version"], 0, "ctempo "), ([name, "check"], 1, None),
+                 ([name] + inst + ["--python", other], 0, "Wrote launcher"),
+                 ([name, "uninstall", "--apply", "--no-mod", "--settings", settings], 0, "Uninstalled")]
+        if name == "ctempo.cmd":  # by its bare name too: PATHEXT finds ctempo.cmd, never the sh ctempo
+            steps.insert(1, (["ctempo", "--version"], 0, "ctempo "))
+        problems = []
+        for words, want, text in steps:
+            try:
+                p = subprocess.run(line(words), env=env, capture_output=True, timeout=120)
+                code, out = p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
+            except (OSError, subprocess.SubprocessError) as e:
+                code, out = None, repr(e)
+            print("  $ %s -> exit %s" % (" ".join(words[:2]), code))
+            show(out)
+            said = [s for s in ("batch file cannot be found", "is not recognized", "command not found")
+                    if s in out.lower()]
+            if code != want or (text and text not in out) or said:
+                problems.append("%s: exit %s (want %d)%s%s" % (" ".join(words[:2]), code, want,
+                                                              "" if not text or text in out else ", no %r" % text,
+                                                              "".join(", says %r" % s for s in said)))
+            if words[1] == "install":  # repinned while one of them ran
+                for path, want_text in ((os.path.join(bindir, "ctempo.cmd"), other),
+                                        (os.path.join(bindir, "ctempo"), winshell.slashes(other))):
+                    try:
+                        with open(path, encoding="latin-1") as f:
+                            if want_text not in f.read():
+                                problems.append("%s does not run %s after the repin" % (path, other))
+                    except OSError as e:
+                        problems.append("%s after the repin: %s" % (path, e))
+        left = [n for n in ("ctempo.cmd", "ctempo") if os.path.exists(os.path.join(bindir, n))]
+        if left:
+            problems.append("uninstall left %s" % ", ".join(left))
+        with open(settings, "rb") as f:
+            if f.read() != before:
+                problems.append("settings.json differs after uninstall")
+        ROWS.append(("launchers", "%s, %s" % (caller, name), "FAILED: %s" % "; ".join(problems) if problems else "ok"))
+        for msg in problems:
+            fail("launchers, %s: %s" % (caller, msg))
+
+
+def read_only(tmp):
+    """A read-only settings.json (attrib +R on Windows, mode 0444 elsewhere): install and
+    uninstall go through as on POSIX, the file comes back byte for byte and is still
+    read-only. One install created and the user made read-only since: uninstall removes it."""
+    name = "a read-only settings.json"
+    print("\n== %s" % name)
+    env = sandbox(tmp)
+    entry = os.path.join(ROOT, "bin", "ctempo")
+    path, new = os.path.join(tmp, "settings.json"), os.path.join(tmp, "new", "settings.json")
+    before = b'{\r\n  "theme": "dark"\r\n}\r\n'
+    with open(path, "wb") as f:
+        f.write(before)
+
+    def protect(p):
+        if WINDOWS:
+            r = subprocess.run([os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "attrib.exe"),
+                                "+R", p], capture_output=True, timeout=60)
+            if r.returncode != 0:
+                problems.append("attrib +R failed: %s" % r.stdout.decode("utf-8", "replace").strip())
+        else:
+            os.chmod(p, 0o444)
+
+    def read_only_now(p, when):
+        if os.stat(p).st_mode & stat.S_IWRITE:
+            problems.append("settings.json is not read-only %s" % when)
+
+    problems = []
+    flags = ["--no-bootstrap", "--no-mod"]
+    try:
+        protect(path)
+        if ctempo(entry, env, ["install", "--apply", "--settings", path] + flags) != 0:
+            problems.append("install failed")
+        else:
+            with open(path, encoding="utf-8") as f:
+                if "ctempo" not in (json.load(f).get("statusLine") or {}).get("command", ""):
+                    problems.append("no ctempo statusLine after install")
+            read_only_now(path, "after install")
+            if ctempo(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
+                problems.append("uninstall failed")
+            with open(path, "rb") as f:
+                if f.read() != before:
+                    problems.append("it differs after uninstall")
+            read_only_now(path, "after uninstall")
+        if ctempo(entry, env, ["install", "--apply", "--settings", new] + flags) != 0:
+            problems.append("install into a new settings.json failed")
+        else:
+            protect(new)
+            if ctempo(entry, env, ["uninstall", "--apply", "--settings", new, "--no-mod"]) != 0:
+                problems.append("uninstall of a new settings.json made read-only failed")
+            elif os.path.exists(new):
+                problems.append("uninstall left the settings.json it created")
+    finally:
+        for folder, _, names in os.walk(tmp):  # so the temporary folder can go (Windows deletes no read-only file)
+            for n in names:
+                try:
+                    os.chmod(os.path.join(folder, n), stat.S_IREAD | stat.S_IWRITE)
+                except OSError:
+                    pass
+    if not problems:
+        print("  settings.json is byte for byte what it was, and still read-only")
+    ROWS.append((name, "install, uninstall", "FAILED: %s" % "; ".join(problems) if problems else "ok"))
+    for msg in problems:
+        fail("%s: %s" % (name, msg))
+
+
 def report(tmp):
     print("\n== The statusLine shell and the installer's interpreter report")
     env = sandbox(tmp)
@@ -510,6 +675,8 @@ def main(argv):
         short_paths(python, entry)
         if WINDOWS and python and env:
             own_forms(env, python, entry)
+        launchers(os.path.join(tmp, "launchers"))
+        read_only(os.path.join(tmp, "read-only"))
         if not args.no_marketplace:
             marketplace(os.path.join(tmp, "marketplace"))
     finally:

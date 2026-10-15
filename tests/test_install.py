@@ -6,6 +6,8 @@ import io
 import json
 import os
 import shutil
+import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -255,6 +257,18 @@ class Install(Sandbox):
         self.assertEqual(install.read_text(lp), install.launcher_text(sys.executable, install.entry_path()))
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertFalse(os.path.exists(lp))
+
+    def test_launchers_of_this_system(self):
+        # Review 15 (W-4): on Windows ctempo.cmd and, for Git Bash, an sh ctempo; elsewhere ctempo alone.
+        self.write(SETTINGS)
+        bindir = os.path.join(self.dir, "bin")
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=bindir))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(os.listdir(bindir)), ["ctempo", "ctempo.cmd"] if config.IS_WINDOWS else ["ctempo"])
+        self.assertEqual("sh_launcher" in install.load_state(), config.IS_WINDOWS)
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(os.listdir(bindir), [])
 
     def alt_python(self):
         """Another absolute path to the same interpreter: forces a repin. A symlink would not
@@ -1717,8 +1731,60 @@ class WindowsCommand(unittest.TestCase):
     def test_launcher_cmd_text(self):
         with windows():
             text = install.launcher_text(r"C:\100%\python.exe", "C:/repo/bin/ctempo")
-        self.assertEqual(text, '@echo off\r\nrem ctempo launcher\r\n"C:\\100%%\\python.exe" -I -S -X utf8 '
-                               '"C:\\repo\\bin\\ctempo" %*\r\nexit /b %ERRORLEVEL%\r\n')
+        self.assertEqual(text, '@echo off\r\nrem ctempo launcher\r\n(goto) 2>nul & "C:\\100%%\\python.exe" -I -S -X utf8 '
+                               '"C:\\repo\\bin\\ctempo" %*\r\n')
+
+    def test_the_cmd_launcher_ends_the_batch_on_the_python_line(self):
+        # Review 15 (W-6): cmd.exe opened ctempo.cmd again after python returned, to read
+        # `exit /b`, so an uninstall run through it ended with "The batch file cannot be found."
+        # and a repin to a path of another length ran the middle of the new text as a command.
+        # The python call is the last line, behind the (goto) that ends the batch first.
+        for py, entry in ((PY, ENTRY), (PY_SPACE, ENTRY_SPACE), (r"C:\100%\python.exe", "C:/repo/bin/ctempo")):
+            with self.subTest(py=py):
+                with windows():
+                    lines = install.launcher_text(py, entry).split("\r\n")
+                self.assertEqual(lines[:2], ["@echo off", install.CMD_MARK])
+                self.assertEqual(lines[3:], [""])  # nothing after the python line
+                self.assertTrue(lines[2].startswith("(goto) 2>nul & "), lines[2])
+                self.assertTrue(lines[2].endswith(" %*"), lines[2])
+                self.assertNotIn("\n", "".join(lines))  # CRLF only
+        # A launcher an older version wrote is still ctempo's, so a repin rewrites it.
+        with tempfile.TemporaryDirectory() as d:
+            for text in ('@echo off\r\nrem ctempo launcher\r\n"C:\\py\\python.exe" -I -S -X utf8 "C:\\repo\\bin\\ctempo" %*'
+                         '\r\nexit /b %ERRORLEVEL%\r\n', install.launcher_text(PY, ENTRY), "@echo mine\r\n"):
+                put(os.path.join(d, "ctempo.cmd"), text)
+                self.assertEqual(install._is_launcher(os.path.join(d, "ctempo.cmd")), text != "@echo mine\r\n")
+
+    def test_sh_launcher_text_for_git_bash(self):
+        # Review 15 (W-4): Git Bash never looks for ctempo.cmd, so a `ctempo` sh launcher sits
+        # beside it: forward slashes, sh quoting, the Windows flags, LF only.
+        with windows():
+            self.assertEqual(install.sh_launcher_text(PY, ENTRY),
+                             '#!/bin/sh\n# ctempo launcher\nexec C:/Users/me/AppData/Local/Programs/Python/Python312/'
+                             'python.exe -I -S -X utf8 C:/Users/me/Claude-Code-Mods/bin/ctempo "$@"\n')
+            self.assertEqual(install.sh_launcher_text(PY_SPACE, r"C:\Users\Jürgen's\bin\ctempo"),
+                             "#!/bin/sh\n# ctempo launcher\nexec 'C:/Program Files/Python312/python.exe' -I -S -X utf8 "
+                             "'C:/Users/J\u00fcrgen'\"'\"'s/bin/ctempo' \"$@\"\n")
+        with windows(False):  # the macOS and Linux launcher, as before
+            self.assertEqual(install.launcher_text("/opt/my py/python3", "/x/bin/ctempo"),
+                             "#!/bin/sh\n# ctempo launcher\nexec '/opt/my py/python3' -I -S /x/bin/ctempo \"$@\"\n")
+
+    @unittest.skipUnless(os.name == "posix", "runs the text in /bin/sh")
+    def test_sh_launcher_for_git_bash_runs_in_sh(self):
+        # The Windows form, with paths that exist here: sh reads the quoting and passes the
+        # arguments and the exit code through.
+        with tempfile.TemporaryDirectory() as d:
+            entry = os.path.join(d, "it's", "entry")
+            os.makedirs(os.path.dirname(entry))
+            put(entry, "import sys; print(sys.flags.isolated, sys.flags.no_site, sys.flags.utf8_mode, sys.argv[1:]);"
+                       " sys.exit(3)\n")
+            with windows():
+                text = install.sh_launcher_text(sys.executable, entry)
+            lp = os.path.join(d, "ctempo")
+            with open(lp, "wb") as f:
+                f.write(text.encode("utf-8"))
+            p = subprocess.run(["/bin/sh", lp, "a b", "--x"], capture_output=True, encoding="utf-8")
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (3, "1 1 1 ['a b', '--x']\n", ""))
 
 
 class WindowsProbe(unittest.TestCase):
@@ -1860,13 +1926,16 @@ class WindowsInstall(Sandbox):
         with open(install.config.runtime_path(), encoding="utf-8") as f:
             rt = json.load(f)
         self.assertEqual((rt["python"], rt["args"], rt["entry"]), (PY, ["-I", "-S", "-X", "utf8"], ENTRY))
-        lp = os.path.join(bindir, "ctempo.cmd")
+        lp, sh = os.path.join(bindir, "ctempo.cmd"), os.path.join(bindir, "ctempo")
         with open(lp, "rb") as f:
             self.assertEqual(f.read(), install.launcher_text(PY, ENTRY).encode("utf-8"))
-        self.assertFalse(os.path.exists(os.path.join(bindir, "ctempo")))
+        with open(sh, "rb") as f:  # for Git Bash, which never looks for ctempo.cmd
+            self.assertEqual(f.read(), install.sh_launcher_text(PY, ENTRY).encode("utf-8"))
+        self.assertEqual((install.load_state()["launcher"], install.load_state()["sh_launcher"]), (lp, sh))
         rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertEqual(rc, 0, out)
         self.assertFalse(os.path.exists(lp), out)
+        self.assertFalse(os.path.exists(sh), out)
         self.assertEqual(self.read(), before)
 
     def test_a_shell_change_repins_a_command_written_for_one_shell(self):
@@ -1958,15 +2027,69 @@ class WindowsInstall(Sandbox):
         self.write(SETTINGS)
         rc, out = self.run_cmd(install.install, args(self.path, apply=True))
         self.assertEqual(rc, 0, out)
-        self.assertFalse(os.path.exists(old), out)
+        # The old ctempo is the sh launcher for Git Bash now (rewritten with LF), not a stale launcher.
+        with open(old, "rb") as f:
+            self.assertEqual(f.read(), install.sh_launcher_text(PY, ENTRY).encode("utf-8"))
         self.assertTrue(os.path.exists(os.path.join(bindir, "ctempo.cmd")), out)
         self.assertEqual(install.load_state()["launcher"], os.path.join(bindir, "ctempo.cmd"))
+        self.assertEqual(install.load_state()["sh_launcher"], old)
         # A file of the user's in its place is theirs.
         put(os.path.join(bindir, "ctempo.cmd"), "@echo mine\r\n")
         rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=bindir))
         self.assertIn("exists and is not ours", out)
         self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertEqual(install.read_text(os.path.join(bindir, "ctempo.cmd")), "@echo mine\r\n")
+        self.assertFalse(os.path.exists(old))
+
+    def test_the_sh_launcher_follows_ctempo_cmd(self):
+        # Review 15 (W-4): `ctempo` was "command not found" in Git Bash and in Claude Code's Bash
+        # tool. The sh launcher beside ctempo.cmd is repinned, moved and removed with it, and a
+        # file of the user's named ctempo is never written over or removed.
+        before = self.write(SETTINGS)
+        a, b, c = (os.path.join(self.dir, n) for n in ("a", "b", "c"))
+        other = r"C:\Python313\python.exe"
+
+        def data(path):
+            with open(path, "rb") as f:
+                return f.read()
+
+        def check(folder, python, names=("ctempo", "ctempo.cmd")):
+            self.assertEqual(sorted(os.listdir(folder)), list(names))
+            self.assertEqual(data(os.path.join(folder, "ctempo.cmd")), install.launcher_text(python, ENTRY).encode("utf-8"))
+            if "ctempo" in names:
+                self.assertEqual(data(os.path.join(folder, "ctempo")), install.sh_launcher_text(python, ENTRY).encode("utf-8"))
+
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=a))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Launcher for Git Bash: %s" % os.path.join(a, "ctempo"), out)
+        check(a, PY)
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=other))  # a repin: both follow
+        self.assertEqual(rc, 0, out)
+        check(a, other)
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=b))  # both move
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(os.listdir(a), [])
+        check(b, PY)
+        os.remove(os.path.join(b, "ctempo"))  # the user deleted it: only --bin-dir brings it back
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, python=other))
+        self.assertEqual(rc, 0, out)
+        check(b, other, ("ctempo.cmd",))
+        self.assertNotIn("sh_launcher", install.load_state())
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=b))
+        self.assertEqual(rc, 0, out)
+        check(b, PY)
+        os.makedirs(c)
+        put(os.path.join(c, "ctempo"), "#!/bin/sh\necho mine\n")
+        rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=c))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Skipped launcher: %s exists and is not ours" % os.path.join(c, "ctempo"), out)
+        self.assertEqual(os.listdir(b), [])
+        self.assertNotIn("sh_launcher", install.load_state())
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(os.listdir(c), ["ctempo"])
+        self.assertEqual(install.read_text(os.path.join(c, "ctempo")), "#!/bin/sh\necho mine\n")
+        self.assertEqual(self.read(), before)
 
     def test_marketplace_add_falls_back_to_dot_slash(self):
         # Whether claude on Windows takes a drive path for a local marketplace is unconfirmed:
@@ -2002,6 +2125,137 @@ class WindowsInstall(Sandbox):
         with mock.patch.object(install, "claude_bin", lambda: None):
             rc, out = self.run_cmd(install.install, args(self.path, no_mod=False))
         self.assertIn("run claude plugin marketplace add ./", out)
+
+
+@unittest.skipUnless(os.name == "nt", "runs ctempo.cmd in cmd.exe")
+class CmdLauncherRuns(unittest.TestCase):
+    """Review 15 (W-6): ctempo.cmd in a real cmd.exe while the program it runs rewrites or deletes
+    it, as an install or uninstall run through it does. cmd.exe used to read the batch file again
+    after python returned: "The batch file cannot be found.", or the middle of the new text run as
+    a command ("is not recognized"), and the exit code was not python's."""
+
+    STUB = ("import os, sys\n"
+            "lp = os.environ['CTEMPO_TEST_LAUNCHER']\n"
+            "if sys.argv[1:] == ['delete']:\n"
+            "    os.remove(lp)\n"
+            "elif sys.argv[1:] == ['rewrite']:\n"
+            "    with open(os.environ['CTEMPO_TEST_NEXT'], 'rb') as f, open(lp, 'wb') as g:\n"
+            "        g.write(f.read())\n"
+            "sys.exit(3)\n")
+
+    def test_the_exit_code_is_pythons_and_cmd_reads_nothing_after_it(self):
+        comspec = os.environ.get("COMSPEC") or "cmd.exe"
+        others = (None, r"C:\a\much\longer\folder\of\another\interpreter\python.exe", r"C:\py\python.exe")
+        for action, other in (("run", None), ("delete", None), ("rewrite", others[1]), ("rewrite", others[2])):
+            with self.subTest(action=action, other=other), tempfile.TemporaryDirectory() as d:
+                stub, lp, nxt = (os.path.join(d, n) for n in ("stub.py", "ctempo.cmd", "next.cmd"))
+                put(stub, self.STUB)
+                with open(lp, "wb") as f:
+                    f.write(install._launcher_bytes(sys.executable, stub))
+                with open(nxt, "wb") as f:
+                    f.write(install._launcher_bytes(other or sys.executable, stub))
+                env = dict(os.environ, CTEMPO_TEST_LAUNCHER=lp, CTEMPO_TEST_NEXT=nxt)
+                p = subprocess.run([comspec, "/d", "/c", "ctempo.cmd", action], cwd=d, env=env, capture_output=True,
+                                   timeout=60)
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (3, b"", b""))
+                self.assertEqual(os.path.exists(lp), action != "delete")
+
+
+class ReadOnlySettings(Sandbox):
+    """Review 15 (W-10): a read-only settings.json (attrib +R). POSIX replaces and removes it like
+    any other file, and the new one keeps the mode; Windows refuses both (MoveFileEx, DeleteFile),
+    so install and uninstall raised after 2 s of retries."""
+
+    def tearDown(self):
+        for folder, _, names in os.walk(self.dir):  # Windows cannot delete a read-only file
+            for n in names:
+                try:
+                    os.chmod(os.path.join(folder, n), stat.S_IREAD | stat.S_IWRITE)
+                except OSError:
+                    pass
+        super().tearDown()
+
+    def mode(self, path=None):
+        return stat.S_IMODE(os.stat(path or self.path).st_mode)
+
+    @contextlib.contextmanager
+    def windows_rules(self):
+        """Windows, on any OS: os.replace and os.remove refuse a read-only target (WinError 5),
+        and the retries do not wait."""
+        real_replace, real_remove = os.replace, os.remove
+
+        def refuse(path):
+            if os.path.exists(path) and not os.stat(path).st_mode & stat.S_IWRITE:
+                raise PermissionError(13, "Access is denied", path)
+
+        def replace(src, dst):
+            refuse(dst)
+            return real_replace(src, dst)
+
+        def remove(path):
+            refuse(path)
+            return real_remove(path)
+
+        with windows(), mock.patch("os.replace", replace), mock.patch("os.remove", remove), \
+                mock.patch.object(install.time, "sleep", lambda s: None), \
+                mock.patch.object(install, "choose_python", WindowsInstall.fake_choose), \
+                mock.patch.object(install, "entry_path", lambda: ENTRY), \
+                mock.patch.object(winshell, "predict_shell", lambda *a, **kw: ("bash", GIT_BASH)):
+            yield
+
+    def install_and_uninstall(self, rules=contextlib.nullcontext):
+        text = IRREGULAR.replace("\n", "\r\n")
+        put(self.path, text)
+        os.chmod(self.path, 0o444)
+        with rules():
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(install.is_ours(json.loads(self.read())["statusLine"]["command"]))
+        self.assertEqual(self.mode(), 0o444)
+        with rules():
+            rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), text.encode("utf-8"))
+        self.assertEqual(self.mode(), 0o444)
+        # A file install created, made read-only since: uninstall removes it, as on POSIX.
+        new = os.path.join(self.dir, "new", "settings.json")
+        with rules():
+            rc, out = self.run_cmd(install.install, args(new, apply=True))
+        self.assertEqual(rc, 0, out)
+        os.chmod(new, 0o444)
+        with rules():
+            rc, out = self.run_cmd(install.uninstall, args(new, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(new), out)
+
+    def test_install_and_uninstall_on_windows_rules(self):
+        self.install_and_uninstall(self.windows_rules)
+
+    @unittest.skipUnless(os.name == "nt", "the read-only attribute as Windows enforces it")
+    def test_install_and_uninstall_on_windows(self):
+        self.install_and_uninstall()
+
+    def test_the_attribute_comes_back_when_the_move_fails(self):
+        put(self.path, IRREGULAR)
+        for win in (True,) if os.name == "nt" else (True, False):  # off its rules, Windows keeps the read-only temp file
+            with self.subTest(windows=win):
+                os.chmod(self.path, 0o444)
+                seen = []
+
+                def held(src, dst):
+                    seen.append(bool(os.stat(dst).st_mode & stat.S_IWRITE))
+                    raise PermissionError(13, "in use by another process")
+
+                with windows(win), mock.patch("os.replace", held), \
+                        mock.patch.object(install.time, "sleep", lambda s: None):
+                    with self.assertRaises(PermissionError):
+                        install.atomic_write(self.path, "{}\n")
+                # Writable for the move on Windows only, and read-only again after it failed.
+                self.assertEqual(seen, [win] * (install.REPLACE_TRIES if win else 1))
+                self.assertEqual(self.mode(), 0o444)
+                self.assertEqual(self.read(), IRREGULAR)
+                self.assertEqual([n for n in os.listdir(self.dir) if n.endswith(".tmp")], [])
 
 
 class WindowsFiles(Sandbox):
