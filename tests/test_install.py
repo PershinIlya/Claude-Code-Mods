@@ -1461,9 +1461,10 @@ class Install(unittest.TestCase):
     @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
     def test_backups_named_in_utc_sort_among_older_local_time_names(self):
         # Review 8 (delta-install#1): new backups are named in UTC (a Z marks them), older ones
-        # in local time; the order reads each name in its own time.
+        # in local time. Review 9 (delta-install#1): a Z name comes from a newer version than
+        # any local-time name, so it sorts after them all, also where local time reads later.
         with time_zone("JST-9"):  # Tokyo, 9 hours ahead of UTC
-            for legacy, want in (("20261014-120000", "utc"), ("20261014-150000", "legacy")):
+            for legacy, want in (("20261014-120000", "utc"), ("20261014-150000", "utc")):
                 with self.subTest(legacy=legacy):
                     self._reset()
                     for name, cmd in ((legacy, "legacy"), ("20261014-050000Z", "utc")):
@@ -1502,6 +1503,74 @@ class Install(unittest.TestCase):
                 if before == empty:
                     self.assertEqual(self.read(), before)
                 self._assert_clean(proj)
+
+    # -- ninth review ----------------------------------------------------------------
+    def test_the_users_own_empty_plugin_key_survives_a_manual_mod(self):
+        # Review 9 (delta-install#0): with claude off PATH at install, the user runs the printed
+        # plugin commands. Their own empty key then holds only ctempo's entry, which counted as
+        # the plugin CLI's for a manual mod, so uninstall removed it and rewrote the file.
+        empty = '{\n  "model": "opus",\n  "enabledPlugins": {}\n}\n'
+        for steps in (("iU-nobin", "mod-by-hand", "uU"), ("iP-nobin", "mod-by-hand", "uP"),
+                      ("iU-nobin", "mod-by-hand", "uU-nobin", "unmod-by-hand", "uU-nobin"),
+                      ("iP-nobin", "mod-by-hand", "uP-nobin", "unmod-by-hand", "uP-nobin")):
+            with self.subTest(steps=steps):
+                self._reset()
+                proj = self._proj()
+                with self._user_file(empty):
+                    rcs = self._steps(proj, *steps)
+                self.assertEqual(rcs[-1], 0)
+                self.assertEqual(self.read(), empty)
+                self._assert_clean(proj)
+
+    @unittest.skipUnless(hasattr(time, "tzset"), "needs time.tzset")
+    def test_backups_named_in_utc_sort_after_local_time_names_from_an_older_version(self):
+        # Review 9 (delta-install#1): a name without Z was read in the zone in effect when read, so
+        # after a move west a backup an older version had named in local time sorted after a newer
+        # Z backup, and an uninstall without install.json restored a statusLine the user removed.
+        def legacy_backup(path):
+            """make_backup as versions before review 8 named it: local time, no Z."""
+            name = "%s.ctempo-backup-%s" % (os.path.realpath(path), time.strftime("%Y%m%d-%H%M%S"))
+            shutil.copy2(path, name)
+            return name
+
+        with time_zone("EST5"), mock.patch.object(install, "make_backup", legacy_backup):  # New York, the older version
+            self.write(dict(SETTINGS, statusLine={"type": "command", "command": "~/bin/one.sh"}))
+            self.run_cmd(install.install, args(self.path, apply=True))
+            self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.write(SETTINGS)  # the user removed their statusLine
+        with time_zone("PST8"):  # Los Angeles, the same day, the newer version
+            self.run_cmd(install.install, args(self.path, apply=True))
+            shutil.rmtree(self.home)  # install.json goes with the data folder
+            rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(json.loads(self.read()), SETTINGS)
+
+    def test_launcher_moved_to_its_own_directory_under_another_name_stays(self):
+        # Review 9 (delta-install#2): realpath neither folds case (macOS disks ignore it) nor sees
+        # through bind mounts, so a --bin-dir naming the earlier one another way counted as another
+        # directory: install wrote the launcher there, then removed it as the earlier one.
+        before = self.write(SETTINGS)
+        first, alias = os.path.join(self.dir, "bin"), os.path.join(self.dir, "Bin")
+        os.makedirs(first)
+        os.symlink(first, alias)  # one directory, two names
+        realpath = os.path.realpath
+
+        def case_blind(path, *a, **kw):
+            """realpath as on a case-insensitive disk: Bin stays Bin."""
+            return os.path.abspath(path) if os.path.abspath(path).startswith(alias + os.sep) else realpath(path, *a, **kw)
+
+        self.run_cmd(install.install, args(self.path, apply=True, bin_dir=alias))
+        with mock.patch.object(os.path, "realpath", case_blind):
+            rc, out = self.run_cmd(install.install, args(self.path, apply=True, bin_dir=first))
+        self.assertEqual(rc, 0, out)
+        lp = os.path.join(first, "ctempo")
+        self.assertTrue(os.path.exists(lp), out)
+        self.assertEqual(install.read_text(lp), install.launcher_text(sys.executable, install.entry_path()))
+        self.assertEqual(install.load_state()["launcher"], lp)
+        rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(lp), out)
+        self.assertEqual(self.read(), before)
 
 
 if __name__ == "__main__":
