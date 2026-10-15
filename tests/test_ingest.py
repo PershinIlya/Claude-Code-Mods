@@ -1,6 +1,6 @@
 import unittest
 
-from ctempo import ingest, pace
+from ctempo import commands, ingest, pace
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
 from ctempo.store import ANOMALY, FIRST, FRESH, HEARTBEAT
 
@@ -265,6 +265,81 @@ class Record(TempHome):
         # A real early reset (the level drops) still rolls over.
         self.feed(t + D, week=(3, self.R7 + int(2 * H)))
         self.assertEqual([i["close_reason"] for i in self.windows(SEVEN_DAY)], ["shift", "rollover", None])
+
+    def test_a_light_weeks_early_reset_is_a_rollover_at_about_the_same_level(self):
+        # Review 9 (delta-ingest-texts#1): a moved reset was judged on the
+        # level alone. A light week peaked at 10% on Tuesday, was reset early
+        # on Wednesday 12:00, and the new week's first reading came on
+        # Thursday at 6% (spent on claude.ai first): over half the old peak,
+        # so the finished week closed as a shift and `report` left it out.
+        # As in learning (D-13), a window that began after the last reading
+        # is a real reset, whatever its level.
+        for k in range(10):  # Monday 00:00 to Tuesday 12:00
+            self.feed(MON + k * 4 * H, week=(1 + k, self.R7), sid="a")
+        r2 = int(MON + 2 * D + 12 * H + 7 * D)
+        self.assertEqual(self.feed(MON + 3 * D + 10 * H, week=(6, r2), sid="a")[SEVEN_DAY], "rollover")
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R7, "rollover"), (r2, None)])
+        self.assertEqual([i["reset_ts"] for i in commands._closed(self.st, SEVEN_DAY, MON)], [self.R7])
+
+    def test_a_shared_session_id_cannot_undo_a_real_early_reset_from_a_low_level(self):
+        # Review 9 (delta-ingest-texts#0): the drop_points guard above only
+        # held while the stale level sat 15 points over the new window. A
+        # weekly window at 10% reset early: every stale render of the old 10%
+        # reopened the dead week and the next new one rolled it over again,
+        # a window row per render pair. A rollover (the level dropped) now
+        # takes drop_samples to undo.
+        t = MON + 2 * D
+        for k in range(5):
+            self.feed(t + k * 1800, week=(6 + k, self.R7), sid="a")
+        t += 3 * H
+        r2 = int(t + 7 * D)
+        self.assertEqual(self.feed(t, week=(0, r2), sid="a")[SEVEN_DAY], "rollover")
+        for k in range(10):
+            self.assertEqual(self.feed(t + 60 + k * 120, week=(10, self.R7), sid="a")[SEVEN_DAY], "anomaly")
+            self.assertEqual(self.feed(t + 120 + k * 120, week=(k // 3, r2), sid="a")[SEVEN_DAY], "fresh")
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R7, "rollover"), (r2, None)])
+        self.assertEqual(w[1]["max_used"], 3)
+
+    def test_a_shared_session_id_cannot_undo_a_real_early_reset_as_the_new_window_climbs(self):
+        # Review 9 (delta-ingest-texts#0): the setup of the shared session id
+        # test above, continued. Once the new window reached 76%, the stale
+        # 90 was less than drop_points above it, and the line flipped back to
+        # the dead window on every render pair.
+        t = MON + H
+        self.feed(t, five=(80, self.R5), sid="a")
+        self.feed(t + 60, five=(90, self.R5), sid="a")
+        r2 = int(t + 120 + 5 * H)
+        self.assertEqual(self.feed(t + 120, five=(1, r2), sid="a")[FIVE_HOUR], "rollover")
+        for k in range(1, 18):
+            self.assertEqual(self.feed(t + 120 + k * 60, five=(5 * k, r2), sid="a")[FIVE_HOUR], "fresh")
+            self.assertEqual(self.feed(t + 150 + k * 60, five=(90, self.R5), sid="a")[FIVE_HOUR], "anomaly")
+        w = self.windows(FIVE_HOUR)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R5, "rollover"), (r2, None)])
+        self.assertEqual(w[1]["max_used"], 85)
+        self.assertEqual(pace.five_hour(self.st, t + 1200, self.cfg)["reset_ts"], r2)
+
+    def test_a_shared_session_id_cannot_undo_a_reset_moved_at_the_same_level(self):
+        # Review 9 (delta-ingest-texts#0): the weekly resets_at moved 1 h
+        # later at 42% (a shift) while a twin terminal on the same session id
+        # kept re-rendering the old reset at 41%. Each of its renders undid
+        # the move and the next new one redid it; once the old reset passed,
+        # `report` listed the running week as finished. A session's real
+        # reading is never below its own reading of the moved reset.
+        t = MON + 2 * D
+        for k in range(12):
+            self.feed(t + k * 1800, week=(30 + k, self.R7), sid="a")
+        t += 12 * 1800
+        moved = self.R7 + int(H)
+        self.assertEqual(self.feed(t, week=(42, moved), sid="a")[SEVEN_DAY], "rollover")
+        for k in range(10):
+            self.assertEqual(self.feed(t + 30 + k * 60, week=(41, self.R7), sid="a")[SEVEN_DAY], "anomaly")
+            self.assertEqual(self.feed(t + 60 + k * 60, week=(42 + k // 4, moved), sid="a")[SEVEN_DAY], "fresh")
+        self.feed(self.R7 + 600, week=(50, moved), sid="a")
+        w = self.windows(SEVEN_DAY)
+        self.assertEqual([(i["reset_ts"], i["close_reason"]) for i in w], [(self.R7, "shift"), (moved, None)])
+        self.assertEqual(commands._closed(self.st, SEVEN_DAY, MON), [])
 
     def test_first_words_of_unknown_sessions_cannot_fake_a_reset(self):
         # ctempo is installed while three sessions are open: every one
