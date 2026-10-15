@@ -251,8 +251,8 @@ file the user never edited comes back byte for byte. Fourteen review passes
 (two of them model-based fuzzers, for install and for reset detection) found
 142 defects; 139 are fixed and 3, which need two Claude Code processes on one
 conversation, are documented limits (open a conversation in a second terminal
-with `--fork-session`); each one has a regression test that fails on the code
-before its fix.
+with `--fork-session`); each fixed one has a regression test that fails on the
+code before its fix.
 
 ## Layout
 
