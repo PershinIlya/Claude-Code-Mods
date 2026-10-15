@@ -139,6 +139,11 @@ class Profile:
         return out
 
     # -- the shape ---------------------------------------------------------------
+    def prior_fade(self, now, half_life_s):
+        """How much of the transcript prior is left: 0.5 ** (age / half-life)
+        from its build (D-14)."""
+        return 0.5 ** (max(0.0, now - float(self.prior_meta.get("built_at", now))) / half_life_s)
+
     def rates(self, now, cfg, weekly_total=None):
         """Unnormalized expected rate per bin and the weekly total M.
 
@@ -160,7 +165,7 @@ class Profile:
             # observation. Without it, hours only seen through long gaps
             # (learned at low confidence, spread by this very shape) kept the
             # transcripts' rate for good.
-            a = 0.5 ** (max(0.0, now - float(self.prior_meta.get("built_at", now))) / hl)
+            a = self.prior_fade(now, hl)
             prior = normalize([a * x + (1 - a) / BINS for x in normalize(self.prior)])
             src = "transcripts+observed"
             # A prior built from a few days is mostly uniform: weigh it so.
@@ -207,12 +212,14 @@ def typical_rate(r):
 
 def typical_week(store, now, half_life_s, weeks=8):
     """Decay-weighted mean peak of recent closed weekly windows that were
-    observed during their last day (an unobserved tail understates the peak)."""
+    observed during their last day (an unobserved tail understates the peak)
+    and lasted a whole week (one opened by a drop reset holds part of one)."""
     rows = store.db.execute(
         "SELECT reset_ts, max_used, (SELECT MAX(ts) FROM samples s WHERE s.window_id=w.id AND s.flag IN (?, ?)) "
         "FROM windows w WHERE window=? AND closed_at IS NOT NULL "
-        "AND close_reason IN ('expired', 'rollover') AND reset_ts > ? AND reset_ts <= ?",
-        (FRESH, FIRST, SEVEN_DAY, now - weeks * 7 * 86400, now),
+        "AND close_reason IN ('expired', 'rollover') AND reset_ts > ? AND reset_ts <= ? "
+        "AND reset_ts - start_ts >= ?",
+        (FRESH, FIRST, SEVEN_DAY, now - weeks * 7 * 86400, now, 7 * 86400 - 1),
     ).fetchall()
     num = den = 0.0
     for reset, peak, seen in rows:
@@ -352,7 +359,7 @@ def learn(store, prof, now, cfg, w_current=None):
             else:
                 # A real reset (an early one too, whose start is rounded down
                 # to the hour): the new window counts from 0.
-                if starts[wid] - prev[0] > max_gap and run_max < 100.0:
+                if starts[wid] - prev[0] > max_gap and run_max < 100.0 and not _capped(store, prev[2]):
                     # The old window's tail after its last reading: no
                     # reading, no news, no spend (D-11), at low confidence.
                     # Unlearned, those hours kept the prior's rate for good.
@@ -379,6 +386,16 @@ def learn(store, prof, now, cfg, w_current=None):
             n += 1
     prof.processed_until = end
     return n
+
+
+def _capped(store, wid):
+    """Whether a window reached 100%. A FIRST reading counts (D-06, as for
+    the lookback, D-15): when the last points went on claude.ai, a new
+    session's first reading may be the only one at 100."""
+    m = store.db.execute(
+        "SELECT MAX(used_pct) FROM samples WHERE window_id=? AND flag IN (?, ?)", (wid, FRESH, FIRST)
+    ).fetchone()[0]
+    return m is not None and m >= 100.0
 
 
 def _spread(spend, cover, a, b, delta, short, w, lo, hi):

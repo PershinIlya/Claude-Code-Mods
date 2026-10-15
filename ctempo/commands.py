@@ -279,8 +279,13 @@ def cmd_profile(args, cfg):
         print("Awake hours per week: %d of 168" % info["awake_hours"])
         if prof.prior_meta:
             m = prof.prior_meta
-            print("Prior: transcripts, %s days, %s messages, %s active hours, trusted %.0f%% (full at 14 days)" % (
-                m.get("days"), m.get("messages"), m.get("active_hours"), 100 * (m.get("trust") or 0)))
+            trust = m.get("trust") or 0
+            print("Prior: transcripts, %s days, %s messages, %s active hours, trusted %.0f%% when built (full at 14 days)" % (
+                m.get("days"), m.get("messages"), m.get("active_hours"), 100 * trust))
+            # It fades with the half-life from its build (D-14), as the weights use it.
+            hl = float(cfg["profile"]["half_life_days"]) * 86400
+            print("  built %s ago, weight now %.0f%% (it halves every %g days; `ctempo bootstrap` builds a fresh one)" % (
+                dur(now - float(m.get("built_at", now))), 100 * trust * prof.prior_fade(now, hl), hl / 86400))
         else:
             print("Prior: none (run `ctempo bootstrap`)")
         print("Learned from usage %%: %d hours folded in, typical week %s" % (
@@ -304,20 +309,27 @@ def _surplus(st, cfg, w, awake, flat, now):
     awake_blocks = [] if flat else sorted(blocks)[:3]
     if awake_blocks:
         print("Lightest awake blocks: " + ", ".join("%s %02d-%02d" % (profile.DAYS[d], h, h + 3) for _, d, h in awake_blocks))
-    closed = _closed(st, SEVEN_DAY, now - 56 * 86400)
+    # A window an early reset cut short (a drop, D-10, or a rollover well
+    # before its reset) never reached its reset: the window that replaced it
+    # holds the rest of that week, so each week counts once.
+    closed = [i for i in _closed(st, SEVEN_DAY, now - 56 * 86400)
+              if i["close_reason"] != "drop" and i["closed_at"] >= i["reset_ts"] - 3600]
     if not closed:
         print("Surplus by day before reset: needs at least one closed weekly window.")
         return
     tgt = config.target(cfg, SEVEN_DAY)
     sums = [[] for _ in range(7)]
     for i in closed:
-        start = i["reset_ts"] - 7 * 86400
+        # Paced from the window's own start, as the line does (D-15): a drop
+        # reset opens it late, and its on-pace level counts from there.
+        start = max(i["reset_ts"] - 7 * 86400, i["start_ts"])
+        span = profile.share_between(w, start, i["reset_ts"]) or 1.0
         for k in range(7):
             t = i["reset_ts"] - k * 86400
-            used = st.max_at(i["id"], t)
+            used = st.max_at(i["id"], t) if t >= start else None
             if used is None:
                 continue
-            on = tgt * profile.share_between(w, start, t)
+            on = tgt * profile.share_between(w, start, t) / span
             sums[k].append(used - on)
     parts = ["%s %+.0f" % ("reset" if k == 0 else "-%dd" % k, sum(v) / len(v)) for k, v in enumerate(sums) if v]
     print("Points vs pace, averaged over %d past weeks: %s" % (len(closed), ", ".join(reversed(parts))))

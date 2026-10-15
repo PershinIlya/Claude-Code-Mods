@@ -5,6 +5,7 @@ import unittest
 
 from ctempo import config, profile
 from ctempo.config import SEVEN_DAY
+from ctempo.store import FIRST
 
 from .helpers import MON, H, D, TempHome, utc
 
@@ -243,6 +244,52 @@ class LearnEdges(TempHome):
         self.assertEqual(v["used"], 63)
         self.assertEqual(v["verdict"], "slow_down")  # it caps again on Tuesday
         self.assertIsNotNone(v["dry_ts"])
+
+    def test_a_cap_first_read_by_a_new_session_is_a_cap(self):
+        # Review 9 (delta-weekly#0): the same capper, but the last points go
+        # on claude.ai: Claude Code reads 99, and the 100 first shows as a new
+        # session's FIRST reading. Learning judged the cap by FRESH readings
+        # only, so it learned the blocked hours as idle (the lookback counts
+        # that cap, D-15), and Monday 11:00 at 63% read "on pace" again.
+        from ctempo import weekly
+
+        feed = self.feed
+
+        def via_claude_ai(now, week):
+            if week[0] < 100:
+                return feed(now, week=week)
+            feed(now, week=(99, week[1]))  # s1 repeats its 99
+            return feed(now, week=week, sid="new-%d" % week[1])  # FIRST, then heartbeats
+
+        self.feed = via_claude_ai
+        R0 = int(MON + 3 * D + 9 * H)
+        now = R0 + 25 * D + 2 * H  # Monday 11:00, after three capped weeks
+        self.known("s1")
+        self.work(R0, now, R0 + int(7 * D), 3.5, hours=(9, 17), learn=True)
+        at_cap = self.st.db.execute("SELECT DISTINCT flag FROM samples WHERE used_pct >= 100").fetchall()
+        self.assertEqual(at_cap, [(FIRST,)])  # never a FRESH 100
+        w, awake, info = profile.current_weights(self.st, profile.load(self.st), now, self.cfg)
+        self.assertTrue(all(awake[2 * 24 + 9:2 * 24 + 17]))  # Wednesday 9-17
+        v = weekly.weekly(self.st, now, self.cfg)
+        self.assertEqual(v["used"], 63)
+        self.assertEqual(v["verdict"], "slow_down")
+        self.assertIsNotNone(v["dry_ts"])
+
+    def test_a_drop_reset_week_is_not_a_typical_week(self):
+        # Review 9 (delta-weekly#2): Mon-Fri 9-18 at 2 points an hour, 90% a
+        # week, and an early reset on Monday 12:00 at 42% that keeps the
+        # Thursday 09:00 reset (D-10). The window it opened peaked at 48 in
+        # its 2.9 days, and the typical week took that as a whole week: 77%.
+        R0 = int(MON - 4 * D + 9 * H)  # Thursday 09:00
+        drop = MON + 7 * D + 12 * H
+        now = R0 + 21 * D + H  # Thursday 10:00, an hour into the fourth week
+        self.known("s1")
+        self.work(R0, drop, R0 + int(7 * D), 2.0)
+        self.work(drop, R0 + 14 * D, R0 + int(14 * D), 2.0)  # from 0 again
+        self.work(R0 + 14 * D, now, R0 + int(21 * D), 2.0)
+        closed = [(i["close_reason"], i["max_used"]) for i in self.windows(SEVEN_DAY) if i["closed_at"] is not None]
+        self.assertEqual(closed, [("expired", 90), ("drop", 42), ("expired", 48), ("expired", 90)])
+        self.assertAlmostEqual(profile.typical_week(self.st, now, 14 * D), 90.0)
 
     def test_a_transcript_prior_fades_with_the_half_life(self):
         # Review 8 (long-horizon#2): the transcripts at install say Mon-Fri
