@@ -13,6 +13,8 @@ import time
 from . import config
 
 SCHEMA_VERSION = 1
+# Windows keeps the WAL between processes (Store.__init__); one this large is emptied on close.
+WAL_RESET_BYTES = 1000 * (4096 + 24)  # wal_autocheckpoint's 1000 pages of the default page size
 
 # Sample flags.
 FRESH = 0  # the reporting session's reading changed: new information
@@ -79,6 +81,7 @@ class Store:
         if d:
             os.makedirs(d, exist_ok=True)
         self.timeout_ms = timeout_ms
+        self.keeps_wal = False
         self.db = sqlite3.connect(self.path, timeout=timeout_ms / 1000.0, isolation_level=None)
         try:
             self.db.execute("PRAGMA busy_timeout=%d" % int(timeout_ms))
@@ -88,9 +91,10 @@ class Store:
             if config.IS_WINDOWS and hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE"):  # Python 3.12+
                 # Closing the last connection checkpointed the WAL into the database and deleted
                 # it, with the file syncs that takes on Windows: 18 ms of a 30 ms render on CI
-                # (p95 32 of 44). The WAL stays instead, and a commit checkpoints it once it holds
-                # 1000 pages (wal_autocheckpoint); synchronous=NORMAL keeps it as safe.
+                # (p95 32 of 44). The WAL stays instead, until close() empties it once it is
+                # large; synchronous=NORMAL keeps it as safe.
                 self.db.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+                self.keeps_wal = True
         except BaseException:
             # A failed open must not hold the file: on Windows an open
             # handle keeps it from being renamed or deleted.
@@ -115,6 +119,17 @@ class Store:
         self.db.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
 
     def close(self):
+        if self.keeps_wal:
+            # A process that opens the database alone rebuilds the WAL index as if nothing
+            # in the WAL had been copied yet, so once it held 1000 pages every commit copied
+            # all of it again (until one process committed twice). One that large is emptied
+            # here, at once or not at all: another process reading it means a later close.
+            try:
+                if os.path.getsize(self.path + "-wal") >= WAL_RESET_BYTES:
+                    self.db.execute("PRAGMA busy_timeout=0")
+                    self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+            except (OSError, sqlite3.Error):
+                pass
         try:
             self.db.close()
         except sqlite3.Error:

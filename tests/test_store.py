@@ -83,6 +83,38 @@ class CloseOnWindows(unittest.TestCase):
                 self.assertEqual(st.meta_get("k"), {"v": 1})
                 st.close()
 
+    @unittest.skipUnless(hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE"), "needs Python 3.12+")
+    def test_a_large_wal_is_emptied_on_close_unless_someone_reads_it(self):
+        # Review 15 verify: a lone opener rebuilt the WAL index with nothing marked as copied,
+        # so past 1000 pages every recording render copied the whole WAL into the database.
+        d = tempfile.mkdtemp(prefix="ctempo-test-")
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "tempo.db")
+        with mock.patch.object(config, "IS_WINDOWS", True), mock.patch("ctempo.store.WAL_RESET_BYTES", 256 * 1024):
+            st = Store(path)
+            st.meta_set("small", "x")
+            st.close()
+            self.assertGreater(os.path.getsize(path + "-wal"), 0)  # small: kept
+            reader = sqlite3.connect(path, isolation_level=None)  # another ctempo process on Windows
+            reader.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+            reader.execute("BEGIN")
+            reader.execute("SELECT COUNT(*) FROM meta").fetchone()  # a snapshot another process holds
+            st = Store(path)
+            st.meta_set("big", "y" * 600000)
+            t = time.monotonic()
+            st.close()
+            self.assertLess(time.monotonic() - t, 0.2)  # never waits for the reader
+            self.assertGreater(os.path.getsize(path + "-wal"), 256 * 1024)
+            reader.execute("COMMIT")
+            reader.close()
+            st = Store(path)
+            st.meta_set("more", "z")
+            st.close()
+            self.assertEqual(os.path.getsize(path + "-wal"), 0)  # emptied
+            st = Store(path)
+            self.assertEqual((st.meta_get("small"), len(st.meta_get("big")), st.meta_get("more")), ("x", 600000, "z"))
+            st.close()
+
 
 if __name__ == "__main__":
     unittest.main()
