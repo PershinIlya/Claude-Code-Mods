@@ -25,12 +25,14 @@ ignores). `CTEMPO_HOME` may be `C:\...`, `C:/...`, `~\...`, `~/...` or Git
 Bash's `/c/...`, and `\ctempo` is on your home's drive. `C:ctempo` (relative to
 a drive's current folder) is refused, and so is any other path that starts
 with a single `/` (`/srv/ctempo`): Git Bash, which runs the terminal status
-line, would rewrite it to a folder under its own install. Keep the home on a
-local drive: the mod usually cannot read a network (`\\server\share`) folder,
-and says so. When the pinned `python.exe` is gone, the band says "Python not
-found at <path>: run `ctempo install --apply`", and the mod reads
-`runtime.json` again at its next refresh. The band draws in the Desktop app's
-local sessions, not in WSL sessions, where plugins are not available.
+line, would rewrite it to a folder under its own install. The CLI refuses both
+with the same messages, and the one for `/srv/ctempo` names the same path on
+your home's drive, where an older version kept it. Keep the home on a local
+drive: the mod usually cannot read a network (`\\server\share`) folder, and
+says so. When the pinned `python.exe` is gone, the band says "Python not found
+at <path>: run `ctempo install --apply`", and the mod reads `runtime.json`
+again at its next refresh. The band draws in the Desktop app's local sessions,
+not in WSL sessions, where plugins are not available.
 
 Install it with the rest of ctempo (`ctempo install --apply`), or by hand:
 

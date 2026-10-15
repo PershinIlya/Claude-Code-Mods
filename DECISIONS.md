@@ -745,9 +745,14 @@ encoded one and why, `doctor` shows it decoded, and a repin, `--replace`,
 uninstall's restore and the backup scan read it decoded (a repin of the same
 command changes nothing). A malformed token means no composed command (the
 config's `compose.command` applies if set), never an error, and with both flags
-the last one wins. A user may put `--compose '<command>'` back by hand; the
-next install encodes it again if need be. An older install's plain form that is
-at risk gets a `doctor` warning until `ctempo install --apply` rewrites it.
+the last one wins, in install as in `ctempo statusline`: `compose_of` reads the
+words after `statusline` with the statusline's own parser, so `doctor`, a repin
+and uninstall keep the command that runs. Install read the first one, so after
+a hand edit that added a flag, a repin wrote the old command back in place of
+the running one (found in review). A user may put `--compose '<command>'` back
+by hand; the next install encodes it again if need be. An older install's plain
+form that is at risk gets a `doctor` warning until `ctempo install --apply`
+rewrites it.
 
 The Composer (D-17) runs the old command in the shell that started ctempo, read
 from the parent process's image through kernel32 (`winshell.parent_shell`),
@@ -756,10 +761,11 @@ wrong inside Git Bash, whose PATH puts its own `git` first: with Git installed
 outside Program Files, a bash statusLine ran in PowerShell. Git Bash's
 `bin\bash.exe` runs `usr\bin\bash.exe`, the parent ctempo sees, so that one
 maps back to `bin\bash.exe` when it exists. Any other parent (a
-`CLAUDE_CODE_SHELL_PREFIX` wrapper, a venv's `python.exe` launcher) falls back
-to `predict_shell`. As Claude Code runs a statusLine, bash gets its own folder
-first on PATH and `bash ` before a first word ending in `.sh`, and PowerShell
-gets Claude Code's flags (no `-ExecutionPolicy Bypass` under
+`CLAUDE_CODE_SHELL_PREFIX` wrapper, or a venv's `python.exe` launcher, which
+install no longer pins: D-27) falls back to `predict_shell`. As Claude Code
+runs a statusLine, bash gets its own folder first on PATH and `bash ` before a
+first word ending in `.sh`, and PowerShell gets Claude Code's flags (no
+`-ExecutionPolicy Bypass` under
 `CLAUDE_CODE_POWERSHELL_RESPECT_EXECUTION_POLICY`) and its
 `${CLAUDE_PROJECT_DIR}` style placeholders as `${env:...}`. A nested PowerShell
 took about 0.3 s warm and close to 1 s cold on CI runners, so the README
@@ -778,29 +784,41 @@ a `.exe` with a drive or a UNC share, and it runs only with arguments (`-I -S
 installs nothing on the way): the Store's `python.exe` stub opens the Store
 when run bare, and fails with arguments. The probe reports `sys.executable`,
 and behind a Store alias, `py.exe` or another launcher that real `python.exe`
-is pinned, so no render pays for the extra process. A Store Python, which
-writes under AppData to a private copy, is used only when nothing else passes.
+is pinned, so no render pays for the extra process. On Windows it reports the
+base interpreter (`sys._base_executable`), so a venv's `python.exe`, a launcher
+that starts its base `python.exe` as a child process, is pinned as that base:
+ctempo runs `-I -S`, so the venv adds nothing but the process, and that process
+was the parent `winshell.parent_shell` saw instead of the shell (found in
+review). install's list says `via <path>` for each such candidate. macOS and
+Linux pin a venv's interpreter as given. A Store Python, which writes under
+AppData to a private copy, is used only when nothing else passes.
 
 Launchers: `--bin-dir` writes `ctempo.cmd`, which cmd.exe and PowerShell find
 through PATHEXT, and an extensionless sh `ctempo` (LF, UTF-8, forward slashes,
 `exec` of the pinned interpreter), as npm's cmd-shim does: Git Bash, where
 Claude Code's Bash tool runs, looks a command up by its very name, never with
 `.cmd`, so `ctempo` was "command not found" there. install.json records it as
-`sh_launcher`. It follows `ctempo.cmd` (D-18): it is written only when that is,
-and moved and removed with it, a file of that name that is not ctempo's is
-never written over or removed, and the `ctempo` an older version wrote beside
-`ctempo.cmd` is rewritten as the sh launcher. `ctempo.cmd` is CRLF, in the
-console code page, with `%` doubled; its last line is `(goto) 2>nul &
-"<python>" -I -S -X utf8 "<entry>" %*`. cmd.exe reads a batch file a line at a
-time and opens it again after each command, so an install or uninstall run
-through it, which rewrites or deletes the file, ended with "The batch file
-cannot be found." while an `exit /b` line followed python, and a repin to a
-path of another length ran the middle of the new text. The `(goto)` ends the
-batch before python runs (`%*` is expanded already), so cmd.exe reads nothing
-after it and python's exit code is the caller's. The one install that replaces
-an older launcher, run through that launcher, can still show the message once.
-Neither launcher runs the statusLine or the mod: Bun will not start a `.cmd`
-without a shell, and cmd.exe parses its arguments again.
+`sh_launcher`. It follows `ctempo.cmd` (D-18): it is written beside it, moved
+and removed with it, and a file of that name that is not ctempo's is never
+written over or removed, nor recorded. Each launcher follows the pin on its
+own: one the user deleted stays deleted until a `--bin-dir`, however many
+repins come first (install.json keeps the sh launcher's record for that; the
+2nd repin used to write it back), and one the user kept after deleting
+`ctempo.cmd` (or putting a file of their own there) is still ctempo's, so a
+repin rewrites it where it is rather than leave Git Bash's `ctempo` running an
+interpreter that may be gone (both found in review). The `ctempo` an older
+version wrote beside `ctempo.cmd` is rewritten as the sh launcher. `ctempo.cmd`
+is CRLF, in the console code page, with `%` doubled; its last line is `(goto)
+2>nul & "<python>" -I -S -X utf8 "<entry>" %*`. cmd.exe reads a batch file a
+line at a time and opens it again after each command, so an install or
+uninstall run through it, which rewrites or deletes the file, ended with "The
+batch file cannot be found." while an `exit /b` line followed python, and a
+repin to a path of another length ran the middle of the new text. The `(goto)`
+ends the batch before python runs (`%*` is expanded already), so cmd.exe reads
+nothing after it and python's exit code is the caller's. The one install that
+replaces an older launcher, run through that launcher, can still show the
+message once. Neither launcher runs the statusLine or the mod: Bun will not
+start a `.cmd` without a shell, and cmd.exe parses its arguments again.
 
 `claude` is `claude.exe` (native, WinGet) or `claude.cmd` (npm), never npm's
 extensionless sh shim. Its output and the probe's are read as UTF-8 whatever
@@ -829,19 +847,23 @@ with a backslash and no drive (`\x`) takes the home's drive, as `ntpath.join`
 does, and anything else is taken from the home directory; the result is
 normalized. `%VAR%` is not expanded, as Claude Code does not expand it either.
 Any other path that starts with a single `/` (`/srv/ctempo`) is refused, with
-the same message in both: Git Bash, which runs the terminal statusLine,
-rewrites such a value to a folder under its own install (`C:/Program
-Files/Git/srv/ctempo`) before python.exe sees it, while PowerShell passes it as
-given and the mod read it on the home's drive, so the line and the band used
-different folders (and the first one, under Program Files, is one a user cannot
-create). The statusline still prints its bare line and logs nothing (the log
-lives in the home), the other commands print the reason and exit 1, `doctor`
-fails its `CTEMPO_HOME` row, and install and uninstall refuse before writing
-anything. Under Git Bash the statusLine's Python only sees the rewritten
-folder, so install and doctor also check the raw value in the settings env.
-Only the mod refuses `C:x` (relative to a drive's current folder: write
-`C:\x`), and since `$.fs.read` refuses most network locations, a UNC home it
-cannot read says so and asks for a local folder.
+the same message in both, whose example is the same path on the home's drive
+(`D:/srv/ctempo` for a profile on `D:`), the folder older versions used: Git
+Bash, which runs the terminal statusLine, rewrites such a value to a folder
+under its own install (`C:/Program Files/Git/srv/ctempo`) before python.exe
+sees it, while PowerShell passes it as given and the mod read it on the home's
+drive, so the line and the band used different folders (and the first one,
+under Program Files, is one a user cannot create). The statusline still prints
+its bare line and logs nothing (the log lives in the home), the other commands
+print the reason and exit 1, `doctor` fails its `CTEMPO_HOME` row, and install
+and uninstall refuse before writing anything. Under Git Bash the statusLine's
+Python only sees the rewritten folder, so install and doctor also check the raw
+value in the settings env. `C:x` (relative to that drive's current folder,
+which differs from one process to the next: write `C:\x`) is refused the same
+way, with the same message in both. The mod refused it while the CLI took it
+from the home directory, so the band and the line could use different folders
+(found in review). Since `$.fs.read` refuses most network locations, a UNC home
+the mod cannot read says so and asks for a local folder.
 
 **D-29. Windows: text, time and long paths.** The statusline writes UTF-8 bytes
 (D-16). The other commands print through Python's text streams, and Windows
@@ -994,11 +1016,11 @@ findings verifiers checked, confirmed 5 and rejected none (2 idle processes on
 1 session id faking a drop reset, raising the window a drop opened back to the
 old level, rolling back a reset moved earlier, and undoing a reset moved later
 or an early reset, and a reset moved earlier that a maxed or idle session
-never got taken); a fourteenth, over those rules, confirmed 5 and rejected
+never got taken); a 14th, over those rules, confirmed 5 and rejected
 none: the withdrawal deleting a real pending drop (for a busy process with an
 idle twin, and for the statusline and mod of one session) is fixed, and 3 more
 cases for processes sharing a session id are documented limits (D-06); a
-fifteenth, on Windows (6 reviewers: the shells, the installer, the runtime, the
+15th, on Windows (6 reviewers: the shells, the installer, the runtime, the
 mod, CI, and a new user's first install), confirmed 18 distinct defects (26
 reports) and rejected none (D-25 to D-29): a composed command that Windows
 PowerShell 5.1 or Git Bash changed on its way to Python, the Composer
