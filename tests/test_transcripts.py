@@ -201,13 +201,17 @@ class LongPaths(TempHome):
         deep = os.path.dirname(self.write("-proj", "sess", "subagents", "agent-1.jsonl"))
         real_open, real_scandir = os.open, os.scandir
 
+        def plain(path):  # on Windows the scan walks from a \\?\ root (long_root)
+            path = os.fspath(path)
+            return path[4:] if path.startswith("\\\\?\\") else path
+
         def fake_open(path, *a, **kw):
-            if os.fspath(path) == held:  # in use by another program, say
+            if plain(path) == held:  # in use by another program, say
                 raise PermissionError(13, "Permission denied", path)
             return real_open(path, *a, **kw)
 
         def fake_scandir(path="."):
-            if os.fspath(path) == deep:  # past MAX_PATH: ERROR_PATH_NOT_FOUND
+            if plain(path) == deep:  # past MAX_PATH: ERROR_PATH_NOT_FOUND
                 raise FileNotFoundError(3, "The system cannot find the path specified", path)
             return real_scandir(path)
 

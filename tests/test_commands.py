@@ -596,6 +596,16 @@ class DoctorEncodedCompose(DoctorCase):
         for old in ("~/x.sh", "node C:/x.js"):
             self.assertNotIn("store it encoded", self.doctor(self.BARE + " --compose '%s'" % old))
 
+    def test_the_flag_that_runs_decides(self):
+        # Review 15 verify: doctor read the first --compose, while ctempo statusline, compose_of
+        # and a repin take the last flag, so it missed an at-risk command that runs and warned
+        # about one that does not.
+        risky = 'node "C:/Users/John Smith/sl.js"'
+        self.assertIn(self.REPIN, self.doctor(self.BARE + " --compose 'echo hi' --compose '%s'" % risky))
+        self.assertNotIn("store it encoded",
+                         self.doctor(self.BARE + " --compose '%s' --compose-b64 %s" % (risky, winshell.encoded("echo hi"))))
+        self.assertIn(self.REPIN, self.doctor(self.BARE + " --compose-b64 %s --compose '%s'" % (winshell.encoded("echo hi"), risky)))
+
 
 if __name__ == "__main__":
     unittest.main()

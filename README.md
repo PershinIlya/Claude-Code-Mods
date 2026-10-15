@@ -333,7 +333,7 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 431 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 432 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 45 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
