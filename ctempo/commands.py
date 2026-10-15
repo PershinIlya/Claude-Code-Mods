@@ -300,8 +300,11 @@ def cmd_profile(args, cfg):
                     wake[0], wake[1], ov.get("mode", "prior")))
             else:
                 print("Prior: none (run `ctempo bootstrap`)")
-        print("Learned from usage %%: %d hours folded in, typical week %s" % (
-            prof.learned_hours, ("%.0f%% of the limit" % info["weekly_total"]) if info["weekly_total"] else "unknown yet"))
+        # Mode replace takes the override's shape alone (Profile.rates).
+        replaced = (cfg["profile"].get("override") or {}).get("mode") == "replace"
+        print("Learned from usage %%: %d hours %s, typical week %s" % (
+            prof.learned_hours, "unused (profile.override mode replace ignores them)" if replaced else "folded in",
+            ("%.0f%% of the limit" % info["weekly_total"]) if info["weekly_total"] else "unknown yet"))
         _surplus(st, cfg, w, awake, flat, now)
     finally:
         st.close()
@@ -653,7 +656,9 @@ def cmd_doctor(args, cfg):
                 add("ok", "profile prior from profile.override")
             else:
                 add("warn", "no transcript prior", "run `ctempo bootstrap`")
-            add("ok", "profile hours learned from usage %%: %d" % prof.learned_hours)
+            add("ok", "profile hours learned from usage %%: %d" % prof.learned_hours,
+                "unused: profile.override mode replace ignores them"
+                if (cfg["profile"].get("override") or {}).get("mode") == "replace" else "")
         except sqlite3.Error as e:
             add("fail", "database error", str(e))
         finally:

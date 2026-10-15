@@ -270,8 +270,12 @@ def _undoes_rollover(store, w, inst, used, reset, source, session_id):
         ).fetchone()
         if prev is None:
             return False
+        # Every link, not only the last: a rollover below its window's max is
+        # what a real early reset looks like, and the chain stops there.
+        if not (prev[1] == "shift" or opener[2] >= (prev[2] or 0.0)):
+            return False
         if abs(prev[3] - reset) <= RESET_JITTER:
-            return prev[1] == "shift" or opener[2] >= (prev[2] or 0.0)
+            return True
         cur = store.instance(prev[0])
     return False
 
