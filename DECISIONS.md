@@ -64,7 +64,13 @@ user_version`. The first open of a new database waits up to the busy timeout
 for another opener's switch to WAL. SQLite answers a concurrent switch with
 "locked" at once, without the timeout, so when every open session re-rendered
 at install, some fell back to the bare line and lost their reading (found in
-review). Tables: `samples(ts, window, used_pct, resets_at, source, session_id,
+review). On Windows with Python 3.12+ the last connection closes without a
+checkpoint (`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`): folding the WAL into the
+database and deleting it took 18 ms of a 30 ms render on the CI runner (p95
+32 of 44), and a render that records a reading went from p50 83 ms, p95 101
+ms to p50 51 ms, p95 55 ms there. The WAL stays between renders and a commit
+checkpoints it once it holds 1000 pages (35 to 80 ms, about once in 100
+renders). Tables: `samples(ts, window, used_pct, resets_at, source, session_id,
 flag, window_id)` (the brief's columns plus `flag` and `window_id`), `windows`
 (one row per window instance: start, reset, first/last seen, last and max
 used, closed_at, unused_at_close, close_reason), `readers` (each session's

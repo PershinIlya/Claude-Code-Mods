@@ -139,8 +139,9 @@ run `/reload-plugins` (in Desktop: start a new session). Then `ctempo doctor`.
 
 ## Install on Windows
 
-You need Python 3.8+: from python.org, `winget install Python.Python.3.12`, or
-the Python install manager. Git for Windows is optional (`git clone` needs it,
+You need Python 3.8+, and 3.12+ renders about 30 ms faster on Windows
+(Performance): from python.org, `winget install Python.Python.3.12`, or the
+Python install manager. Git for Windows is optional (`git clone` needs it,
 or download the repo as a ZIP): Claude Code runs the status line in Git Bash
 when it finds one, else in PowerShell, and install prints which. In
 PowerShell, each command on its own line (Windows PowerShell 5.1 has no `&&`):
@@ -328,8 +329,11 @@ show` says so).
 `python3 scripts/bench_statusline.py` seeds 45 days of history (38,000 rows)
 and times 50 renders the way Claude Code runs them (fresh process, payload on
 stdin, a new sample written each time). In the build container: p50 35 ms,
-p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
-100 ms.
+p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. CI runs it on
+GitHub's runners with Python 3.12: macOS p50 24 ms, p95 27 ms; Windows p50 51
+ms, p95 55 ms (with Python 3.8 to 3.11 on Windows, about 30 ms more: D-05).
+The budget is 100 ms. It also prints where the time goes: the interpreter's
+start, the imports, and each phase of a render.
 
 ## Tests
 
