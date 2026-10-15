@@ -110,8 +110,10 @@ def windows_home(value):
     Any other path rooted with a slash and no drive (/srv/x) raises HomeError:
     Git Bash, which runs the statusLine, rewrites such a value to a folder
     under its own install before python.exe sees it, while the mod and
-    PowerShell use it as given, so they would use different folders. The mod
-    refuses it with the same message (resolveHome)."""
+    PowerShell use it as given, so they would use different folders. The
+    message names the same path on the home's drive, the folder older versions
+    used. C:x (relative to that drive's current folder) raises HomeError too.
+    The mod refuses both with the same messages (resolveHome)."""
     import ntpath
 
     user = ntpath.expanduser("~")
@@ -121,7 +123,10 @@ def windows_home(value):
         value = value[1].upper() + ":/" + value[3:]
     elif value[:1] == "/" and value[1:2] not in ("/", "\\"):
         raise HomeError("CTEMPO_HOME %s has no drive; Git Bash rewrites such a path to a folder under its own "
-                        "install. Write it with a drive, e.g. C:%s, or as ~/..." % (value, value))
+                        "install. Write it with a drive, e.g. %s%s, or as ~/..."
+                        % (value, ntpath.splitdrive(user)[0] or "C:", value))
+    if value[:1].isalpha() and value[:1].isascii() and value[1:2] == ":" and value[2:3] not in ("/", "\\"):
+        raise HomeError("CTEMPO_HOME %s is relative to a drive's current folder; use an absolute path" % value)
     return ntpath.normpath(ntpath.join(user, ntpath.expanduser(value)))
 
 

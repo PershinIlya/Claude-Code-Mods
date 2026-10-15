@@ -623,7 +623,7 @@ class EncodedCompose(unittest.TestCase):
         for bad in (["--compose-b64"], ["--compose-b64", "b!!"], ["--compose-b64", "bZ"], ["--compose-b64", "b____"],
                     ["--compose-b64", "xYQ"], ["--compose-b64", ""]):
             self.assertIsNone(statusline.parse_args(bad)["compose_cmd"], bad)
-        # The last one wins, as with two --compose.
+        # The last one wins, as with 2 --compose (and as install.compose_of reads it).
         argv = ["--compose", "printf a", "--compose-b64", winshell.encoded("printf b")]
         self.assertEqual(statusline.parse_args(argv)["compose_cmd"], "printf b")
 

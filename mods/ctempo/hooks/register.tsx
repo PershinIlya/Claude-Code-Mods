@@ -104,7 +104,8 @@ export function fromGitBash(path: string): string {
 // folder) is refused. So is any other path rooted with a slash and no drive
 // (`/x`): Git Bash, which runs the statusLine, rewrites it to a folder under
 // its own install before Python sees it, so the band and the line would use
-// different folders. The CLI refuses it with the same message
+// different folders. Its message names `/x` on the home's drive, the folder
+// older versions used. The CLI refuses both with the same messages
 // (config.windows_home).
 export function resolveHome(value: string | undefined, user: UserHome): string {
   const { windows, home } = user
@@ -116,7 +117,7 @@ export function resolveHome(value: string | undefined, user: UserHome): string {
   if (windows && given?.startsWith('/')) {
     throw new Error(
       `CTEMPO_HOME ${given} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
-        `Write it with a drive, e.g. C:${given}, or as ~/...`,
+        `Write it with a drive, e.g. ${driveOf(home) || 'C:'}${given}, or as ~/...`,
     )
   }
   if (windows && given && /^\\/.test(given)) return `${driveOf(home)}${given}`
@@ -190,7 +191,7 @@ async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] |
       throw new Error(`Python not found at ${rt.python}: run \`ctempo install --apply\``)
     }
     const lines = result.stderr.trim().split(/\r?\n/)
-    // cmd.exe's own message spans two lines.
+    // cmd.exe's own message spans 2 lines.
     const why = result.exitCode === 9009 ? lines.join(' ') : lines.pop()
     throw new Error(why || `ctempo exited ${result.exitCode}`)
   }

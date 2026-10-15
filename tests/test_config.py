@@ -23,17 +23,22 @@ ENTRY = os.path.join(ROOT, "bin", "ctempo")
 USER = "C:\\Users\\me"
 
 
-def no_drive(value):
+def no_drive(value, drive="C:"):
     """config.windows_home's message, word for word the mod's (resolveHome)."""
     return ("CTEMPO_HOME %s has no drive; Git Bash rewrites such a path to a folder under its own install. "
-            "Write it with a drive, e.g. C:%s, or as ~/..." % (value, value))
+            "Write it with a drive, e.g. %s%s, or as ~/..." % (value, drive, value))
+
+
+def drive_relative(value):
+    """config.windows_home's message for C:x, word for word the mod's (resolveHome)."""
+    return "CTEMPO_HOME %s is relative to a drive's current folder; use an absolute path" % value
 
 
 class NoDriveHome(unittest.TestCase):
     """Review 15: Git Bash, which runs the statusLine on Windows, rewrites a
     CTEMPO_HOME rooted with a slash and no drive (/srv/ctempo) to a folder
     under its own install (C:\\Program Files\\Git\\srv\\ctempo) before
-    python.exe sees it, while the mod and PowerShell used C:\\srv\\ctempo: two
+    python.exe sees it, while the mod and PowerShell used C:\\srv\\ctempo: 2
     folders, and under Program Files none a user can create. Windows refuses
     such a value, the same way in the CLI and the mod
     (mods/ctempo/tests/register.test.ts); every entry point says why."""
@@ -76,6 +81,47 @@ class NoDriveHome(unittest.TestCase):
         if os.name != "nt":
             with self.windows(False):  # macOS and Linux: an absolute path, as given
                 self.assertEqual(config.home(), "/srv/ctempo")
+
+    def test_the_example_is_on_the_homes_drive(self):
+        # Review 15 verify: older versions, the mod and PowerShell read /srv/ctempo on the home's
+        # drive. With the profile on D: the message said C:/srv/ctempo, a folder with none of the data.
+        for profile, drive in (("D:\\Users\\me", "D:"), ("\\\\server\\share\\me", "\\\\server\\share"),
+                               ("\\Users\\me", "C:")):
+            with mock.patch.dict(os.environ, {"USERPROFILE": profile}):
+                with self.assertRaises(config.HomeError) as caught:
+                    config.windows_home("/srv/ctempo")
+                self.assertEqual(str(caught.exception), no_drive("/srv/ctempo", drive), profile)
+        with mock.patch.dict(os.environ, {"USERPROFILE": "D:\\Users\\me"}):
+            rc, out, err = self.cli("now")
+        self.assertEqual((rc, err), (1, "ctempo: %s\n" % no_drive("/srv/ctempo", "D:")))
+        env = {k: v for k, v in os.environ.items() if k not in ("USERPROFILE", "HOMEPATH", "HOMEDRIVE")}
+        with mock.patch.dict(os.environ, env, clear=True), self.assertRaises(config.HomeError) as caught:
+            config.windows_home("/srv/ctempo")  # no home at all
+        self.assertEqual(str(caught.exception), no_drive("/srv/ctempo"))
+
+    def test_windows_refuses_a_path_relative_to_a_drives_current_folder(self):
+        # C:x is C:'s current folder plus x, which differs from one process to the next. The mod
+        # refused it, while the CLI joined it to the home (C:\Users\me\x on the home's drive, an
+        # unrelated folder on another), so the band and the line could use 2 folders.
+        settings = os.path.join(self.dir, "settings.json")
+        for value in ("C:x", "c:ctempo", "D:", "C:.claude-tempo", "D:x\\y"):
+            with self.assertRaises(config.HomeError) as caught:
+                config.windows_home(value)
+            self.assertEqual(str(caught.exception), drive_relative(value))
+            with mock.patch.dict(os.environ, {"CTEMPO_HOME": value}):
+                rc, out, err = self.cli("now")
+                self.assertEqual((rc, out, err), (1, "", "ctempo: %s\n" % drive_relative(value)), value)
+                with self.windows(), self.assertRaises(config.HomeError):
+                    config.home()
+            # Install checks the value Claude Code passes to the statusLine: the settings env's.
+            write_json(settings, {"env": {"CTEMPO_HOME": value}})
+            with mock.patch.dict(os.environ, {"CTEMPO_HOME": os.path.join(self.dir, "ctempo")}), \
+                    mock.patch.object(config, "home", lambda: os.environ["CTEMPO_HOME"]):
+                rc, out, err = self.cli("install", "--settings", settings, "--no-mod", "--no-bootstrap", "--apply")
+            self.assertEqual((rc, out), (1, "error: %s\n" % drive_relative(value)), value)
+        self.assertEqual(sorted(os.listdir(self.dir)), ["claude", "settings.json"])
+        for value, want in (("C:\\x", "C:\\x"), ("c:/x", "c:\\x"), ("/c/x", "C:\\x"), ("ctempo", USER + "\\ctempo")):
+            self.assertEqual(config.windows_home(value), want, value)
 
     def test_the_statusline_still_prints_its_line(self):
         # Nowhere to log (errors.log is in the home): the bare line, exit 0.
