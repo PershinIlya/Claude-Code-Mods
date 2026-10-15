@@ -229,9 +229,12 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
         # A replay is a heartbeat; the rows still move on, so the other
         # process's next render is known too.
         fresh = not _replay(store, w, inst, reader, prev, before, used, reset)
-        if not fresh and inst is not None:
+        if not fresh and inst is not None and abs(inst["reset_ts"] - reset) > RESET_JITTER:
             # Its first render was no news either: if it is pending in a
-            # run, a later real reset must not sweep it in.
+            # run, a later real reset must not sweep it in. At the open
+            # window's reset A, B, A is symmetric (the busy process's
+            # re-render of its own new reading matches it too): a drop or a
+            # rise is guarded where its run completes instead.
             store.withdraw_anomalies(inst["id"], reader, used, reset, RESET_JITTER)
     if changed or now - prev[2] > 86400:
         store.reader_set(reader, w, used, reset, now)
@@ -426,7 +429,9 @@ def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, kind, pr
         agrees = moved or not replay
     else:
         alike = prev[0] <= m - drop_pts if kind == "drop" else prev[0] >= m + drop_pts
-        agrees = abs(prev[1] - reset) <= RESET_JITTER and alike
+        # ... and moved forward from it, as a single process does: a twin's
+        # stale reading in between is not the completing process's own.
+        agrees = abs(prev[1] - reset) <= RESET_JITTER and alike and used > prev[0]
     if len(run) + 1 < need or (need > 1 and not agrees):
         store.add_sample(now, w, used, reset, source, session_id, ANOMALY, inst["id"])
         return "anomaly"
