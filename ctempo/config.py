@@ -11,6 +11,9 @@ import json
 import math
 import os
 
+# Windows rules apply (paths, shells, streams); tests patch it to run them anywhere.
+IS_WINDOWS = os.name == "nt"
+
 FIVE_HOUR = "five_hour"
 SEVEN_DAY = "seven_day"
 WINDOWS = (FIVE_HOUR, SEVEN_DAY)
@@ -81,12 +84,31 @@ DEFAULTS = {
 
 def home():
     value = os.environ.get("CTEMPO_HOME")
+    if IS_WINDOWS:
+        return windows_home(value)
     if not value:
         return os.path.join(os.path.expanduser("~"), ".claude-tempo")
     # Claude Code copies settings.json `env` values as written: expand `~`
     # here, and take a relative path from the home directory, never from the
     # session's cwd (each project would get a database of its own).
     return os.path.join(os.path.expanduser("~"), os.path.expanduser(value))
+
+
+def windows_home(value):
+    """home() by Windows rules (ntpath, so tests run on any OS). `~` is
+    USERPROFILE (else HOMEDRIVE and HOMEPATH) as Python reads it, never HOME,
+    which Git Bash sets and PowerShell does not. C:\\x, C:/x and
+    \\\\server\\share\\x are absolute; a rooted path without a drive (/srv/x)
+    takes the home's drive; Git Bash's /c/Users/x is C:/Users/x; anything else
+    is taken from the home directory. The result is normalized (backslashes)."""
+    import ntpath
+
+    user = ntpath.expanduser("~")
+    if not value:
+        return ntpath.join(user, ".claude-tempo")
+    if value[:1] == "/" and value[1:2].isalpha() and value[1:2].isascii() and value[2:3] in ("", "/"):
+        value = value[1].upper() + ":/" + value[3:]
+    return ntpath.normpath(ntpath.join(user, ntpath.expanduser(value)))
 
 
 def db_path():
@@ -217,7 +239,7 @@ def load(path=None):
     try:
         cfg = copy.deepcopy(DEFAULTS)
         try:
-            with open(path or config_path(), encoding="utf-8") as f:
+            with open(path or config_path(), encoding="utf-8-sig") as f:  # Windows editors may add a BOM
                 user = json.load(f)
             if isinstance(user, dict):
                 _merge(cfg, user)

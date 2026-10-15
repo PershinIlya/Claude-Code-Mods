@@ -14,11 +14,11 @@ import time
 import unittest
 from unittest import mock
 
-from ctempo import commands, profile, weekly
+from ctempo import cli, commands, config, install, profile, weekly, winshell
 from ctempo.config import SEVEN_DAY
 from ctempo.store import Store
 
-from .helpers import MON, H, D, TempHome
+from .helpers import MON, H, D, TempHome, write_json
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
@@ -52,7 +52,9 @@ class Commands(unittest.TestCase):
         shutil.rmtree(cls.home, ignore_errors=True)
 
     def run_cmd(self, *args, ok=(0,)):
-        p = subprocess.run([sys.executable, ENTRY] + list(args), env=self.env, capture_output=True, text=True, timeout=60)
+        # UTF-8 through the pipe on every OS (Windows gave a pipe its ANSI code page).
+        p = subprocess.run([sys.executable, ENTRY] + list(args), env=self.env, capture_output=True, encoding="utf-8",
+                           timeout=60)
         self.assertNotIn("Traceback", p.stdout + p.stderr, p.stderr)
         self.assertIn(p.returncode, ok, p.stdout + p.stderr)
         return p.stdout
@@ -70,7 +72,9 @@ class Commands(unittest.TestCase):
         json.loads(self.run_cmd("report", "--json"))
 
     def test_profile(self):
-        self.assertIn("Hour-of-week profile", self.run_cmd("profile"))
+        out = self.run_cmd("profile")
+        self.assertIn("Hour-of-week profile", out)
+        self.assertTrue(any(c in out for c in "·░▒▓█"), out)  # not in cp1252: raised on Windows
         self.assertIn("Rebuilt", self.run_cmd("profile", "--rebuild"))
         json.loads(self.run_cmd("profile", "--json"))
 
@@ -423,6 +427,123 @@ class ProfileScale(TempHome):
         info = json.loads(out.getvalue())["info"]
         self.assertAlmostEqual(info["weekly_total"], 70.0)
         self.assertAlmostEqual(weekly.weekly(self.st, time.time(), self.cfg)["weekly_typical"], 70.0)
+
+
+class Utf8Output(unittest.TestCase):
+    """Windows gives a pipe or a file its ANSI code page (cp1252), which has
+    no ▲ → ░, and -I ignores PYTHONIOENCODING and PYTHONUTF8: `now`,
+    `profile` and `doctor` raised UnicodeEncodeError there. The CLI switches
+    such a stream to UTF-8; a console (UTF-8 already) and other systems keep
+    theirs."""
+
+    def stream(self, encoding):
+        return io.TextIOWrapper(io.BytesIO(), encoding=encoding, newline="\n")
+
+    def test_windows_pipes_get_utf8(self):
+        out, err = self.stream("cp1252"), self.stream("cp1252")
+        with mock.patch.object(config, "IS_WINDOWS", True), mock.patch.object(sys, "stdout", out), \
+                mock.patch.object(sys, "stderr", err):
+            cli.utf8_output()
+            print("5h ×1.4▲ →88% ░▒▓█")
+            print("wk ×0.8▼", file=sys.stderr)
+        out.flush()
+        err.flush()
+        self.assertEqual(out.buffer.getvalue(), "5h ×1.4▲ →88% ░▒▓█\n".encode("utf-8"))
+        self.assertEqual(err.buffer.getvalue(), "wk ×0.8▼\n".encode("utf-8"))
+
+    def test_a_console_and_other_systems_keep_their_streams(self):
+        console, pipe = self.stream("utf-8"), self.stream("cp1252")
+        with mock.patch.object(config, "IS_WINDOWS", True), mock.patch.object(sys, "stdout", console):
+            cli.utf8_output()
+        self.assertEqual((console.encoding, console.errors), ("utf-8", "strict"))
+        with mock.patch.object(config, "IS_WINDOWS", False), mock.patch.object(sys, "stdout", pipe):
+            cli.utf8_output()
+        self.assertEqual(pipe.encoding, "cp1252")
+
+
+class DoctorCase(unittest.TestCase):
+    PS51 = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ctempo-doctor-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        env = mock.patch.dict(os.environ, {"CTEMPO_HOME": self.dir, "CLAUDE_CONFIG_DIR": os.path.join(self.dir, "claude")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.settings = os.path.join(self.dir, "settings.json")
+
+    def doctor(self, cmd, recorded=None, predicted=("powershell", PS51), windows=True, env=None):
+        sl = {"type": "command", "command": cmd, "refreshInterval": 60}
+        write_json(self.settings, dict({"statusLine": sl}, **({"env": env} if env else {})))
+        if recorded:
+            write_json(install.state_path(), {"version": 2, "records": {
+                self.settings: {"installed": True, winshell.RECORD_KEY: recorded}}})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(install, "claude_bin", lambda: None), \
+                mock.patch.object(config, "IS_WINDOWS", windows), mock.patch.object(config, "home", return_value=self.dir), \
+                mock.patch.object(winshell, "predict_shell", return_value=predicted) as predict:
+            commands.cmd_doctor(argparse.Namespace(json=False, settings=self.settings), config.load(os.devnull))
+        self.predict = predict
+        return out.getvalue()
+
+
+class DoctorRuntime(DoctorCase):
+    def test_runtime_json_with_a_byte_order_mark_is_read(self):
+        # A BOM (Windows PowerShell 5.1, older Notepad) made doctor report
+        # "no runtime.json" for a file that was there.
+        with open(os.path.join(self.dir, "runtime.json"), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps({"python": sys.executable, "entry": ENTRY}).encode("utf-8"))
+        out = self.doctor("printf x", windows=False)
+        self.assertIn("pinned interpreter %s" % sys.executable, out)
+        self.assertNotIn("no runtime.json", out)
+
+
+class DoctorShell(DoctorCase):
+    """Windows: Claude Code runs the statusLine in Git Bash when it finds one,
+    else in PowerShell, and that can change after install (Git for Windows
+    installed or removed). doctor names the shell and warns when ctempo's
+    command was written for the other one. Patched to run on any OS; macOS and
+    Linux show no such line."""
+
+    QUOTED = "'C:/Program Files/Python312/python.exe' -I -S -X utf8 C:/repo/bin/ctempo statusline"
+    BARE = "C:/Python312/python.exe -I -S -X utf8 C:/repo/bin/ctempo statusline"
+
+    def test_a_command_for_git_bash_when_powershell_would_run_it(self):
+        out = self.doctor(self.QUOTED, recorded="bash")
+        self.assertIn("WARN statusLine command is written for Git Bash, but Claude Code would run it in PowerShell"
+                      "  (run `ctempo install --apply` to rewrite it (%s))" % self.PS51, out)
+        out = self.doctor(self.QUOTED, recorded="bash", predicted=("bash", self.GIT_BASH))
+        self.assertIn("ok   statusLine shell: Git Bash  (%s)" % self.GIT_BASH, out)
+        self.assertNotIn("written for", out)
+
+    def test_the_syntax_tells_when_the_record_does_not(self):
+        out = self.doctor("& " + self.QUOTED, predicted=("bash", self.GIT_BASH))
+        self.assertIn("WARN statusLine command is written for PowerShell, but Claude Code would run it in Git Bash", out)
+        # Both shells read a quoted ' differently: only the record can tell.
+        ps = self.BARE + " --compose 'it''s'"
+        self.assertIn("ok   statusLine shell: Git Bash", self.doctor(ps, predicted=("bash", self.GIT_BASH)))
+        out = self.doctor(ps, recorded="powershell", predicted=("bash", self.GIT_BASH))
+        self.assertIn("WARN statusLine command is written for PowerShell", out)
+
+    def test_bare_words_run_in_either_shell(self):
+        out = self.doctor(self.BARE + " --compose 'printf x'", recorded="bash")
+        self.assertIn("ok   statusLine shell: PowerShell  (%s; install assumed Git Bash, and the command reads "
+                      "the same in both)" % self.PS51, out)
+        self.assertNotIn("WARN statusLine command", out)
+
+    def test_settings_env_and_no_shell(self):
+        env = {"CLAUDE_CODE_GIT_BASH_PATH": r"D:\git\bin\bash.exe"}
+        self.doctor("printf x", env=env)
+        self.predict.assert_called_once_with(os.environ, env)
+        out = self.doctor("printf x", predicted=("powershell", None))
+        self.assertIn("WARN statusLine shell: no Git Bash and no PowerShell found", out)
+
+    def test_not_on_macos_or_linux(self):
+        out = self.doctor(self.QUOTED, recorded="bash", windows=False)
+        self.assertNotIn("statusLine shell", out)
+        self.assertNotIn("written for", out)
+        self.predict.assert_not_called()
 
 
 if __name__ == "__main__":

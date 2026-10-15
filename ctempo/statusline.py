@@ -166,6 +166,11 @@ class Composer:
     started may keep stdout open, and is left running. The command gets its
     own process group, so one still running at the deadline is killed with
     its children.
+
+    On Windows it runs in the shell Claude Code would pick (Git Bash, else
+    PowerShell; never cmd.exe, which shell=True means there), the pipes are
+    served by threads (select() takes sockets only), and a command still
+    running at the deadline is killed with its tree by taskkill.
     """
 
     QUIET_S = 0.5  # Claude Code waits 500 ms for the rest of a hook's output
@@ -178,17 +183,80 @@ class Composer:
         env["CTEMPO_COMPOSED"] = "1"
         self.result = None
         self.deadline = deadline
-        self.p = subprocess.Popen(
-            cmd,
-            shell=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env=env,
-            start_new_session=True,
-        )
-        self.t = threading.Thread(target=self._run, args=(raw or b"",), daemon=True)
+        self.windows = config.IS_WINDOWS
+        if self.windows:
+            from . import winshell
+
+            argv, env = winshell.shell_argv(cmd, env)
+            # No console window of its own; a group of its own, as on POSIX.
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, env=env, creationflags=flags)
+            run = self._run_threads
+        else:
+            self.p = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                start_new_session=True,
+            )
+            run = self._run
+        self.t = threading.Thread(target=run, args=(raw or b"",), daemon=True)
         self.t.start()
+
+    def _run_threads(self, raw):
+        # Windows: blocking reads and writes in threads of their own, ended by
+        # the same rule as _run (exited, then EOF or QUIET_S without output).
+        import threading
+
+        p, out, eof, cond = self.p, [], [], threading.Condition()
+
+        def feed():
+            for step in (lambda: p.stdin.write(raw), p.stdin.close):
+                try:
+                    step()
+                except (OSError, ValueError):  # it exited or closed stdin unread
+                    pass
+
+        def drain():
+            fd = p.stdout.fileno()
+            while True:
+                try:
+                    data = os.read(fd, 32768)
+                except OSError:
+                    data = b""
+                with cond:
+                    (out if data else eof).append(data)
+                    cond.notify()
+                if not data:
+                    p.stdout.close()
+                    return
+
+        try:
+            for target in (feed, drain):
+                threading.Thread(target=target, daemon=True).start()
+            quiet = None
+            with cond:
+                seen = 0
+                while not eof:
+                    now = time.time()
+                    if quiet is None and p.poll() is not None:
+                        quiet = now + self.QUIET_S
+                    elif quiet is not None and len(out) != seen:
+                        quiet = now + self.QUIET_S
+                    seen = len(out)
+                    end = self.deadline if quiet is None else min(quiet, self.deadline)
+                    if now >= end:
+                        break
+                    cond.wait(min(0.05, end - now))
+                data = b"".join(out)
+            # Exited: its output. Still running at the deadline: TimeoutExpired, result stays None.
+            self.result = (p.wait(max(0.0, self.deadline - time.time())), data)
+        except Exception:
+            pass
 
     def _run(self, raw):
         # Not communicate(): it waits for EOF, which a background job holding
@@ -244,18 +312,28 @@ class Composer:
         rc, out = self.result
         if rc != 0:
             return None
-        return out.decode("utf-8", "replace").rstrip("\n")
+        # A Windows command ends its lines with CRLF; a \r left before our
+        # segment would send the cursor back over the user's text.
+        return "\n".join(line.rstrip("\r") for line in out.decode("utf-8", "replace").split("\n")).rstrip("\n")
 
     def _kill(self):
-        import signal
+        if self.windows:
+            from . import winshell
 
-        try:
-            os.killpg(self.p.pid, signal.SIGKILL)
-        except (OSError, AttributeError):
+            if winshell.kill_tree(self.p.pid):
+                return
+        else:
+            import signal
+
             try:
-                self.p.kill()
-            except OSError:
+                os.killpg(self.p.pid, signal.SIGKILL)
+                return
+            except (OSError, AttributeError):
                 pass
+        try:
+            self.p.kill()
+        except OSError:
+            pass
 
 
 def visible_len(s):

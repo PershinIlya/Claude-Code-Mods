@@ -2,6 +2,7 @@
 
 import io
 import json
+import ntpath
 import os
 import re
 import shlex
@@ -12,14 +13,29 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
-from ctempo import config, render
+from ctempo import config, render, winshell
 
 from .helpers import MON, H, D, TempHome, payload, utc
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+WINDOWS = os.name == "nt"
+# The compose tests are written in POSIX shell. On Windows they run in Git
+# Bash, as Claude Code runs a statusLine there; without it they cannot.
+posix_shell = unittest.skipUnless(not WINDOWS or winshell.predict_shell()[0] == "bash",
+                                  "needs Git Bash (the compose commands are POSIX shell)")
+# Git Bash and process startup are slower on Windows: a longer compose timeout
+# there keeps "it ended well before the timeout" measurable.
+QUICK_TIMEOUT_MS, QUICK_LIMIT = (5000, 3.5) if WINDOWS else (1500, 1.2)
+
+
+def sh_path(path):
+    """A path as a word of a POSIX shell command: forward slashes (Git Bash
+    drops backslashes), quoted."""
+    return shlex.quote(path.replace("\\", "/"))
 
 
 def run(payload, home, args=(), env=None, raw=None):
@@ -129,6 +145,11 @@ class Statusline(unittest.TestCase):
         self.assertIn("×", out)
         self.assertTrue(ANSI.sub("", out).startswith("5h 42%"))
 
+    def compose_timeout(self, ms):
+        with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"compose": {"timeout_ms": ms}}, f)
+
+    @posix_shell
     def test_bad_columns_keeps_the_composed_line(self):
         for cols in ("abc", "80.0", "-5", ""):
             p, _ = run(self.p, self.home, args=["--compose", "printf theirs"], env={"COLUMNS": cols})
@@ -164,6 +185,14 @@ class Statusline(unittest.TestCase):
         self.assertEqual(cfg["mod"]["surfaces"], [])
         p, _ = run(self.p, self.home, args=["--source", "mod", "--format", "json"])
         self.assertEqual(json.loads(p.stdout)["surfaces"], [])
+
+    def test_config_with_a_byte_order_mark_is_read(self):
+        # Windows PowerShell 5.1 (Set-Content -Encoding UTF8) and older
+        # Notepad start a UTF-8 file with a BOM; json.load refused it and the
+        # whole config fell back to the defaults.
+        with open(os.path.join(self.home, "config.json"), "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps({"display": {"symbols": "ascii"}}).encode("utf-8"))
+        self.assertEqual(config.load(os.path.join(self.home, "config.json"))["display"]["symbols"], "ascii")
 
     def test_pathological_config_falls_back_to_defaults(self):
         with open(os.path.join(self.home, "config.json"), "w") as f:
@@ -207,22 +236,36 @@ class Statusline(unittest.TestCase):
         self.assertIn(d["segments"][0]["tone"], ("dim", "plain", "opportunity", "warn", "alert"))
         self.assertIn("desktop", d["surfaces"])
 
+    @posix_shell
     def test_compose_appends_to_existing_command(self):
         p, _ = run(self.p, self.home, args=["--compose", "printf 'theirs'"], env={"COLUMNS": "200"})
         plain = ANSI.sub("", p.stdout.decode())
         self.assertTrue(plain.startswith("theirs  5h 42%"), plain)
 
-    def test_compose_passes_stdin_through(self):
-        cmd = "%s -c \"import sys, json; print(json.load(sys.stdin)['session_id'])\"" % sys.executable
-        p, _ = run(self.p, self.home, args=["--compose", cmd], env={"COLUMNS": "200"})
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("abc  5h"))
+    @posix_shell
+    def test_compose_drops_carriage_returns(self):
+        # A Windows command ends its lines with CRLF (print() in Python there):
+        # the \r left before our segment sent the cursor back over the user's
+        # text, since Claude Code trims only the ends of each line.
+        p, _ = run(self.p, self.home, args=["--compose", "printf 'theirs\\r\\nmore\\r\\n'"], env={"COLUMNS": "200"})
+        out = p.stdout.decode()
+        self.assertNotIn("\r", out)
+        self.assertTrue(ANSI.sub("", out).startswith("theirs\nmore  5h 42%"), out)
 
+    @posix_shell
+    def test_compose_passes_stdin_through(self):
+        cmd = "%s -c \"import sys, json; print(json.load(sys.stdin)['session_id'])\"" % sh_path(sys.executable)
+        p, _ = run(self.p, self.home, args=["--compose", cmd], env={"COLUMNS": "200"})
+        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("abc  5h"), p.stdout)
+
+    @posix_shell
     def test_compose_wraps_when_too_wide(self):
         p, _ = run(self.p, self.home, args=["--compose", "printf '%080d' 0"], env={"COLUMNS": "100"})
         lines = ANSI.sub("", p.stdout.decode()).rstrip("\n").split("\n")
         self.assertEqual(len(lines), 2)
         self.assertTrue(lines[1].startswith("5h 42%"))
 
+    @posix_shell
     def test_compose_failure_and_timeout_show_ours(self):
         p, _ = run(self.p, self.home, args=["--compose", "exit 3"])
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
@@ -230,6 +273,7 @@ class Statusline(unittest.TestCase):
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
         self.assertLess(el, 4.0)
 
+    @posix_shell
     def test_compose_leaves_a_background_job_alone(self):
         # Review 7 (fresh-eyes#0): a background job that inherits stdout kept
         # the pipe open, so the render waited for EOF until the 1.5 s timeout,
@@ -239,12 +283,14 @@ class Statusline(unittest.TestCase):
         left = os.path.join(self.home, "left")
         killed = os.path.join(self.home, "killed")
         t = time.time()
-        p, el = run(self.p, self.home, args=["--compose", "echo hi; (sleep 3; touch %s) &" % shlex.quote(left)],
+        self.compose_timeout(QUICK_TIMEOUT_MS)
+        p, el = run(self.p, self.home, args=["--compose", "echo hi; (sleep 3; touch %s) &" % sh_path(left)],
                     env={"COLUMNS": "200"})
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("hi  5h 42%"), p.stdout)
-        self.assertLess(el, 1.2)
+        self.assertLess(el, QUICK_LIMIT)
+        self.compose_timeout(1500)
         t2 = time.time()
-        p, _ = run(self.p, self.home, args=["--compose", "(sleep 3; touch %s) & sleep 5" % shlex.quote(killed)])
+        p, _ = run(self.p, self.home, args=["--compose", "(sleep 3; touch %s) & sleep 5" % sh_path(killed)])
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
         while not os.path.exists(left) and time.time() < t + 10:
             time.sleep(0.1)
@@ -252,23 +298,27 @@ class Statusline(unittest.TestCase):
         time.sleep(max(0.0, t2 + 4 - time.time()))
         self.assertFalse(os.path.exists(killed))
 
+    @posix_shell
     def test_compose_reads_output_until_a_quiet_window(self):
         # Review 7 (fresh-eyes#0): after the shell exits, output its
         # background job writes soon after still counts; output that never
         # stops is read until the deadline, and what arrived is used.
+        self.compose_timeout(QUICK_TIMEOUT_MS)
         p, el = run(self.p, self.home, args=["--compose", "echo a; (sleep 0.2; echo b) &"], env={"COLUMNS": "200"})
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("a\nb  5h 42%"), p.stdout)
-        self.assertLess(el, 1.2)
+        self.assertLess(el, QUICK_LIMIT)
+        self.compose_timeout(1500)
         chatty = "echo hi; (i=0; while [ $i -lt 40 ]; do echo x; sleep 0.1; i=$((i+1)); done) &"
         p, el = run(self.p, self.home, args=["--compose", chatty], env={"COLUMNS": "200"})
         lines = ANSI.sub("", p.stdout.decode()).rstrip("\n").split("\n")
         self.assertEqual(lines[0], "hi")
         self.assertIn("5h 42%", lines[-1])
-        self.assertGreater(len(lines), 5)
+        self.assertGreater(len(lines), 3 if WINDOWS else 5)  # each sleep is a process: slower in Git Bash
         self.assertLess(el, 3.0)
 
+    @posix_shell
     def test_no_recursion_when_composed_with_itself(self):
-        cmd = "%s -I -S %s statusline --compose 'printf x'" % (sys.executable, ENTRY)
+        cmd = "%s -I -S %s statusline --compose 'printf x'" % (sh_path(sys.executable), sh_path(ENTRY))
         p, el = run(self.p, self.home, args=["--compose", cmd], env={"COLUMNS": "300"})
         out = ANSI.sub("", p.stdout.decode())
         self.assertEqual(out.count("5h 42%"), 2)  # inner ctempo does not compose again
@@ -504,19 +554,42 @@ class TildeHome(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def test_home_expands_tilde_and_takes_relative_paths_from_home(self):
-        from unittest import mock
-
+        # USERPROFILE too: Python reads `~` from it on Windows, never HOME.
+        elsewhere = os.path.join(self.dir, "elsewhere")
+        rooted = ntpath.splitdrive(self.user)[0] + "\\srv\\ctempo" if WINDOWS else "/srv/ctempo"
         cases = (("~/.ctempo-moved", os.path.join(self.user, ".ctempo-moved")), ("~", self.user),
-                 ("data/ctempo", os.path.join(self.user, "data", "ctempo")), ("/srv/ctempo", "/srv/ctempo"),
-                 ("", os.path.join(self.user, ".claude-tempo")))
+                 ("data/ctempo", os.path.join(self.user, "data", "ctempo")), (elsewhere, elsewhere),
+                 ("/srv/ctempo", rooted), ("", os.path.join(self.user, ".claude-tempo")))
         for value, want in cases:
-            with mock.patch.dict(os.environ, {"HOME": self.user, "CTEMPO_HOME": value}):
+            with mock.patch.dict(os.environ, {"HOME": self.user, "USERPROFILE": self.user, "CTEMPO_HOME": value}):
                 self.assertEqual(config.home(), want, value)
+
+    def test_windows_rules(self):
+        # Windows paths whatever the OS: drive and UNC paths are absolute, a
+        # rooted path without a drive takes the home's drive, Git Bash's
+        # /c/Users/x is C:/Users/x, and `~` is USERPROFILE (HOME is ignored).
+        user = "C:\\Users\\me"
+        cases = ((None, user + "\\.claude-tempo"), ("", user + "\\.claude-tempo"), ("~", user),
+                 ("~/tempo", user + "\\tempo"), ("~\\tempo\\", user + "\\tempo"), ("data/ctempo", user + "\\data\\ctempo"),
+                 ("D:\\tempo", "D:\\tempo"), ("d:/tempo/", "d:\\tempo"), ("/srv/ctempo", "C:\\srv\\ctempo"),
+                 ("\\srv\\ctempo", "C:\\srv\\ctempo"), ("/d/tempo", "D:\\tempo"), ("/c", "C:\\"), ("/e/", "E:\\"),
+                 ("/cc/x", "C:\\cc\\x"), ("/1/x", "C:\\1\\x"), ("//server/share/tempo", "\\\\server\\share\\tempo"),
+                 ("\\\\server\\share\\tempo", "\\\\server\\share\\tempo"), ("C:/Users/me/../tempo", "C:\\Users\\tempo"))
+        with mock.patch.object(config, "IS_WINDOWS", True):
+            for value, want in cases:
+                env = {"USERPROFILE": user, "HOME": "/c/Users/other", "CTEMPO_HOME": value or ""}
+                with mock.patch.dict(os.environ, env):
+                    if value is None:
+                        del os.environ["CTEMPO_HOME"]
+                    self.assertEqual(config.home(), want, value)
+            with mock.patch.dict(os.environ, {"HOMEDRIVE": "D:", "HOMEPATH": "\\Users\\me", "CTEMPO_HOME": ""}):
+                os.environ.pop("USERPROFILE", None)
+                self.assertEqual(config.home(), "D:\\Users\\me\\.claude-tempo")
 
     def test_statusline_with_tilde_home_writes_under_home_not_cwd(self):
         now = time.time()
         payload = {"session_id": "s", "rate_limits": {"five_hour": {"used_percentage": 10, "resets_at": int(now + 2 * H)}}}
-        env = dict(os.environ, HOME=self.user, CTEMPO_HOME="~/.ctempo-moved", TZ="UTC",
+        env = dict(os.environ, HOME=self.user, USERPROFILE=self.user, CTEMPO_HOME="~/.ctempo-moved", TZ="UTC",
                    CLAUDE_CONFIG_DIR=os.path.join(self.dir, "claude"))
         p = subprocess.run([sys.executable, "-I", "-S", ENTRY, "statusline"], input=json.dumps(payload).encode(),
                            capture_output=True, env=env, cwd=self.cwd, timeout=30)
@@ -554,6 +627,131 @@ class ComposeWidth(unittest.TestCase):
         self.assertEqual(self.lines(theirs), [theirs, self.ours])
         # Combining marks and joiners take no column; VS16 makes a symbol an emoji.
         self.assertEqual(statusline.visible_len("cafe\u0301 \u2601\ufe0f a\u200db \u5f00"), 13)
+
+
+@posix_shell
+class WindowsComposer(unittest.TestCase):
+    """The Composer's Windows branch: the old command runs in the shell Claude
+    Code would pick (shell=True means cmd.exe there), its pipes are served by
+    threads (select() takes sockets only), and one still running at the
+    deadline is killed with its tree by taskkill. Off Windows the branch runs
+    with bash standing in for Git Bash, and p.kill() for taskkill."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="ctempo-wincomp-")
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        patches = [mock.patch.object(config, "IS_WINDOWS", True),
+                   mock.patch.object(winshell, "kill_tree", wraps=winshell.kill_tree)]
+        if not WINDOWS:
+            patches.append(mock.patch.object(winshell, "predict_shell", return_value=("bash", "bash")))
+        started = [p.start() for p in patches]
+        for p in patches:
+            self.addCleanup(p.stop)
+        self.kill = started[1]
+
+    def compose(self, cmd, raw=b"", timeout=1.5):
+        from ctempo import statusline
+
+        t = time.time()
+        c = statusline.Composer(cmd, raw, t + timeout)
+        out = c.finish()
+        return c, out, time.time() - t
+
+    def test_runs_in_the_shell_with_stdin(self):
+        c, out, _ = self.compose("cat", raw=b'{"session_id": "abc"}')
+        self.assertEqual(out, '{"session_id": "abc"}')
+        self.assertEqual(c.p.args[1:], ["-c", "cat"])  # bash -c, not shell=True
+        _, out, _ = self.compose("wc -c", raw=b"x" * 1000000, timeout=10)  # more than a pipe holds
+        self.assertEqual(out.strip(), "1000000")
+
+    def test_crlf_lines_and_failures(self):
+        self.assertEqual(self.compose("printf 'a\\r\\nb\\r\\n'")[1], "a\nb")
+        self.assertIsNone(self.compose("exit 3")[1])
+        self.kill.assert_not_called()
+
+    def test_quiet_window_and_a_background_job(self):
+        _, out, el = self.compose("echo a; (sleep 0.2; echo b) &", timeout=QUICK_TIMEOUT_MS / 1000.0)
+        self.assertEqual(out, "a\nb")
+        self.assertLess(el, QUICK_LIMIT)
+        self.kill.assert_not_called()
+
+    def test_still_running_at_the_deadline_is_killed(self):
+        c, out, el = self.compose("sleep 5; echo late", timeout=0.5)
+        self.assertIsNone(out)
+        self.kill.assert_called_once_with(c.p.pid)
+        self.assertIsNotNone(c.p.wait(5))
+        self.assertLess(el, 3.0)
+
+    def test_main_joins_a_crlf_line(self):
+        from ctempo import statusline
+
+        class Out:
+            def __init__(self):
+                self.buffer = io.BytesIO()
+
+        o, now = Out(), time.time()
+        p = {"session_id": "abc", "rate_limits": {"five_hour": {"used_percentage": 42, "resets_at": int(now + 2 * H)}}}
+        with mock.patch.object(config, "home", return_value=self.dir), mock.patch.object(sys, "stdout", o), \
+                mock.patch.object(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(p).encode()))), \
+                mock.patch.dict(os.environ, {"COLUMNS": "200", "NO_COLOR": "1"}):
+            os.environ.pop("CTEMPO_COMPOSED", None)
+            statusline.main(["--compose", "printf 'theirs\\r\\n'"])
+        out = o.buffer.getvalue().decode("utf-8")
+        self.assertTrue(out.startswith("theirs  5h 42%"), out)
+        self.assertNotIn("\r", out)
+
+
+@unittest.skipUnless(WINDOWS, "needs Windows PowerShell")
+class PowerShellComposer(unittest.TestCase):
+    """Without Git Bash, Claude Code runs the statusLine in PowerShell
+    (-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command), and the
+    Composer runs the old command there too. On a real Windows, with pwsh and
+    with Windows PowerShell 5.1: output, the payload on stdin reaching a native
+    program (as it must reach ctempo's own command), UTF-8 output relayed
+    intact, and a command still running at the deadline killed."""
+
+    def setUp(self):
+        patches = [mock.patch.object(config, "IS_WINDOWS", True),
+                   mock.patch.object(winshell, "kill_tree", wraps=winshell.kill_tree)]
+        self.kill = [p.start() for p in patches][1]
+        for p in patches:
+            self.addCleanup(p.stop)
+        env = dict(os.environ)
+        p51 = ntpath.join(winshell.getenv(env, "SYSTEMROOT") or "C:\\Windows", "System32", "WindowsPowerShell", "v1.0",
+                          "powershell.exe")
+        self.shells = [p for p in (winshell.which("pwsh", env), p51) if p and os.path.isfile(p)]
+        self.py = "& '%s'" % sys.executable.replace("'", "''")
+
+    def compose(self, ps, cmd, raw=b"", timeout=15.0):
+        from ctempo import statusline
+
+        with mock.patch.object(winshell, "predict_shell", return_value=("powershell", ps)):
+            c = statusline.Composer(cmd, raw, time.time() + timeout)
+            return c, c.finish()
+
+    def test_output_and_stdin(self):
+        self.assertTrue(self.shells)
+        for ps in self.shells:
+            with self.subTest(ps=ps):
+                self.assertEqual(self.compose(ps, "Write-Output theirs")[1], "theirs")
+                cmd = self.py + " -c 'import sys; sys.stdout.write(sys.stdin.read())'"
+                self.assertEqual(self.compose(ps, cmd, raw=b'{"session_id": "abc"}\n')[1], '{"session_id": "abc"}')
+
+    def test_utf8_output_is_relayed(self):
+        for ps in self.shells:
+            with self.subTest(ps=ps):
+                # No quotes inside: Windows PowerShell 5.1 passes a double quote on unescaped.
+                cmd = self.py + " -c 'import sys; sys.stdout.buffer.write((chr(0x25b2) + chr(32) + chr(0x2192)).encode())'"
+                self.assertEqual(self.compose(ps, cmd)[1], "\u25b2 \u2192")
+
+    def test_still_running_at_the_deadline_is_killed(self):
+        for ps in self.shells:
+            with self.subTest(ps=ps):
+                self.kill.reset_mock()
+                c, out = self.compose(ps, "Start-Sleep 20", timeout=3.0)
+                self.assertIsNone(out)
+                self.kill.assert_called_once_with(c.p.pid)
+                self.assertIsNotNone(c.p.wait(5))
 
 
 if __name__ == "__main__":
