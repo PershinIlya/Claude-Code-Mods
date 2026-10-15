@@ -82,12 +82,13 @@ when the statusLine is installed, every open session re-renders at once with
 whatever it last saw, so that reading is a real level but may be hours old. It
 counts for the window's max and for the weekly peak, cannot be an anomaly (two
 idle sessions would otherwise fake a drop reset), is not used for profile
-learning, enters the 5h level path only as a lower bound (D-11), and never
-fixes the start of the weekly lookback (D-15). These rules were found in
-review. The line shows the level as judged and stored; the raw reading is used
-only when the write failed (an idle session's stale pre-reset value once
-showed "maxed"). Analysis uses the running max of fresh readings per window
-instance (usage is monotone within a window).
+learning (except that one at 100 marks its window as capped, D-13), enters the
+5h level path only as a lower bound (D-11), and never fixes the start of the
+weekly lookback (D-15). These rules were found in review. The line shows the
+level as judged and stored; the raw reading is used only when the write failed
+(an idle session's stale pre-reset value once showed "maxed"). Analysis uses
+the running max of fresh readings per window instance (usage is monotone
+within a window).
 
 **D-07. Write throttle and dedupe.** A fresh reading identical to the last
 stored row of that window within 60 s is not stored again (two sessions
@@ -98,16 +99,21 @@ written only on change or once a day.
 **D-08. Window instances.** `resets_at` within 300 s of the open instance is
 the same window: the epoch wobbles by seconds between renders (ccpool,
 claumon). A later `resets_at` rolls over (the old instance closes with
-`unused_at_close = 100 - max_used`). At about the same level (less than
-min(`drop_points`, max(1, half the old max)) below it, the continuation test
-learning uses, D-13) the reset moved: that window never ended, and it closes
-as `shift` (D-10), so `report`, the profile's points-vs-pace table, the
-typical week and the weekly lookback leave it out. A weekly reset that moved 1
-h later mid-week listed the running week as finished, with 55 phantom unused
-points (found in review). Instances whose reset time passed close as `expired`
-at their reset time; a reading whose `resets_at` is not in the future is
-rejected (no grace, so the two rules agree). Window start is `resets_at - 5 h`
-or `- 7 d`.
+`unused_at_close = 100 - max_used`). When the new window began before the old
+one's last fresh reading, at about the same level (less than
+min(`drop_points`, max(1, half the old max)) below it), the reset moved: that
+window never ended, and it closes as `shift` (D-10), so `report`, the
+profile's points-vs-pace table, the typical week and the weekly lookback leave
+it out. The 2 conditions are the continuation test learning uses (D-13). A
+weekly reset that moved 1 h later mid-week listed the running week as
+finished, with 55 phantom unused points (found in review). A new window that
+began after the last reading is a real (early) reset, whatever its level.
+Judged on the level alone, a light week that peaked at 10%, was reset early on
+Wednesday and was first read again on Thursday at 6% (spent on claude.ai
+first) closed as `shift`, and `report` left out a week that had ended (found
+in review). Instances whose reset time passed close as `expired` at their
+reset time; a reading whose `resets_at` is not in the future is rejected (no
+grace, so the two rules agree). Window start is `resets_at - 5 h` or `- 7 d`.
 
 **D-09. Guards.** `used_percentage` must be a finite number in [0, 105]:
 Claude Code bug #52326 sometimes puts the `resets_at` epoch there (ccpool,
@@ -121,31 +127,44 @@ length plus 15 min (5h) or 1 h (7d). Each rejection is counted in `meta`
 least 15 points below the window's max (15 included) is an ANOMALY; two
 consecutive fresh anomalies (default `reset.drop_samples = 2`) are a reset,
 the new instance starts at the first one, and the weekly math paces it from
-there (D-15). This is ccpace's rule; ccpace observed a real 100 to 0 reset
-with an unchanged `resets_at`. Every low in the run must itself be 15 points
-down, which closes ccpace's over-count case (50 then 30, 48). A fresh reading
-with an *earlier* `resets_at` is an anomaly too ("shift"): if it is sustained,
-the open instance came from a bogus later reset, and the real window, closed
-by it, is reopened instead of being split in two. One fresh reading undoes it
-when it carries the resets_at of the window that the bogus instance's rollover
-closed and comes from the session whose reading opened that instance, unless
-the reading sits `drop_points` or more above the bogus instance's max. A drop
-that large is what a real early reset looks like, and two processes can share
-a session id (`claude -c` or `--resume` without `--fork-session`): the idle
-one's stale reading of the old window flipped the line back to the dead window
-on every render (found in review): one reading did the damage, and a maxed or
-idle session repeats its real reading only as heartbeats, so the second fresh
-one never came. The undo still moves the real window's pending readings from
-other sessions (up to `drop_samples - 1`) into it. One was left behind in the
+there (D-15). The instance the drop closed (reason `drop`) never reached its
+reset, so the weekly lookback and the profile's points-vs-pace table leave it
+out. The typical week also leaves out the instance the drop opened, which
+holds only part of a week (D-13). This is ccpace's rule; ccpace observed a
+real 100 to 0 reset with an unchanged `resets_at`. Every low in the run must
+itself be 15 points down, which closes ccpace's over-count case (50 then 30,
+48). A fresh reading with an *earlier* `resets_at` is an anomaly too
+("shift"): if it is sustained, the open instance came from a bogus later
+reset, and the real window, closed by it, is reopened instead of being split
+in two. One fresh reading undoes it, because one reading did the damage. A
+maxed or idle session repeats its real reading only as heartbeats, so the
+second fresh one never came: the line kept the bogus reset time past the real
+reset, and `report` counted the window twice (found in review). The undo by
+one reading takes 4 conditions. First, the bogus instance's rollover closed
+the window that this reading's `resets_at` belongs to as `shift` (D-08: the
+reset moved and the level held). Second, the reading comes from the session
+whose reading opened the bogus instance. Third, it is not below that opening
+reading (a session's real reading never is). Fourth, it sits less than
+`drop_points` above the bogus instance's max. Two processes can share a
+session id (`claude -c` or `--resume` without `--fork-session`), and the idle
+one keeps re-rendering the old window. When the undo also matched a window
+closed as `rollover` (the level dropped, or the new window began after the
+last reading, which is what a real early reset looks like), only the
+`drop_points` margin guarded it. That stale reading then flipped the line and
+`check` back to the dead window on every render pair: from the first render
+after a weekly window at 10% was reset early, and once a new 5-hour window
+climbed within 15 points of the old 90%. After a move to a later reset at 42%,
+a twin's stale 41% did the same (found in review, twice). A twin whose stale
+reading equals the moved one still undoes it on each render pair until the
+level moves on; the readings cannot tell it from the session's own real
+reading. The undo still moves the real window's pending readings from other
+sessions (up to `drop_samples - 1`) into it. One was left behind in the
 superseded instance, and the reopened window showed a level too low until the
-next fresh reading (found in review). A bogus later reset at the same level
-closes the real window as `shift` (D-08), and the undo matches either reason.
-The line then kept the bogus reset time past the real reset, and `report`
-counted the window twice (found in review). From any other session it still
-takes `drop_samples`, since that session may lag a real early reset. The
-superseded instance stays closed with reason `shift`. It never ended, so
-`report`, the profile's points-vs-pace table, the typical week and the weekly
-lookback all leave it out.
+next fresh reading (found in review). From any other session the undo still
+takes `drop_samples`, since that session may lag a real early reset, and so
+does a window closed as `rollover`. The superseded instance stays closed with
+reason `shift`. It never ended, so `report`, the profile's points-vs-pace
+table, the typical week and the weekly lookback all leave it out.
 
 ## 5-hour math
 
@@ -222,28 +241,40 @@ cut at local hour boundaries, so DST days with 23 or 25 hours are handled.
   90% for a true 56% (found in review). A window that reached 100% is the
   exception. The account was blocked in its tail, which says nothing about the
   habit, and learning it as idle made a user who caps every Tuesday read "on
-  pace" on Monday. Per bin, a decay-weighted mean with a 14-day half-life
-  (continuous-time EWMA: weight `0.5 ** (age / 14 d)`).
+  pace" on Monday. Reaching 100% counts by any FRESH or FIRST reading, as in
+  the lookback (D-15). When the last points go on claude.ai, a new session's
+  first reading can be the only one at 100, and learning, which looked at
+  FRESH readings only, learned that blocked tail as idle (found in review).
+  Per bin, a decay-weighted mean with a 14-day half-life (continuous-time
+  EWMA: weight `0.5 ** (age / 14 d)`).
 - shrinkage: `r(h) = (n m + k M p) / (n + k)`, `n` the decayed confidence
   weight, `m` the observed mean, `M` the weekly total. `k = 1` for an
   informative prior (transcripts, override), `0.25` for the uniform one so a
   few observations can outweigh "I know nothing". `M` is the decay-weighted
   peak of recent closed weekly windows that were observed in their last day
   (by the last fresh reading, not by heartbeats; an unobserved tail
-  understates the peak, claumon's weak spot); without those, the unweighted
-  ratio `sum(m) / sum(p)` over observed bins. Unweighted because busy hours
-  are observed with more confidence (short gaps), which inflated the weighted
-  ratio from 40 to 106 in a test. The line, `ctempo profile`, `profile
-  --rebuild` and learning all build the weights this way
+  understates the peak, claumon's weak spot) and lasted a whole week (the
+  window a drop reset opens holds only part of one: with one among 3 weeks at
+  90%, the typical week read 77%, found in review); without those, the
+  unweighted ratio `sum(m) / sum(p)` over observed bins. Unweighted because
+  busy hours are observed with more confidence (short gaps), which inflated
+  the weighted ratio from 40 to 106 in a test. The line, `ctempo profile`,
+  `profile --rebuild` and learning all build the weights this way
   (`profile.current_weights`); `profile` used the ratio and printed a typical
   week of 168% (found in review). `ctempo profile` names the three lightest
   3-hour blocks whose hours are all awake by that rule, and none on a flat
   profile. It listed "Mon 00-03, Mon 03-06, Mon 06-09" on a flat profile, and
   wake-up or bedtime blocks that were two-thirds asleep (found in review). Its
   points-vs-pace table is the level minus the on-pace level for `target_week`,
-  so the reset column is what expired (100 - peak) only at target 100. Below
-  100 the note under the table says it is the peak versus the target and
-  points to `report` (found in review).
+  each window paced from its own start as on the line (D-15), so the reset
+  column is what expired (100 - peak) only at target 100. It leaves out a
+  window that an early reset cut short (a drop, D-10, or a rollover more than
+  1 hour before its reset). The window that replaced it holds the rest of that
+  week, so each week counts once. The table paced a drop's window from
+  `resets_at - 7 d`, set the closed window's frozen level against a rising
+  pace, and counted the drop week twice: up to 18 points of "surplus" for a
+  user on pace (found in review). Below 100 the note under the table says it
+  is the peak versus the target and points to `report` (found in review).
 - floor: every bin is raised to `0.15 x typical`, typical = mean of the
   busiest third of the bins (ccpool's 0.15). An hour is "awake" when its rate
   is at least 0.25 x typical (thevibeworks' rest-hour threshold).
@@ -261,25 +292,29 @@ few ms); `ctempo profile --rebuild` relearns from all samples.
 not modified in that period are skipped unopened. Per message only the
 timestamp, message id and token counts are kept; content is parsed (the line
 is one JSON object) and dropped. A message streamed over several lines shares
-one id; the largest usage wins. Weight = `input + 1.25 cache_creation + 0.1
-cache_read + 5 output` (API price ratios relative to fresh input); only the
-distribution over the week matters. Each bin's mean is over *every* hour of
-the period, zeros included (thevibeworks averages per active day, which runs
-high), then lightly smoothed along the hour axis. A short history is blended
-toward uniform: `prior = mix x shape + (1 - mix) x uniform`, with `mix =
-min(1, covered_days / 14, active_days / 4)`; `covered_days` starts where 5% of
-the cost is behind, so one stray old message does not buy trust (found in
-review). The prior strength `k` moves from 0.25 to 1 with `mix`. Found on live
-data: one hour of transcripts otherwise made a three-hour spike. It misses
-claude.ai and Desktop chat; the percent observations correct that over time.
-For that, the prior fades toward uniform with the profile half-life from its
-`built_at`, in shape (`a x prior + (1 - a) x uniform`, `a = 0.5 ** (age / 14
-d)`) and in strength (trust times `a`). Hours that went idle since then are
-only seen through overnight gaps, learned at low confidence and spread by the
-prior's own shape. So a prior of constant strength kept Mon-Fri 9-13 at 20% of
-the week 8 weeks after a move to 14-23 (found in review). `ctempo bootstrap`
-builds a fresh one. `install --apply` runs the bootstrap too (`--no-bootstrap`
-skips it).
+one id; the largest usage wins. Weight =
+`input + 1.25 cache_creation + 0.1 cache_read + 5 output` (API price ratios
+relative to fresh input); only the distribution over the week matters. Each
+bin's mean is over *every* hour of the period, zeros included (thevibeworks
+averages per active day, which runs high), then lightly smoothed along the
+hour axis. A short history is blended toward uniform:
+`prior = mix x shape + (1 - mix) x uniform`, with
+`mix = min(1, covered_days / 14, active_days / 4)`; `covered_days` starts
+where 5% of the cost is behind, so one stray old message does not buy trust
+(found in review). The prior strength `k` moves from 0.25 to 1 with `mix`.
+Found on live data: one hour of transcripts otherwise made a three-hour spike.
+It misses claude.ai and Desktop chat; the percent observations correct that
+over time. For that, the prior fades toward uniform with the profile half-life
+from its `built_at`, in shape (`a x prior + (1 - a) x uniform`,
+`a = 0.5 ** (age / 14 d)`) and in strength (trust times `a`). Hours that went
+idle since then are only seen through overnight gaps, learned at low
+confidence and spread by the prior's own shape. So a prior of constant
+strength kept Mon-Fri 9-13 at 20% of the week 8 weeks after a move to 14-23
+(found in review). `ctempo profile` prints the prior's age and its weight now
+(trust times `a`) beside the trust it was built with. It printed the
+build-time trust for good: "trusted 100%" 8 weeks on (found in review).
+`ctempo bootstrap` builds a fresh one. `install --apply` runs the bootstrap
+too (`--no-bootstrap` skips it).
 
 **D-15. Weekly numbers.** As in the brief, with these details: `E` is
 normalized by the week's total share (DST weeks have 167 or 169 local hours).
@@ -293,36 +328,41 @@ level by the old week's elapsed share: `×9+▲ →2%` (found in review). Normal
 instances are unchanged. Intensity uses the last 24 *awake* hours, walking
 back through nights and weekends, and crosses into the previous weekly window
 when needed (spend = previous window's peak minus its value at the lookback
-start, plus the current window from 0). The value at the lookback start is the
-running max of readings up to it. A FIRST reading (D-06) never fixes that
-start: with no FRESH reading at or before it, the count starts at the first
-FRESH one (a stale level re-rendered at install showed a red "dry" for a day,
-depending on which session rendered first). When the start falls in a gap
-between readings longer than `max_gap_hours`, the gap's rise is spread over it
-by profile share, as in learning (D-13), and only the part after the start
-counts (a weekend of claude.ai use was charged to the last 24 hours). When the
-lookback reaches into a previous window that reached 100%, the hours from its
-cap to the new window's start are left out of the expected share, since
-nothing could be spent there. The cap is that window's first FRESH or FIRST
-reading at 100, an upper bound. Two hours after a Thursday reset, a user
-blocked since Tuesday read "on pace" and capped again (found in review). The
-rest of the previous window after its last reading still counts as no spend: a
-claude.ai-only last day and an idle one leave the same readings, so spreading
-that tail by the profile would trade one error for the other. Fallbacks when
-the lookback holds less than 1% of a week's expected spend, or when it was cut
-short at the first reading and has not seen a whole-percent step yet (that
-zero is no news, not idle): the whole window so far (unless it is still at 0
-after a cut lookback, which is no news either; it showed `×? →0%`), then the
-typical week `M / target`, then 1.0, each labeled in `ctempo now` with its
-reason (recent span too short; the level has not moved since the first timed
-reading; no timed reading yet); the typical week and 1.0 also say why the
-whole window could not stand in (it is still at 0%, or it is too new: under 2%
-of a week's expected spend has passed since it opened). They said "no recent
-data" and "no data yet" next to hours of readings. "Dry" is the hour-by-hour
-walk at that intensity (thevibeworks' `_profile_walk` shape). Verdict
-thresholds are the same as for 5h; "idle" when the last 24 awake hours spent
-nothing. The multiplier is max(0, target - used) / remaining spend, so it is 0
-past a target below 100, as for 5h.
+start, plus the current window from 0). The previous window is the one whose
+reset is nearest the current window's start, never one that did not end
+(`shift`) or that a drop reset replaced (`drop`). Both drop windows end at the
+same reset, give or take the seconds `resets_at` wobbles, so the nearer one
+was picked by chance and could be the frozen one, which lost the spend since
+the drop (found in review). The value at the lookback start is the running max
+of readings up to it. A FIRST reading (D-06) never fixes that start: with no
+FRESH reading at or before it, the count starts at the first FRESH one (a
+stale level re-rendered at install showed a red "dry" for a day, depending on
+which session rendered first). When the start falls in a gap between readings
+longer than `max_gap_hours`, the gap's rise is spread over it by profile
+share, as in learning (D-13), and only the part after the start counts (a
+weekend of claude.ai use was charged to the last 24 hours). When the lookback
+reaches into a previous window that reached 100%, the hours from its cap to
+the new window's start are left out of the expected share, since nothing could
+be spent there. The cap is that window's first FRESH or FIRST reading at 100,
+an upper bound. Two hours after a Thursday reset, a user blocked since Tuesday
+read "on pace" and capped again (found in review). The rest of the previous
+window after its last reading still counts as no spend: a claude.ai-only last
+day and an idle one leave the same readings, so spreading that tail by the
+profile would trade one error for the other. Fallbacks when the lookback holds
+less than 1% of a week's expected spend, or when it was cut short at the first
+reading and has not seen a whole-percent step yet (that zero is no news, not
+idle): the whole window so far (unless it is still at 0 after a cut lookback,
+which is no news either; it showed `×? →0%`), then the typical week
+`M / target`, then 1.0, each labeled in `ctempo now` with its reason (recent
+span too short; the level has not moved since the first timed reading; no
+timed reading yet); the typical week and 1.0 also say why the whole window
+could not stand in (it is still at 0%, or it is too new: under 2% of a week's
+expected spend has passed since it opened). They said "no recent data" and "no
+data yet" next to hours of readings. "Dry" is the hour-by-hour walk at that
+intensity (thevibeworks' `_profile_walk` shape). Verdict thresholds are the
+same as for 5h; "idle" when the last 24 awake hours spent nothing. The
+multiplier is max(0, target - used) / remaining spend, so it is 0 past a
+target below 100, as for 5h.
 
 **D-23. Exchange rate.** Weekly points per full 5-hour window, from paired
 readings (thevibeworks' `pct_per_window`: published once the 5h side rose 50
@@ -372,13 +412,19 @@ command inside ours (`--compose '<old command>'`, shell-quoted), so
 `settings.json` shows exactly what runs. At render time the old command starts
 first, in its own process group, with the same stdin, and runs in parallel
 with ctempo's own work; its output comes first and our segment is appended to
-its last line (two spaces) or put on a new line when that would exceed
-`COLUMNS`. Its output is complete once it has exited and its stdout has closed
-or stayed quiet for 500 ms (Claude Code waits the same for a hook's remaining
-output); a background job it started may keep stdout open, and is left
-running. Timeout 1.5 s (`compose.timeout_ms`, counted from ctempo's start): a
-command still running then is killed with its children and only our segment
-shows; one that already exited keeps the output that arrived.
+its last line (two spaces) or put on a new line when the joined line would not
+fit where Claude Code draws it. Its prompt footer pads the line by 2 columns a
+side, so the room is `COLUMNS - 4`, counted in display columns: CJK characters
+and most emoji take 2, combining marks and joiners take 0, and VS16 makes a
+narrow symbol 2. Measured as `COLUMNS` code points, a joined line in the last
+4 columns, or one with emoji in it, lost its weekly reset to Claude Code's `…`
+(found in review). A nonzero `statusLine.padding` takes 2 more columns per
+unit; ctempo does not read it. Its output is complete once it has exited and
+its stdout has closed or stayed quiet for 500 ms (Claude Code waits the same
+for a hook's remaining output); a background job it started may keep stdout
+open, and is left running. Timeout 1.5 s (`compose.timeout_ms`, counted from
+ctempo's start): a command still running then is killed with its children and
+only our segment shows; one that already exited keeps the output that arrived.
 `CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces instead.
 `refreshInterval` becomes 60, or stays lower if the old one was lower.
 
@@ -471,30 +517,39 @@ there was none before the mod only when neither backup matches. Every record
 of a file, under any name, goes when it is uninstalled, and the user file's
 kept record goes with the mod (also when that file is gone). Backups are
 ordered by their time and sequence number, never as strings: a name ending in
-Z is UTC, an older one without it is local time (local time goes back after a
+Z is UTC and sorts after every older one without it, which an older version
+named in local time; local time, read in the zone in effect at the time,
+orders only those older names among themselves (local time goes back after a
 move west or at the fall-back hour, and a newer backup then sorted first,
-found in review). `uninstall` restores the original `statusLine` (or removes
-it), removes `enabledPlugins` / `extraKnownMarketplaces` if they were not the
-user's (absent before, or holding only ctempo's own entry because the commands
-were run by hand; a key that ctempo next finds gone, as after the user deleted
-or blanked the file, stops counting as theirs, and so does one holding only
-ctempo's entry for a manual mod whose commands the user ran. A user's own
-empty key with the mod in keeps counting, also after the user added and
-removed other plugins: the plugin CLI leaves `{}` after removing its last
-plugin, so many files hold one, and uninstall used to remove it, found in
-review twice. When the user deletes or blanks the user file and runs the
-printed commands by hand after ctempo ran them, ctempo cannot tell those keys
-from the user's own, and they may stay empty) and the plugin CLI left them
-empty, and when the result equals the backup (a blank backup counts as `{}`,
-as on install) it writes the backup's bytes, so an untouched file comes back
-byte for byte (the test suite checks four formatting styles and blank files).
-The mod is installed with `claude plugin marketplace add <repo>` and `claude
-plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips it.
+found in review twice: the second time, an older version's local-time backup
+sorted after a newer Z one). `uninstall` restores the original `statusLine`
+(or removes it), removes `enabledPlugins` / `extraKnownMarketplaces` if they
+were not the user's (absent before, or holding only ctempo's own entry because
+the commands were run by hand; a key that ctempo next finds gone, as after the
+user deleted or blanked the file, stops counting as theirs, and so does one
+holding only ctempo's entry for a manual mod whose commands the user ran,
+unless the key was empty at the mod's snapshot. A user's own empty key with
+the mod in keeps counting, also after the user added and removed other
+plugins, and also when the user ran the printed commands for a manual mod: the
+plugin CLI leaves `{}` after removing its last plugin, so many files hold one,
+and uninstall used to remove it, found in review 3 times. When the user
+deletes or blanks the user file and then runs the printed commands by hand
+(after ctempo ran them, or for a manual mod whose snapshot held the key
+empty), ctempo cannot tell those keys from the user's own, and they may stay
+empty) and the plugin CLI left them empty, and when the result equals the
+backup (a blank backup counts as `{}`, as on install) it writes the backup's
+bytes, so an untouched file comes back byte for byte (the test suite checks
+four formatting styles and blank files). The mod is installed with
+`claude plugin marketplace add <repo>` and
+`claude plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips it.
 `--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned interpreter.
 A later install rewrites it with the new pin without `--bin-dir` (a `--python`
 repin, a moved clone), unless the user deleted it. A launcher written in
 another `--bin-dir` replaces it: the earlier one is removed while it is still
-ctempo's, so uninstall removes the only one there is (found in review).
+ctempo's, so uninstall removes the only one there is (found in review). A
+`--bin-dir` that names the same directory another way (another case on a
+case-insensitive macOS disk, a bind mount) holds the same file, which stays:
+install used to remove the launcher it had just written (found in review).
 
 ## The scavenger hook
 
@@ -599,6 +654,15 @@ session's pending reading behind, reset times shown a minute early, a 5h
 leftover of 0 priced at the assumed exchange rate, fractional targets printed
 as whole numbers, two `ctempo profile` texts, and three install cases: a
 launcher that kept its first pin, backups named in local time, and the user's
-own empty plugin key after other plugins came and went). All 114 are fixed,
-each with a regression test that was checked to fail on the code before its
-fix. Details in the commit messages from "Fix review findings" on.
+own empty plugin key after other plugins came and went); a ninth confirmed 11
+and rejected 1 (a cap first shown by a new session's first reading learned as
+idle, the lookback after a drop week reading the window the drop replaced, a
+drop week's window counted as a typical week, the points-vs-pace table pacing
+a drop week from `resets_at - 7 d` and counting it twice, the prior's
+build-time trust printed for good, a shared session id still flipping the line
+to a dead window, a light user's early reset taken for a moved one, ctempo's
+segment cut off in a composed line, and three install cases: a manual mod's
+empty plugin key, an older version's local-time backup names, and a
+`--bin-dir` alias). All 125 are fixed, each with a regression test that was
+checked to fail on the code before its fix. Details in the commit messages
+from "Fix review findings" on.
