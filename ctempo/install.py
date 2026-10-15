@@ -404,16 +404,17 @@ def installed_records(state):
 
 
 def _backup_order(name):
-    """Sort key of a backup name: its time, then its sequence number ("-10" after "-9")."""
+    """Sort key of a backup name: a name ending in Z after every older one without it
+    (an older version wrote those), then its time, then its sequence number ("-10" after "-9")."""
     m = re.search(r"-(\d{8})-(\d{6})(Z?)(?:-(\d+))?$", name)
     if not m:
-        return (float("-inf"), 0)
-    try:  # names ending in Z are UTC; older ones are local time
+        return (0, float("-inf"), 0)
+    try:  # names ending in Z are UTC; older ones are local time, in a zone that may have changed since
         tt = time.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
         t = calendar.timegm(tt) if m.group(3) else time.mktime(tt)
     except (ValueError, OverflowError):
         t = float("-inf")
-    return (t, int(m.group(4) or 0))
+    return (1 if m.group(3) else 0, t, int(m.group(4) or 0))
 
 
 def _original_from_backups(spath):
@@ -607,8 +608,9 @@ def install(args, out=print):
                     os.chmod(lp, 0o755)
                     state["launcher"] = lp
                     out("Wrote launcher %s" % lp)
-                    # Only the newest launcher is ctempo's: one in an earlier --bin-dir goes.
-                    if old_lp and os.path.exists(old_lp) and os.path.realpath(old_lp) != os.path.realpath(lp) \
+                    # Only the newest launcher is ctempo's: one in an earlier --bin-dir goes. The same
+                    # file under another name (case on macOS, a bind mount) is not one realpath can tell.
+                    if old_lp and os.path.exists(old_lp) and not os.path.samefile(old_lp, lp) \
                             and LAUNCHER_MARK in read_text(old_lp):
                         os.remove(old_lp)
                         out("Removed launcher %s" % old_lp)
@@ -633,8 +635,10 @@ def install(args, out=print):
                     had_keys = _user_keys(uobj)
                 except ValueError:  # not valid JSON: it exists, and its keys are unknown, so never removed
                     uobj, uraw, had_keys = {}, None, {k: True for k in PLUGIN_KEYS}
+                # A key the user holds empty stays theirs once the printed commands fill it (_forget_keys).
                 state["mod"] = {"user_settings": us, "had_file": uraw is not None or os.path.exists(os.path.realpath(us)),
-                                "had_keys": had_keys, "manual": True}
+                                "had_keys": had_keys, "manual": True,
+                                "empty_keys": [k for k in PLUGIN_KEYS if uobj.get(k) == {}]}
                 if uraw is not None and os.path.realpath(us) != os.path.realpath(spath):
                     try:
                         state["mod"].update(backup_path=make_backup(us), original_sha256=sha(uraw))
@@ -740,14 +744,18 @@ def _forget_keys(mod, out_of_sight=False):
     """A plugin key the user file no longer holds at all (the user deleted or
     blanked the file since) is not the user's: tidy it away once empty. A key
     holding only ctempo's entry counts as gone only when the plugin CLI wrote
-    it out of ctempo's sight (a manual mod whose commands the user ran): when
-    ctempo ran the commands, that is just the user's own empty key with the
-    mod in, also after the user added and removed other plugins since."""
+    it out of ctempo's sight (a manual mod whose commands the user ran) and the
+    key was not empty at the snapshot: otherwise that is just the user's own
+    empty key with the mod in, also after the user added and removed other
+    plugins since."""
     try:
         obj = read_settings(mod["user_settings"])[0]
     except (KeyError, TypeError, OSError, ValueError):
         return
-    now = _user_keys(obj) if out_of_sight else {k: k in obj for k in PLUGIN_KEYS}
+    now = {k: k in obj for k in PLUGIN_KEYS}
+    if out_of_sight:
+        own = _user_keys(obj)
+        now = {k: own[k] or (now[k] and k in (mod.get("empty_keys") or ())) for k in PLUGIN_KEYS}
     if mod.get("had_keys"):
         mod["had_keys"] = {k: bool(had) and now.get(k, False) for k, had in mod["had_keys"].items()}
 
