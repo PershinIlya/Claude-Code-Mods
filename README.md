@@ -13,7 +13,7 @@ I land at the reset.
 
 No network, no token: it reads the rate limits Claude Code already hands to the
 status line, keeps a history in SQLite, and learns your hour-of-week rhythm.
-Python 3.8+ standard library only.
+Python 3.8+ standard library only; macOS, Linux and Windows.
 
 ## Reading the line
 
@@ -100,7 +100,7 @@ move later, the `used_percentage` epoch leak (#52326), resets that keep the
 same `resets_at`, and DST weeks are all handled; DECISIONS.md explains each
 rule.
 
-## Install (on your Mac)
+## Install (macOS and Linux)
 
 ```sh
 git clone <this repo> ~/Projects/claude-tempo && cd ~/Projects/claude-tempo
@@ -111,9 +111,9 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
 `install --apply`:
 
 1. picks and verifies an absolute interpreter (`/usr/bin/python3` first, then
-   Homebrew, then the one you ran it with; `--python /abs/path` to choose) and
-   pins it in the command, run as `python -I -S` so conda or PYTHONPATH cannot
-   interfere;
+   Homebrew, then the one you ran it with; `--python /abs/path` to choose;
+   Windows: see below) and pins it in the command, run as `python -I -S` so
+   conda or PYTHONPATH cannot interfere;
 2. backs up `~/.claude/settings.json` to
    `settings.json.ctempo-backup-<UTC time>` and sets only `statusLine`
    (`refreshInterval: 60`). If you already have a status line, ctempo
@@ -127,15 +127,104 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
    `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip). If
    `claude` is not on PATH, it prints the two commands for you to run, and
    uninstall still undoes them;
-4. writes `~/.claude-tempo/runtime.json` (the mod reads it), a default
-   `config.json`, and a `ctempo` launcher in `--bin-dir` (a later install
-   repins it without `--bin-dir`, after `--python` or a moved clone too; a new
-   `--bin-dir` moves it there);
+4. writes `~/.claude-tempo/runtime.json` (the mod reads it: the interpreter,
+   its flags and the entry point), a default `config.json`, and a `ctempo`
+   launcher in `--bin-dir` (a later install repins it without `--bin-dir`,
+   after `--python` or a moved clone too; a new `--bin-dir` moves it there);
 5. builds the profile prior from `~/.claude/projects` transcripts
    (`--no-bootstrap` to skip).
 
 The terminal status line applies at once. For the mod, restart Claude Code or
 run `/reload-plugins` (in Desktop: start a new session). Then `ctempo doctor`.
+
+## Install on Windows
+
+You need Python 3.8+: from python.org, `winget install Python.Python.3.12`, or
+the Python install manager. Git for Windows is optional (`git clone` needs it,
+or download the repo as a ZIP): Claude Code runs the status line in Git Bash
+when it finds one, else in PowerShell, and install prints which. In
+PowerShell, each command on its own line (Windows PowerShell 5.1 has no `&&`):
+
+```powershell
+git clone <this repo> $HOME\Projects\claude-tempo
+cd $HOME\Projects\claude-tempo
+py -3 bin\ctempo install                                    # dry run
+py -3 bin\ctempo install --apply --bin-dir $HOME\.local\bin
+```
+
+In cmd.exe the same lines work with `%USERPROFILE%` for `$HOME` (and `cd /d`),
+without the comment. `~` in this README is `%USERPROFILE%` on Windows:
+settings in `%USERPROFILE%\.claude\settings.json`, data in
+`%USERPROFILE%\.claude-tempo`. `install --apply` takes the steps above, with
+these differences:
+
+- **Python.** `python3` is often only the Microsoft Store stub ("Python was
+  not found"), so start install with `py -3`. It pins, in this order, the
+  first interpreter that passes: the registry (PEP 514, newest first),
+  `py -0p`, the default install folders, the one you ran it with, then
+  `python` and `python3` on PATH. Behind a Store alias or `py.exe` it pins the
+  real `python.exe`, and a Store Python only when nothing else passes.
+  `--python C:\path\to\python.exe` chooses.
+- **The shell.** Claude Code looks for Git Bash in `CLAUDE_CODE_GIT_BASH_PATH`,
+  `C:\Program Files\Git`, `C:\Program Files (x86)\Git` and beside the `git`
+  on PATH; without one it uses PowerShell (pwsh 7, else Windows PowerShell
+  5.1). install repeats that search ("Claude Code runs it with Git Bash
+  here"), and your previous status line runs in the shell that runs ctempo's.
+- **The command.** Forward slashes and `-X utf8` (a pipe gets the ANSI code
+  page, and `-I` ignores `PYTHONUTF8`), in a form Git Bash and PowerShell read
+  the same, so it keeps working when the shell changes:
+  `C:/Users/ana/AppData/Local/Programs/Python/Python312/python.exe -I -S -X utf8 C:/Users/ana/Projects/claude-tempo/bin/ctempo statusline`.
+  A path with a space is written with its folders' 8.3 short names
+  (`C:/PROGRA~1/PYTHON~1/python.exe`); on a drive without them the command is
+  quoted for the shell Claude Code uses now, and install warns that it runs
+  only there. A previous status line that a shell would hand to Python
+  changed (one with a `"`, which Windows PowerShell 5.1 alters, or one that
+  starts with a POSIX path such as `/usr/bin/env`, which Git Bash rewrites) is
+  stored as `--compose-b64 b<base64>` instead of `--compose '<command>'`.
+  install says so, and `ctempo doctor` shows it decoded; to change it by hand,
+  put `--compose '<command>'` in its place.
+- **Launchers.** `--bin-dir` writes `ctempo.cmd`, for PowerShell and cmd.exe,
+  and an extensionless `ctempo`, for Git Bash and Claude Code's Bash tool
+  (which runs in Git Bash). The status line and the mod run `python.exe`
+  itself, never a launcher. If `ctempo` is not found, add the folder to your
+  user PATH, then open a new terminal and restart Claude Code:
+
+  ```powershell
+  $p = [Environment]::GetEnvironmentVariable('Path', 'User')
+  [Environment]::SetEnvironmentVariable('Path', "$p;$HOME\.local\bin", 'User')
+  ```
+
+- **Quoting.** PowerShell reads a comma as a list: write
+  `ctempo check --tail '5h=60m,week=2d'`.
+
+After you install or remove Git for Windows, or set
+`CLAUDE_CODE_GIT_BASH_PATH`, run `ctempo doctor`. If it warns about the
+statusLine shell, run `ctempo install --apply` again. A command that install
+said reads the same in Git Bash and PowerShell needs nothing.
+
+### Windows notes
+
+- Only a command quoted for a single shell (above) depends on which shell
+  Claude Code picks; `ctempo doctor` checks it.
+- Claude Code started from a Git Bash terminal can pick another shell than
+  when started from the Desktop app or PowerShell (Git Bash puts its own `git`
+  first on PATH). install and doctor say so when run there; run
+  `ctempo doctor` from PowerShell to check.
+- A previous status line that is a PowerShell or Git Bash script can take
+  longer than `compose.timeout_ms` (1500 ms) to start cold, and the line then
+  shows ctempo's segment alone: set it to 3000 to 5000 in `config.json`.
+- Claude Code inside WSL is a separate Linux install: follow the macOS and
+  Linux steps there. The Desktop app draws no band in WSL sessions, where
+  plugins are not available.
+- `CTEMPO_HOME`: `~` is `%USERPROFILE%` (never `HOME`); `~\x`, `C:\x`, `C:/x`
+  and Git Bash's `/c/x` work. `%USERPROFILE%` in settings.json `env` is not
+  expanded (it names a folder called `%USERPROFILE%`). Any other path that
+  starts with a single `/` (`/srv/ctempo`) is refused, since Git Bash would
+  rewrite it to a folder under its own install, and the band refuses `C:x`
+  (no slash after the colon). Keep it on a local drive: the band usually
+  cannot read a `\\server\share` folder.
+- `config.json` may be UTF-8 or UTF-16 (what Windows PowerShell 5.1's `>`
+  writes); `ctempo config show` says when the file is not used.
 
 ## Uninstall
 
@@ -144,14 +233,14 @@ ctempo uninstall            # dry run
 ctempo uninstall --apply
 ```
 
-It uninstalls the mod and the marketplace, puts your previous `statusLine`
-back (or the command inside ctempo's `--compose` if you put or changed one
-there), or removes ctempo's, removes the launcher and `runtime.json`.
-`--no-mod` keeps the mod, and `runtime.json` and the launcher with it, until
-an uninstall without it. If `~/.claude-tempo/install.json` is gone (you
-deleted the folder, or use another `CTEMPO_HOME`) while your settings still
-list the mod, uninstall says so and removes it all the same. A launcher made
-before the folder was deleted stays: remove it yourself. If you did not change
+It uninstalls the mod and the marketplace, puts your previous `statusLine` back
+(or the command inside ctempo's `--compose` if you put or changed one there),
+or removes ctempo's, removes the launcher (on Windows both) and `runtime.json`.
+`--no-mod` keeps the mod, and `runtime.json` and the launchers with it, until
+an uninstall without it. If `~/.claude-tempo/install.json` is gone (you deleted
+the folder, or use another `CTEMPO_HOME`) while your settings still list the
+mod, uninstall says so and removes it all the same. A launcher made before the
+folder was deleted stays: remove it yourself. If you did not change
 `settings.json` in between, the file comes back byte for byte (it is restored
 from the backup). If `claude` is not on PATH, uninstall prints the two plugin
 commands and exits 1; once your settings list neither the plugin nor its
@@ -169,7 +258,7 @@ marketplace (you ran them yourself), it completes. Your history stays in
 | `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); spare quota is measured against each window's target (`spare` in the JSON), so a window at or above a target below 100, or one that should slow down, is never harvestable; `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
-| `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen |
+| `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen; on Windows, the shell Claude Code runs the status line in and whether the command suits it |
 | `ctempo config [show|init|path]` | effective configuration |
 
 `ctempo` with no command is `ctempo now`.
@@ -194,7 +283,7 @@ leave out keeps its default):
 | `display.max_width` | 80 | the line drops optional parts to fit, then is cut with `…` (`...` in ascii mode); each part keeps its color |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
 | `mod.refresh_s` | 60 | how often the mod refreshes the band (15 to 3600) |
-| `compose.timeout_ms` | 1500 | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped |
+| `compose.timeout_ms` | 1500 | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 3000 to 5000 for a PowerShell or Git Bash script |
 | `retention_days` | 365 | history kept |
 
 `CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
@@ -202,8 +291,11 @@ does not inherit your shell's environment, so if you move it, set it in
 `~/.claude/settings.json` under `env` too. Claude Code passes that value as
 written, so ctempo expands a leading `~` itself and takes a relative path from
 your home directory, never from the session's folder. The mod does not expand
-`~otheruser/...`: use an absolute path for that. Values of the wrong type or
-out of range fall back to the default or are clamped.
+`~otheruser/...`: use an absolute path for that. On Windows the home directory
+is `%USERPROFILE%`, and some forms are refused: see Windows notes. Values of
+the wrong type or out of range fall back to the default or are clamped; a
+`config.json` that is not valid JSON is ignored as a whole (`ctempo config
+show` says so).
 
 ## Data and privacy
 
@@ -231,9 +323,12 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 294 tests, Python 3.8 to 3.13
-claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 13 tests
+python3 -m unittest discover -s tests -t .     # 424 tests, Python 3.8 to 3.13
+claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 40 tests
+python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
+
+(On Windows, `py -3` for `python3`.)
 
 The suite feeds synthetic time series (steady burn, bursts, idle, a reset
 mid-series, two parallel sessions, missing windows, bogus `resets_at`, the
@@ -247,23 +342,41 @@ hanging, hand edits (the command inside ctempo's `--compose` included), the
 plugin commands run by hand and the data folder deleted in between. It checks
 after every step that `runtime.json` exists while a mod record does, and at
 the end that nothing of ctempo is left, each file holds the user's JSON, and a
-file the user never edited comes back byte for byte. Fourteen review passes
-(two of them model-based fuzzers, for install and for reset detection) found
-142 defects; 139 are fixed and 3, which need two Claude Code processes on one
-conversation, are documented limits (open a conversation in a second terminal
-with `--fork-session`); each fixed one has a regression test that fails on the
-code before its fix.
+file the user never edited comes back byte for byte.
+
+Windows rules run on every OS with the one platform flag (`config.IS_WINDOWS`)
+patched; the 12 tests that need Windows itself (cmd.exe, Git Bash, PowerShell,
+taskkill, 8.3 names, the read-only attribute, the C runtime's `TZ`, long paths)
+skip elsewhere. CI (`.github/workflows/tests.yml`) runs the suite on Ubuntu,
+macOS and Windows, the mod's tests on all 3, and `scripts/ci_integration.py` on
+Windows and macOS: install into a throwaway settings.json, a payload piped into
+the command it wrote through each shell Claude Code may use (Git Bash, pwsh and
+powershell.exe; `/bin/sh` on macOS), composed commands in plain and encoded
+form, and uninstall back to the same bytes; a read-only settings.json; and on
+Windows the launchers from cmd.exe, PowerShell and Git Bash, and a drive-less
+`CTEMPO_HOME`. `.gitattributes` keeps `bin/ctempo`, `*.py` and `*.sh` LF on a
+Windows checkout, where a CR breaks the `#!` line in Git Bash.
+
+The 15 review passes (2 of them model-based fuzzers, for install and for reset
+detection, the last on Windows) found 160 defects; 157 are fixed and 3, which
+need 2 Claude Code processes on 1 conversation, are documented limits (open a
+conversation in a second terminal with `--fork-session`); each fixed one has a
+regression test that fails on the code before its fix (for the 3 in these docs,
+a check that the Windows section says what the code does).
 
 ## Layout
 
 ```
 bin/ctempo                 launcher (python -I -S safe)
 ctempo/                    the core: store, ingest, pace, weekly, profile, render,
-                           statusline, commands, install, transcripts
+                           statusline, commands, install, transcripts, clock
+                           (local time), winshell (Windows shells and commands)
 mods/ctempo/               the Desktop mod (TypeScript, thin)
 .claude-plugin/            local marketplace: claude-tempo
 tests/                     unittest suite
 scripts/bench_statusline.py
+scripts/ci_integration.py  end to end through each shell (CI on Windows, macOS)
+.github/workflows/         CI: tests on 3 OSes, the mod, the end-to-end runs
 notes/                     docs check and reference study
 PLAN.md, DECISIONS.md
 ```

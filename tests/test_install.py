@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -2509,6 +2510,58 @@ class WindowsShellNotes(Sandbox):
             rc, out = self.run_cmd(install.uninstall, args(self.path, apply=True))
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.read(), before)
+
+
+class WindowsReadme(unittest.TestCase):
+    """Review 15 (journey#21, regress-ci#19, journey#24, journey#25): the README had a Mac
+    install only, whose commands fail in Windows PowerShell 5.1, cmd.exe and Git Bash. Its
+    Windows section must say what the code does there."""
+
+    def section(self):
+        with open(os.path.join(install.repo_root(), "README.md"), encoding="utf-8") as f:
+            text = f.read()
+        start = text.find("\n## Install on Windows\n")
+        self.assertGreater(start, 0, "README.md has no Windows install section")
+        return text[start:text.find("\n## ", start + 1)]
+
+    def test_the_example_command_is_the_one_install_writes(self):
+        sec = self.section()
+        example = re.search(r"`(C:/\S+/python\.exe -I -S -X utf8 C:/\S+/bin/ctempo statusline)`", sec).group(1)
+        argv = example.split()
+        short = re.search(r"`(C:/PROGRA~1/\S+/python\.exe)`", sec).group(1)
+        shorts = {r"C:\Program Files\Python312": short.rsplit("/", 1)[0].replace("/", "\\")}
+        with windows():
+            for shell in ("bash", "powershell"):
+                self.assertEqual(install.our_command(argv[0].replace("/", "\\"), argv[5].replace("/", "\\"), None, shell),
+                                 example)
+            self.assertTrue(winshell.reads_alike(example))
+            with mock.patch.object(winshell, "short_path", lambda p: SHORT_PATH(p, shorts.get)):
+                self.assertEqual(install.our_command(PY_SPACE, ENTRY, None, "bash").split()[0], short)
+
+    def test_what_goes_encoded_and_the_home_forms_it_names(self):
+        sec = self.section()
+        for word in ("--compose-b64", "/usr/bin/env", "`~\\x`", "`C:\\x`", "`C:/x`", "`/c/x`", "`/srv/ctempo`"):
+            self.assertIn(word, sec)
+        self.assertTrue(winshell.needs_encoding('echo "mine"'))  # Windows PowerShell 5.1
+        self.assertTrue(winshell.needs_encoding("/usr/bin/env bash ~/.claude/statusline.sh"))  # Git Bash
+        self.assertFalse(winshell.needs_encoding("~/.claude/statusline.sh"))
+        user = r"C:\Users\ana"
+        with mock.patch.dict(os.environ, {"USERPROFILE": user}):
+            for value, want in (("~\\x", user + "\\x"), ("C:\\x", "C:\\x"), ("C:/x", "C:\\x"), ("/c/x", "C:\\x"),
+                                ("%USERPROFILE%\\x", user + "\\%USERPROFILE%\\x")):
+                self.assertEqual(config.windows_home(value), want, value)
+            with self.assertRaises(config.HomeError):
+                config.windows_home("/srv/ctempo")
+
+    def test_its_commands_run_in_windows_powershell(self):
+        # Windows PowerShell 5.1 has no &&, and reads an unquoted comma as a list.
+        sec = self.section()
+        blocks = re.findall(r"```powershell\n(.*?)```", sec, re.S)
+        self.assertGreaterEqual(len(blocks), 2)
+        for block in blocks:
+            self.assertNotIn("&&", block)
+            self.assertNotIn("python3", block)
+        self.assertIn("--tail '5h=60m,week=2d'", sec)
 
 
 if __name__ == "__main__":
