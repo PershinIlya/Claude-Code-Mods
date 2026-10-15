@@ -251,6 +251,25 @@ class ProfileText(TempHome):
         self.assertIn("profile prior from profile.override", out.getvalue())
         self.assertNotIn("no transcript prior", out.getvalue())
 
+    def test_mode_replace_leaves_learned_hours_unused(self):
+        # Review 12: under profile.override mode replace the profile is the
+        # override's shape alone, but `ctempo profile` and doctor said the
+        # learned hours were "folded in".
+        from ctempo import install
+
+        prof = profile.load(self.st)
+        prof.observe(MON + 10 * H, 1.0, 1.0, 14 * D)
+        profile.save(self.st, prof)
+        self.assertGreater(profile.load(self.st).learned_hours, 0)
+        self.cfg["profile"]["override"] = {"work_days": [0, 1, 2, 3, 4], "wake_hours": [8, 23], "off_day_factor": 0.5, "mode": "replace"}
+        out = self.profile(MON + 5 * D)
+        self.assertIn("unused (profile.override mode replace ignores them)", out)
+        self.assertNotIn("folded in", out)
+        doc = io.StringIO()
+        with contextlib.redirect_stdout(doc), mock.patch.object(install, "claude_bin", lambda: None):
+            commands.cmd_doctor(argparse.Namespace(json=False, settings=None), self.cfg)
+        self.assertIn("unused: profile.override mode replace ignores them", doc.getvalue())
+
     def test_reset_column_note_follows_the_weekly_target(self):
         # Review 8 (mod-and-texts#1): the points-vs-pace columns are the level
         # minus the on-pace level for target_week, so at the reset it is peak

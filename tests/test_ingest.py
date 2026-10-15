@@ -249,6 +249,22 @@ class Record(TempHome):
         ended = [(i["reset_ts"], i["close_reason"]) for i in self.windows(FIVE_HOUR) if i["close_reason"] in ("expired", "rollover")]
         self.assertEqual(ended, [(self.R5, "expired")])
 
+    def test_the_undo_chain_stops_at_a_real_early_reset(self):
+        # Review 12: the chained undo checked only its last link, so it walked
+        # across a real early reset. A light week at 10% moved its reset an
+        # hour later, was then reset early to 0, and an idle twin sharing the
+        # session id re-rendered the old 10%: that reopened the dead week.
+        R7 = int(MON + 3 * D + 9 * H)  # Thursday 09:00
+        for i in range(5):
+            self.feed(MON + i * 3600, week=(2 * (i + 1), R7), sid="a")
+        t = MON + 10 * H
+        self.assertEqual(self.feed(t, week=(10, R7 + int(H)), sid="a")[SEVEN_DAY], "rollover")  # moved: shift
+        early = MON + 2 * D
+        self.assertEqual(self.feed(early, week=(0, int(early + 7 * D)), sid="a")[SEVEN_DAY], "rollover")  # a real early reset
+        self.assertEqual(self.feed(early + 60, week=(10, R7), sid="a")[SEVEN_DAY], "anomaly")  # the twin's stale reading
+        opened = [i for i in self.windows(SEVEN_DAY) if i["closed_at"] is None]
+        self.assertEqual([i["reset_ts"] for i in opened], [int(early + 7 * D)])
+
     def test_a_shared_session_id_cannot_undo_a_real_early_reset(self):
         # Review 8 (delta-core#0): two terminals on one conversation (`claude
         # -c` without --fork-session) share a session id. One sees a real

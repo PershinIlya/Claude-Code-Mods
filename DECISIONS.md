@@ -149,23 +149,26 @@ after its 100, so its bogus reset can begin after its last reading; matching
 session's own chain of bogus rollovers back to the window this reading belongs
 to, and every bogus instance in between closes as `shift`: a maxed session
 that read two bogus later resets in a row kept a bogus reset time, and
-`report` counted 3 windows (found in review). Second, the reading comes from
-the session whose reading opened the bogus instance. Third, it is not below
-that opening reading (a session's real reading never is). Fourth, it sits less
-than `drop_points` above the bogus instance's max. Two processes can share a
-session id (`claude -c` or `--resume` without `--fork-session`), and the idle
-one keeps re-rendering the old window. When the undo also matched a window
-closed as `rollover` (the level dropped, or the new window began after the
-last reading, which is what a real early reset looks like), only the
-`drop_points` margin guarded it. That stale reading then flipped the line and
-`check` back to the dead window on every render pair: from the first render
-after a weekly window at 10% was reset early, and once a new 5-hour window
-climbed within 15 points of the old 90%. After a move to a later reset at 42%,
-a twin's stale 41% did the same (found in review, twice). A twin whose stale
-reading equals the moved one still undoes it on each render pair until the
-level moves on; the readings cannot tell it from the session's own real
-reading. The undo still moves the real window's pending readings from other
-sessions (up to `drop_samples - 1`) into it. One was left behind in the
+`report` counted 3 windows (found in review). Each link of that chain must
+pass the first condition, not only the last: a rollover below its window's max
+is a real early reset, and the chain stops there (walking across one let an
+idle twin reopen a week that had been reset early, found in review). Second,
+the reading comes from the session whose reading opened the bogus instance.
+Third, it is not below that opening reading (a session's real reading never
+is). Fourth, it sits less than `drop_points` above the bogus instance's max.
+Two processes can share a session id (`claude -c` or `--resume` without
+`--fork-session`), and the idle one keeps re-rendering the old window. When
+the undo also matched a window closed as `rollover` (the level dropped, or the
+new window began after the last reading, which is what a real early reset
+looks like), only the `drop_points` margin guarded it. That stale reading then
+flipped the line and `check` back to the dead window on every render pair:
+from the first render after a weekly window at 10% was reset early, and once a
+new 5-hour window climbed within 15 points of the old 90%. After a move to a
+later reset at 42%, a twin's stale 41% did the same (found in review, twice).
+A twin whose stale reading equals the moved one still undoes it on each render
+pair until the level moves on; the readings cannot tell it from the session's
+own real reading. The undo still moves the real window's pending readings from
+other sessions (up to `drop_samples - 1`) into it. One was left behind in the
 superseded instance, and the reopened window showed a level too low until the
 next fresh reading (found in review). From any other session the undo still
 takes `drop_samples`, since that session may lag a real early reset, and so
@@ -328,7 +331,9 @@ build-time trust for good: "trusted 100%" 8 weeks on (found in review). Under
 so; it printed the prior's faded weight there too (found in review). With an
 override and no transcript prior, `ctempo profile` names the override as the
 prior and `doctor` no longer warns "no transcript prior, run
-`ctempo bootstrap`" (found in review). `ctempo bootstrap` builds a fresh one.
+`ctempo bootstrap`" (found in review). Under mode `replace` the learned hours
+are unused as well, and `ctempo profile` and `doctor` say so instead of
+"folded in" (found in review). `ctempo bootstrap` builds a fresh one.
 `install --apply` runs the bootstrap too (`--no-bootstrap` skips it).
 
 **D-15. Weekly numbers.** As in the brief, with these details: `E` is
@@ -684,6 +689,9 @@ undone, an early-rollover week counted as a typical week, and the prior's
 weight printed under `profile.override`); an eleventh, over those 3, confirmed
 2 that were older than them (two bogus later resets in a row from a maxed
 session not undone, and `ctempo profile` and `doctor` asking for a transcript
-prior that an override leaves unused) and rejected none. All 130 are fixed,
-each with a regression test that was checked to fail on the code before its
-fix. Details in the commit messages from "Fix review findings" on.
+prior that an override leaves unused) and rejected none; a twelfth, over those
+2, confirmed 2 (the chained undo walking across a real early reset, introduced
+by the eleventh pass's fix, and learned hours called "folded in" under mode
+`replace`) and rejected none. All 132 are fixed, each with a regression test
+that was checked to fail on the code before its fix. Details in the commit
+messages from "Fix review findings" on.
