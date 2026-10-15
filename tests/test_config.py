@@ -256,5 +256,14 @@ class ConfigEncoding(unittest.TestCase):
         self.assertEqual(self.show(), "# %s (not used: not a JSON object; defaults shown)" % self.path)
 
 
+class ComposeTimeout(unittest.TestCase):
+    def test_longer_on_windows(self):
+        # Review 15 CI: on windows-latest a composed `echo mine` run in a nested Windows
+        # PowerShell 5.1 once took longer than 1.5 s to start, and the line lost it.
+        self.assertEqual((config.compose_timeout_ms(True), config.compose_timeout_ms(False)), (3000, 1500))
+        self.assertEqual(config.DEFAULTS["compose"]["timeout_ms"], config.compose_timeout_ms(os.name == "nt"))
+        self.assertLessEqual(config.compose_timeout_ms(True), config.RANGES[("compose", "timeout_ms")][1])
+
+
 if __name__ == "__main__":
     unittest.main()

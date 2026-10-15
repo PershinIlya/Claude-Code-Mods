@@ -274,6 +274,7 @@ class Statusline(unittest.TestCase):
 
     @posix_shell
     def test_compose_failure_and_timeout_show_ours(self):
+        self.compose_timeout(1500)  # the default is 3000 on Windows
         p, _ = run(self.p, self.home, args=["--compose", "exit 3"])
         self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
         p, el = run(self.p, self.home, args=["--compose", "sleep 5; echo late"])
