@@ -7,18 +7,25 @@ Rules, in order (see DECISIONS.md D-05..D-09):
   * freshness: a reading is FRESH when it differs from what the same session
     reported last time; a session that has not talked to the API since only
     re-reports its old reading (HEARTBEAT), which proves time passed but
-    carries no news and must never move the series.
+    carries no news and must never move the series. A session id can be
+    shared by 2 processes: a changed reading that goes back to one the
+    session already gave (its reading before last, or one it gave a window
+    no longer open) is the idle one's replay, a heartbeat too.
   * window instance: resets_at within 300 s of the open instance is the same
     window (the epoch wobbles a few seconds between renders); a later
     resets_at rolls the window over (when the new window began before the
     last reading, at about the same level, the reset moved: the old
     instance closes as a shift).
   * reset detection: a fresh reading at least `drop_points` below the
-    instance's max, or with an earlier resets_at, is an ANOMALY. Only when
-    `drop_samples` consecutive fresh readings agree is it a reset; one is
+    instance's max, with an earlier resets_at, or `drop_points` above the max
+    of an instance a drop opened, is an ANOMALY. Only when `drop_samples`
+    consecutive fresh readings agree, the last of them with its own
+    session's previous reading too, is it a reset (or a rise); one is
     enough to undo a moved reset (a shift) from the same session, unless
-    that reading sits below the session's reading of the moved reset or
-    `drop_points` or more above the max of the instance it opened.
+    that reading sits below the session's reading of the moved reset or its
+    own last one, or `drop_points` or more above the max of the instance it
+    opened, and 1 is enough for a reset moved earlier, at about the same
+    level, to a resets_at no instance had.
   * write throttle: a sample identical to the last stored one within
     `write_min_interval_s` is not stored again; heartbeats are stored at most
     once per interval across all sessions.
@@ -157,15 +164,78 @@ def _same(a_used, a_reset, b_used, b_reset):
     return abs(a_used - b_used) < 1e-9 and abs(a_reset - b_reset) <= RESET_JITTER
 
 
+def _gave(store, w, inst, reader, prev, before, used, reset):
+    """Whether this session already gave this reading: as its reading before
+    last, or to a window that is no longer open (superseded by a moved or an
+    early reset)."""
+    if before is not None and _same(before[0], before[1], used, reset):
+        return True
+    if inst is not None and abs(inst["reset_ts"] - reset) <= RESET_JITTER:
+        return False  # the open window: a real drop reset climbs through old levels again
+    return (
+        store.db.execute(
+            "SELECT 1 FROM samples s JOIN windows i ON i.id = s.window_id WHERE s.window=? AND s.ts>=? "
+            "AND i.closed_at IS NOT NULL AND COALESCE(s.session_id, '~' || s.source)=? "
+            "AND ABS(s.used_pct - ?) < 1e-9 AND ABS(s.resets_at - ?) <= ? LIMIT 1",
+            (w, reset - DURATION[w] - FUTURE_SLACK[w] - RESET_JITTER, reader, used, reset, RESET_JITTER),
+        ).fetchone()
+        is not None
+    )
+
+
+def _left_later(prev, before, reset):
+    """Whether the session's last reading, or its reading before last (the
+    busy process's, when an idle one rendered in between), had a later
+    reset than this one."""
+    return prev[1] > reset + RESET_JITTER or (before is not None and before[1] > reset + RESET_JITTER)
+
+
+def _replay(store, w, inst, reader, prev, before, used, reset):
+    """Whether a changed reading goes back to one this session already gave.
+
+    A single process only moves forward: within a window its level only
+    rises, a moved reset keeps the level, and it returns to a resets_at it
+    left only to undo its own bogus later one. A session that goes back is 2
+    processes sharing the session id (`claude -c` or `--resume` without
+    `--fork-session`): the idle one keeps re-rendering its last API response,
+    and each of its renders differs from the reader row the busy one wrote
+    (D-06)."""
+    if _left_later(prev, before, reset):
+        return False  # back to an earlier reset: _anomaly judges it (D-10)
+    if prev[1] < reset - RESET_JITTER and abs(used - prev[0]) < 1e-9:
+        return False  # back to a later reset at the level it left: the reset moved back
+    if inst is not None and abs(inst["reset_ts"] - reset) <= RESET_JITTER:
+        # The open window's reset: only A, B, A within it. Another reset in
+        # between (the stale one) leaves this reading's render as news that
+        # breaks the stale one's run.
+        return (
+            before is not None
+            and abs(prev[1] - reset) <= RESET_JITTER
+            and _same(before[0], before[1], used, reset)
+        )
+    return _gave(store, w, inst, reader, prev, before, used, reset)
+
+
 def _record_one(store, w, used, reset, now, source, session_id, cfg):
     reader = session_id or ("~" + source)
     prev = store.reader_get(reader, w)
     first_seen = prev is None
-    fresh = first_seen or not _same(prev[0], prev[1], used, reset)
-    if fresh or prev is None or now - prev[2] > 86400:
+    changed = first_seen or not _same(prev[0], prev[1], used, reset)
+    inst = store.open_instance(w)
+    fresh, before = changed, None
+    if changed and not first_seen:
+        before = store.reader_get(reader + store.BEFORE_LAST, w)
+        store.reader_set(reader + store.BEFORE_LAST, w, prev[0], prev[1], now)
+        # A replay is a heartbeat; the rows still move on, so the other
+        # process's next render is known too.
+        fresh = not _replay(store, w, inst, reader, prev, before, used, reset)
+        if not fresh and inst is not None:
+            # Its first render was no news either: if it is pending in a
+            # run, a later real reset must not sweep it in.
+            store.withdraw_anomalies(inst["id"], reader, used, reset, RESET_JITTER)
+    if changed or now - prev[2] > 86400:
         store.reader_set(reader, w, used, reset, now)
 
-    inst = store.open_instance(w)
     drop_pts = float(cfg["reset"]["drop_points"])
     if inst is None:
         if not fresh:
@@ -207,12 +277,25 @@ def _record_one(store, w, used, reset, now, source, session_id, cfg):
             # never heard from (e.g. every open session re-renders when the
             # statusLine is installed): its first word cannot count as news.
             return "stale"
-        return _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
+        kind = "shift" if shifted else "drop"
+        # Back to an earlier reset from a session that last read a later one:
+        # an idle twin's replay when the session already gave this reading,
+        # or perhaps when it is the session's first change (its reading
+        # before last unknown, as at install).
+        replay = shifted and _left_later(prev, before, reset)
+        replay = replay and (before is None or _gave(store, w, inst, reader, prev, before, used, reset))
+        return _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, kind, prev, replay)
 
     if not fresh and used > inst["max_used"]:
         # A heartbeat never raises the max: after a drop-reset an idle
         # session may still carry the pre-reset value.
         return "stale"
+    opened_by_drop = inst["reset_ts"] - inst["start_ts"] < DURATION[w] - 1
+    if fresh and not first_seen and used >= inst["max_used"] + drop_pts and opened_by_drop:
+        # A drop reset opened this window (it starts at the drop): a jump of
+        # drop_points over it may be a twin's pre-reset reading, which takes
+        # drop_samples readings to agree, like the drop itself (D-10).
+        return _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, "rise", prev, False)
 
     last = store.last_sample(w)
     if fresh:
@@ -280,22 +363,44 @@ def _undoes_rollover(store, w, inst, used, reset, source, session_id):
     return False
 
 
-def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted):
+def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, kind, prev, replay):
+    """A fresh reading at odds with the open window: an earlier resets_at
+    ("shift"), drop_points below its max ("drop"), or drop_points above the
+    max of a window a drop opened ("rise"). Pending until drop_samples
+    consecutive fresh readings agree."""
+    shifted = kind == "shift"
+    m = inst["max_used"]
+    drop_pts = float(cfg["reset"]["drop_points"])
     need = max(1, int(cfg["reset"]["drop_samples"]))
     look = need - 1  # other sessions' pending readings are gathered either way
-    if (
-        shifted
-        and used < inst["max_used"] + float(cfg["reset"]["drop_points"])
-        and _undoes_rollover(store, w, inst, used, reset, source, session_id)
-    ):
+    # A reset moved earlier keeps the level (D-08's test, and less than
+    # drop_points above), and a process's level never goes below its own
+    # last reading of the open window.
+    floor = prev[0] if abs(prev[1] - inst["reset_ts"]) <= RESET_JITTER else 0.0
+    moved = floor <= used and m - min(drop_pts, max(1.0, 0.5 * m)) < used < m + drop_pts
+    if shifted and floor <= used < m + drop_pts and _undoes_rollover(store, w, inst, used, reset, source, session_id):
         # One fresh reading did the bogus rollover, so one undoes it: a
         # session that is maxed or idle repeats its real reading only as
         # heartbeats, and the second fresh one never came (D-10). Another
         # session still needs drop_samples (it may lag a real early reset),
         # and so does a window closed as a rollover (a real early reset looks
-        # like that), or a reading below the moved reset's or drop_points
-        # above the instance: two processes can share a session id, and the
-        # idle one re-renders the old window.
+        # like that), or a reading below the moved reset's, below the
+        # session's own last reading of it or drop_points above the
+        # instance: two processes can share a session id, and the idle one
+        # re-renders the old window.
+        need = 1
+    elif (
+        shifted
+        and moved
+        and store.db.execute(
+            "SELECT 1 FROM windows WHERE window=? AND ABS(reset_ts - ?) <= ? LIMIT 1", (w, reset, RESET_JITTER)
+        ).fetchone()
+        is None
+    ):
+        # The reset moved earlier, to a resets_at no window ever had: a stale
+        # reading (a lagging session's, an idle twin's) carries a known one.
+        # It takes 1 reading, as a move later does: a maxed or idle session
+        # would never send the second.
         need = 1
     # The previous fresh-or-anomaly readings of this window, newest first.
     rows = store.db.execute(
@@ -307,13 +412,32 @@ def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
     for r in rows:
         if r[4] != ANOMALY or r[5] != inst["id"] or abs(r[3] - reset) > RESET_JITTER:
             break
+        if (kind == "drop" and r[2] > m - drop_pts) or (kind == "rise" and r[2] < m + drop_pts):
+            break  # a pending reading of the other kind
         run.append(r)
-    if len(run) + 1 < need:
+    # The reading that completes a run must agree with its own session's
+    # last one: 2 processes can share a session id, and an idle one's
+    # re-render goes straight from the busy one's reading of the open window
+    # to the anomaly. Its word joins a run but cannot complete it. A drop or
+    # a rise agrees when the session's last reading was one too. An earlier
+    # resets_at that may be a replay agrees only when it looks like that
+    # reset moved earlier.
+    if shifted:
+        agrees = moved or not replay
+    else:
+        alike = prev[0] <= m - drop_pts if kind == "drop" else prev[0] >= m + drop_pts
+        agrees = abs(prev[1] - reset) <= RESET_JITTER and alike
+    if len(run) + 1 < need or (need > 1 and not agrees):
         store.add_sample(now, w, used, reset, source, session_id, ANOMALY, inst["id"])
         return "anomaly"
+    if kind == "rise":
+        store.move_samples([r[0] for r in run], inst["id"], FRESH)
+        store.add_sample(now, w, used, reset, source, session_id, FRESH, inst["id"])
+        store.touch_instance(inst["id"], now, max(used, m))
+        store.recompute_max(inst["id"])
+        return "rise"
     first_ts = min([r[1] for r in run] + [now])
-    reason = "shift" if shifted else "drop"
-    store.close_instance(inst["id"], first_ts, reason)
+    store.close_instance(inst["id"], first_ts, kind)
     if shifted:
         # The open window came from a bogus later resets_at. If the real
         # window was closed by it, reopen that one instead of starting over.
@@ -339,4 +463,4 @@ def _anomaly(store, w, inst, used, reset, now, source, session_id, cfg, shifted)
     store.add_sample(now, w, used, reset, source, session_id, FRESH, new["id"])
     store.recompute_max(new["id"])
     store.set_first_seen(new["id"], first_ts)
-    return "reset_" + reason
+    return "reset_" + kind
