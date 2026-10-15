@@ -1,7 +1,7 @@
 import type { ProcessRunResult, RenderSurface, SessionRateLimit } from 'claude-code'
 import { expect, type MountTarget, mock, type TestBody, test } from 'claude-code/testing'
 
-import { resolveHome, toPayload } from '../hooks/register'
+import { fromGitBash, resolveHome, toPayload } from '../hooks/register'
 
 type StubOn = Parameters<TestBody>[1]
 type Run = { argv: readonly string[]; init?: { stdin?: string; timeoutMs?: number; env?: Record<string, string> } }
@@ -252,6 +252,8 @@ const WINDOWS_HOMES: [string, Record<string, string>, string][] = [
   ['an absolute E:/ CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: 'E:/data/ctempo' }, 'E:/data/ctempo'],
   ['a rooted \\x, on the home drive', { ...WINDOWS, CTEMPO_HOME: '\\data\\ctempo' }, 'C:\\data\\ctempo'],
   ['a rooted /x, on the home drive', { ...WINDOWS, CTEMPO_HOME: '/data/ctempo' }, 'C:/data/ctempo'],
+  ["Git Bash's /c/Users/u/ctempo", { ...WINDOWS, CTEMPO_HOME: '/c/Users/u/ctempo' }, 'C:/Users/u/ctempo'],
+  ["Git Bash's /d/data, on another drive", { ...WINDOWS, CTEMPO_HOME: '/d/data' }, 'D:/data'],
 ]
 for (const [what, env, home] of WINDOWS_HOMES) {
   test(`Windows: finds the ctempo home from ${what}`, async ($, on) => {
@@ -312,6 +314,31 @@ test('resolves CTEMPO_HOME like Python on each platform', async () => {
   expect(resolveHome('C:\\x', windows(undefined))).toBe('C:\\x')
   expect(() => resolveHome('C:x', windows('C:\\Users\\u'))).toThrow(/relative to a drive's current folder/)
   expect(() => resolveHome('~other\\x', windows('C:\\Users\\u'))).toThrow(/only ~, ~\/ and ~\\ are expanded/)
+})
+
+// A CTEMPO_HOME set from Git Bash (export CTEMPO_HOME=/c/Users/me/x) names a
+// drive: the CLI reads it so (config.windows_home), and the mod must find the
+// same folder, or the band reads a runtime.json the CLI never wrote.
+test("Windows: reads Git Bash's /c/Users/x as C:/Users/x, as the CLI does", async () => {
+  const windows = (home: string | undefined) => ({ windows: true, home })
+  // config.windows_home's results for the same values (tests/test_statusline.py, TildeHome), separators aside.
+  const cli: [string, string][] = [
+    ['/d/tempo', 'D:\\tempo'],
+    ['/C/Users/me/x', 'C:\\Users\\me\\x'],
+    ['/c', 'C:\\'],
+    ['/e/', 'E:\\'],
+    ['/cc/x', 'C:\\cc\\x'],
+    ['/1/x', 'C:\\1\\x'],
+    ['/c\\x', 'C:\\c\\x'],
+    ['/\u00e9/x', 'C:\\\u00e9\\x'],
+  ]
+  for (const [given, folder] of cli) {
+    expect(resolveHome(given, windows('C:\\Users\\me')).replace(/\//g, '\\')).toBe(folder)
+  }
+  expect(resolveHome('/d/data', windows(undefined))).toBe('D:/data') // a drive of its own needs no home
+  expect(fromGitBash('/z/')).toBe('Z:/')
+  expect(fromGitBash('/data')).toBe('/data')
+  expect(resolveHome('/c/Users/x', { windows: false, home: '/home/u' })).toBe('/c/Users/x') // macOS, Linux: as given
 })
 
 test('runs Python with the flags runtime.json lists', async ($, on) => {
