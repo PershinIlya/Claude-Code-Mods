@@ -153,18 +153,21 @@ py -3 bin\ctempo install --apply --bin-dir $HOME\.local\bin
 ```
 
 In cmd.exe the same lines work with `%USERPROFILE%` for `$HOME` (and `cd /d`),
-without the comment. `~` in this README is `%USERPROFILE%` on Windows:
-settings in `%USERPROFILE%\.claude\settings.json`, data in
-`%USERPROFILE%\.claude-tempo`. `install --apply` takes the steps above, with
-these differences:
+each such path in double quotes (`"%USERPROFILE%\.local\bin"`), since a profile
+folder may hold a space, and without the comment. `~` in this README is
+`%USERPROFILE%` on Windows: settings in `%USERPROFILE%\.claude\settings.json`,
+data in `%USERPROFILE%\.claude-tempo`. `install --apply` takes the steps above,
+with these differences:
 
 - **Python.** `python3` is often only the Microsoft Store stub ("Python was
   not found"), so start install with `py -3`. It pins, in this order, the
   first interpreter that passes: the registry (PEP 514, newest first),
   `py -0p`, the default install folders, the one you ran it with, then
   `python` and `python3` on PATH. Behind a Store alias or `py.exe` it pins the
-  real `python.exe`, and a Store Python only when nothing else passes.
-  `--python C:\path\to\python.exe` chooses.
+  real `python.exe`, and for a venv's `python.exe` the base one it starts
+  (ctempo runs `-I -S`, so a venv adds only a process); install's list says
+  `via <path>` for these. A Store Python is used only when nothing else
+  passes. `--python C:\path\to\python.exe` chooses.
 - **The shell.** Claude Code looks for Git Bash in `CLAUDE_CODE_GIT_BASH_PATH`,
   `C:\Program Files\Git`, `C:\Program Files (x86)\Git` and beside the `git`
   on PATH; without one it uses PowerShell (pwsh 7, else Windows PowerShell
@@ -182,12 +185,16 @@ these differences:
   starts with a POSIX path such as `/usr/bin/env`, which Git Bash rewrites) is
   stored as `--compose-b64 b<base64>` instead of `--compose '<command>'`.
   install says so, and `ctempo doctor` shows it decoded; to change it by hand,
-  put `--compose '<command>'` in its place.
+  put `--compose '<command>'` in its place, then run `ctempo install --apply`,
+  which encodes it again when a shell would change it (until then
+  `ctempo doctor` warns).
 - **Launchers.** `--bin-dir` writes `ctempo.cmd`, for PowerShell and cmd.exe,
   and an extensionless `ctempo`, for Git Bash and Claude Code's Bash tool
-  (which runs in Git Bash). The status line and the mod run `python.exe`
-  itself, never a launcher. If `ctempo` is not found, add the folder to your
-  user PATH, then open a new terminal and restart Claude Code:
+  (which runs in Git Bash). A later install repins each one you keep, and
+  one you delete stays deleted until you pass `--bin-dir` again. The status
+  line and the mod run `python.exe` itself, never a launcher. If `ctempo` is
+  not found, add the folder to your user PATH, then open a new terminal and
+  restart Claude Code:
 
   ```powershell
   $p = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -199,8 +206,9 @@ these differences:
 
 After you install or remove Git for Windows, or set
 `CLAUDE_CODE_GIT_BASH_PATH`, run `ctempo doctor`. If it warns about the
-statusLine shell, run `ctempo install --apply` again. A command that install
-said reads the same in Git Bash and PowerShell needs nothing.
+statusLine shell or your previous status line, run `ctempo install --apply`
+again. A command that install said reads the same in Git Bash and PowerShell
+needs nothing.
 
 ### Windows notes
 
@@ -220,9 +228,11 @@ said reads the same in Git Bash and PowerShell needs nothing.
   and Git Bash's `/c/x` work. `%USERPROFILE%` in settings.json `env` is not
   expanded (it names a folder called `%USERPROFILE%`). Any other path that
   starts with a single `/` (`/srv/ctempo`) is refused, since Git Bash would
-  rewrite it to a folder under its own install, and the band refuses `C:x`
-  (no slash after the colon). Keep it on a local drive: the band usually
-  cannot read a `\\server\share` folder.
+  rewrite it to a folder under its own install (the message names the same
+  path on your home's drive, where an older version kept it), and so is `C:x`
+  (no slash after the colon, so relative to that drive's current folder).
+  Keep it on a local drive: the band usually cannot read a `\\server\share`
+  folder.
 - `config.json` may be UTF-8 or UTF-16 (what Windows PowerShell 5.1's `>`
   writes); `ctempo config show` says when the file is not used.
 
@@ -323,12 +333,13 @@ p95 47 ms on Python 3.13; p50 34 ms, p95 44 ms on Python 3.9. The budget is
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 424 tests, Python 3.8 to 3.13
-claude plugin validate mods/ctempo && claude plugin test mods/ctempo   # 40 tests
+python3 -m unittest discover -s tests -t .     # 431 tests, Python 3.8 to 3.13
+claude plugin validate mods/ctempo
+claude plugin test mods/ctempo                 # 45 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 
-(On Windows, `py -3` for `python3`.)
+(On Windows, `py -3` for `python3`, and in cmd.exe drop the `#` comments.)
 
 The suite feeds synthetic time series (steady burn, bursts, idle, a reset
 mid-series, two parallel sessions, missing windows, bogus `resets_at`, the
@@ -353,9 +364,10 @@ Windows and macOS: install into a throwaway settings.json, a payload piped into
 the command it wrote through each shell Claude Code may use (Git Bash, pwsh and
 powershell.exe; `/bin/sh` on macOS), composed commands in plain and encoded
 form, and uninstall back to the same bytes; a read-only settings.json; and on
-Windows the launchers from cmd.exe, PowerShell and Git Bash, and a drive-less
-`CTEMPO_HOME`. `.gitattributes` keeps `bin/ctempo`, `*.py` and `*.sh` LF on a
-Windows checkout, where a CR breaks the `#!` line in Git Bash.
+Windows the launchers from cmd.exe, PowerShell and Git Bash, a drive-less
+`CTEMPO_HOME`, and a venv's `python.exe` pinned as its base interpreter.
+`.gitattributes` keeps `bin/ctempo`, `*.py` and `*.sh` LF on a Windows
+checkout, where a CR breaks the `#!` line in Git Bash.
 
 The 15 review passes (2 of them model-based fuzzers, for install and for reset
 detection, the last on Windows) found 160 defects; 157 are fixed and 3, which

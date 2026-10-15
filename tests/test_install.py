@@ -2693,6 +2693,23 @@ class WindowsReadme(unittest.TestCase):
             with self.assertRaises(config.HomeError):
                 config.windows_home("C:x")
 
+    def test_its_advice_holds_in_cmd_exe_and_after_a_hand_edit(self):
+        # Review 15 verify (docs#2 to docs#4): a composed command put back by hand in plain form
+        # stays at risk until an install encodes it again; Windows PowerShell 5.1 has no `&&`, and
+        # cmd.exe passes `# ...` on as arguments; an unquoted %USERPROFILE% splits at a space.
+        sec = " ".join(self.section().split())
+        self.assertIn("put `--compose '<command>'` in its place, then run `ctempo install --apply`, which encodes "
+                      "it again when a shell would change it (until then `ctempo doctor` warns)", sec)
+        hand = FWD + " --compose '%s'" % 'node "C:/Users/John Smith/sl.js"'
+        with windows():
+            want, _ = install.plan_statusline({"type": "command", "command": hand}, PY, ENTRY, shell="bash")
+        self.assertEqual(want["command"], FWD + " --compose-b64 " + winshell.encoded('node "C:/Users/John Smith/sl.js"'))
+        self.assertIn('(`"%USERPROFILE%\\.local\\bin"`), since a profile folder may hold a space', sec)
+        with open(os.path.join(install.repo_root(), "README.md"), encoding="utf-8") as f:
+            block, note = re.search(r"\n## Tests\n\n```sh\n(.*?)```\n\n(.*?)\n\n", f.read(), re.S).groups()
+        self.assertNotIn("&&", block)
+        self.assertIn("in cmd.exe drop the `#` comments", note)
+
     def test_its_commands_run_in_windows_powershell(self):
         # Windows PowerShell 5.1 has no &&, and reads an unquoted comma as a list.
         sec = self.section()
