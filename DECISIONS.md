@@ -604,17 +604,30 @@ grey when idle. A calm window says nothing ("on pace" is the bar), or a dim
 "Can go 2.7x faster" (halves of an early estimate, "about 2x"; "a bit" below
 1.5; "Plenty of room" from 10). A window that needs you says one thing in
 color: "Runs out 15:40" (red; "May run out" in yellow for the milder
-overshoot), "Ease off", "40% will go unused" (green), "Back at 16:30"; the
-other window's percent then dims. Widths are thresholds on the band's
+overshoot, whose red forecast and wall fade), "Ease off", "40% will go
+unused" (green, only from a whole point: with `min_free` 0 a leftover that
+rounds to 0 said "0% will go unused", found in review), "Back at 16:30",
+"Over your 80% target" (at or above a target below 100 while idle or without
+a rate, yellow as in D-16; the band said a calm "Idle", found in review); the
+other window's percent then dims. While the week is maxed, the 5-hour bar is
+grey with no forecast and no words (it said "Can go 2.2x faster", found in
+review). Widths are thresholds on the band's
 `bodyColumns`, checked in Chromium from 40 to 140 columns: halves with resets
 and calm words from 104, bars 64 px from 72 and 44 px below, no Details button
 and "Wk" below 52, and below 44 a calm window beside one that needs you keeps
-only its name and percent. Resets and calm words that do not fit go to the
-bar's tooltip (`<title>`, so the Svg is interactive) and to Details (hotkey
-d), one sentence per window plus how old the reading is. Text uses theme keys
-only; each SVG carries its own small style with a dark-scheme block, and its
-base colors read on both backgrounds in case the frame does not follow the
-app's theme. The words and sentences come from the CLI (`ctempo/band.py`),
+only its name and percent. Narrow, the words that need you take short forms
+("Out 15:40", "Back Fri 04:00"), and when 2 windows need you, or one phrase
+is longer than 14 characters, the Details button leaves its room to them (in
+Chromium at 55 columns both phrases were cut mid-word, found in review).
+Resets and calm words that do not fit go to Details (hotkey d, one label in
+both states so the row never shifts), one sentence per window plus how old
+the reading is. The design put them in the bar's tooltip too, which needs an
+interactive Svg, a sandboxed frame; Chromium paints such a frame an opaque
+white where the embedding page's color scheme and the frame's differ (a dark
+app on a light system), found in review. So the bars are images, which are
+always transparent. Text uses theme keys only; each SVG carries its own small
+style with a dark-scheme block, and its base colors read on both
+backgrounds, since an image follows the system's scheme, not the app's. The words and sentences come from the CLI (`ctempo/band.py`),
 which also draws the terminal line with text bars (`━` used, `╍` forecast,
 `┈` unused; `#`, `=`, `.` in ascii mode), dropping resets, then calm words,
 then bar width, then "Week" for "Wk" to fit `display.max_width`.
@@ -628,8 +641,11 @@ the same or 1 more on the same data, which hid real lag and invented false
 gaps); the mod polls every 5 s and runs Python only when its session's
 `rateLimits` changed (any amount; `session.measure` waits for a whole point) or
 `CTEMPO_HOME/changed` did (the CLI touches it when a reading changes what is
-shown, so another chat's reading arrives within seconds; a run ignores its own
-touch by the time written in it); and the 5-hour percent is nowcast: the last
+shown: a new level, window or reset, never a heartbeat or a rejected window,
+which kept 2 chats waking each other every 5 s, found in review; another
+chat's reading arrives within seconds, and a run ignores its own touch by the
+time written in it); a failing run is retried by the 60 s refresh, not the
+poll; and the 5-hour percent is nowcast: the last
 level plus the fitted rate times the time since that level was read, capped at
 1 point, only with a least-squares rate, a fresh reading in the last 5 minutes
 and a verdict that is neither idle, unknown nor maxed, shown only when it lifts
@@ -1097,8 +1113,16 @@ venv pin hiding the shell from the Composer, a refusal naming the wrong drive,
 `compose_of` and `ctempo statusline` disagreeing on 2 flags, the CLI taking a
 `C:x` the band refused, and 4 in the docs: hand edits, `&&`, cmd.exe quoting
 and numerals); a 17th, over those, confirmed 2 (doctor reading the first of 2
-compose flags, and a Git Bash launcher left on the old pin with `--bin-dir`).
-168 are fixed, each with a regression test
+compose flags, and a Git Bash launcher left on the old pin with `--bin-dir`);
+an 18th, over the band (D-30, D-31; a code reviewer and a visual one that drew
+the real CLI output in Chromium, light and dark), confirmed 10 and rejected 3
+(the stamp touched for rejected readings, a target warning lost while idle,
+"0% will go unused", a 5-hour forecast under a maxed week, both narrow
+phrases cut mid-word, a long one cut beside Details, the waiting row's gap,
+an undrawn milder run-out, Details shifting the row, a lone waiting window
+with no word; plus the white frame behind interactive bars, rejected for want
+of the real host and fixed anyway by drawing images). 178 are fixed, each
+with a regression test
 that was checked to fail on the code before its fix (the 3 in the docs share a
 single test: the README's Windows section must say what the code does). Details
 in the commit messages from "Fix review findings" on.

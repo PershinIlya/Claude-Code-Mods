@@ -26,7 +26,7 @@ them. The 5-hour level may be lifted by a nowcast of at most 1 point (`level`).
 
 from . import clock, render
 from .config import FIVE_HOUR, SEVEN_DAY
-from .pace import below_target
+from .pace import below_target, over_target
 from .render import floor_pct
 
 NAME = {FIVE_HOUR: "5h", SEVEN_DAY: "Week"}
@@ -107,32 +107,47 @@ def bar_kind(v):
         return "idle"
     if _out(v):
         return "dry"
-    if v.get("severity") == "opportunity":
+    if _harvest(v):
         return "expire"
     if v.get("projected") is None:
         return "run"
     return "rough" if _rough(v) else "run"
 
 
+def _harvest(v):
+    """Green: quota worth using that will go unused, at least a whole point
+    (with min_free 0, a leftover that rounds down to 0% says nothing)."""
+    return v.get("severity") == "opportunity" and floor_pct(_unused(v) or 0) >= 1
+
+
+def _soft(v):
+    """It may run out: the estimate is rough, or the overshoot is mild."""
+    return _rough(v) or v.get("severity") == "warn"
+
+
 def phrase(v, now):
-    """The words after the percent, or None: {pre, num, post, narrow, tone,
-    attention, calm}. At most one number, drawn bold; `narrow` replaces
-    `post` in a narrow band; `calm` words show only when there is room."""
+    """The words after the percent, or None: {pre, num, post, narrow_pre,
+    narrow, tone, attention, calm}. At most one number, drawn bold;
+    `narrow_pre` and `narrow` replace `pre` and `post` in a narrow band;
+    `calm` words show only when there is room."""
     if not v.get("present"):
         return None
     verdict = v["verdict"]
     if verdict == "maxed":
         when = at(v["reset_ts"], now)
-        return _p("Back " if " " in when else "Back at ", when, "", "error", True)
+        return _p("Back " if " " in when else "Back at ", when, "", "error", True, narrow_pre="Back ")
+    if verdict in ("idle", "unknown") and over_target(v):
+        return _p("Over your ", "%d%%" % int(round(v["target"])), " target", "warning", True, narrow_pre="Over ")
     if verdict == "idle":
         return _p("Idle", "", "", "inactive", False)
     out = _out(v)
     if out:
-        soft = _rough(v) or v.get("severity") == "warn"
-        return _p("May run out " if soft else "Runs out ", at(out, now), "", "warning" if soft else "error", True)
+        soft = _soft(v)
+        return _p("May run out " if soft else "Runs out ", at(out, now), "", "warning" if soft else "error", True,
+                  narrow_pre="Out ")
     if verdict == "slow_down":
         return _p("Ease off", "", "", "warning", True)
-    if v.get("severity") == "opportunity":
+    if _harvest(v):
         return _p("", "%d%%" % floor_pct(_unused(v) or 0), " will go unused", "success", True, narrow=" unused")
     if verdict == "speed_up" and v.get("multiplier") is not None:
         pre, num = faster(v)
@@ -153,9 +168,9 @@ def faster(v):
     return ("Can go about " if _rough(v) else "Can go "), times(m) + "x"
 
 
-def _p(pre, num, post, tone, attention, narrow=None, calm=False):
-    return {"pre": pre, "num": num, "post": post, "narrow": post if narrow is None else narrow,
-            "tone": tone, "attention": attention, "calm": calm}
+def _p(pre, num, post, tone, attention, narrow=None, calm=False, narrow_pre=None):
+    return {"pre": pre, "num": num, "post": post, "narrow_pre": pre if narrow_pre is None else narrow_pre,
+            "narrow": post if narrow is None else narrow, "tone": tone, "attention": attention, "calm": calm}
 
 
 def sentence(v, now, shown, lifted):
@@ -187,21 +202,22 @@ def _verdict_words(v, now):
     proj = v.get("projected")
     by = "about %d%% by then" % int(round(proj)) if proj is not None else ""
     early = ", early estimate" if _rough(v) else ""
+    over = ("Over your %d%% target. " % int(round(v["target"]))) if over_target(v) else ""
     if verdict == "idle":
         if v["window"] == FIVE_HOUR:
-            return "Idle: up to %s%% an hour is safe." % render.rate(v.get("allowed"))
-        return "Idle lately, %s." % by
+            return over + "Idle: up to %s%% an hour is safe." % render.rate(v.get("allowed"))
+        return over + "Idle lately, %s." % by
     out = _out(v)
     if out:
-        lead = "May run out" if _rough(v) or v.get("severity") == "warn" else "Runs out"
+        lead = "May run out" if _soft(v) else "Runs out"
         return "%s %s, %s before the reset. Ease off." % (lead, _at_words(out, now), dur(v["reset_ts"] - out))
     if verdict == "unknown":
         if v["window"] == FIVE_HOUR:
-            return "No pace yet: up to %s%% an hour is safe." % render.rate(v.get("allowed"))
-        return "No pace yet."
+            return over + "No pace yet: up to %s%% an hour is safe." % render.rate(v.get("allowed"))
+        return over + "No pace yet."
     if verdict == "slow_down":
         return "Heading for %s, above your %d%% target. Ease off." % (by, int(round(v.get("target", 100.0))))
-    if v.get("severity") == "opportunity":
+    if _harvest(v):
         return "%s: %d%% will go unused. Use it." % (by[0].upper() + by[1:], floor_pct(_unused(v) or 0))
     if verdict == "speed_up" and v.get("multiplier") is not None:
         pre, num = faster(v)
@@ -221,13 +237,15 @@ def window(v, now):
             projected=None if proj is None else round(max(proj, shown), 2),
             reset=day(v["reset_ts"], now), reset_ts=v["reset_ts"],
             phrase=phrase(v, now), sentence=sentence(v, now, shown, lifted),
+            # A milder run-out: the bar's red forecast fades, as a rough estimate does.
+            soft=out["kind"] == "dry" and _soft(v),
         )
     elif v.get("raw"):
         used, reset = v["raw"]
-        out.update(pct=floor_pct(used), approx=False, used=round(used, 2), projected=None,
+        out.update(pct=floor_pct(used), approx=False, used=round(used, 2), projected=None, soft=False,
                    reset=day(reset, now), reset_ts=reset, phrase=None, sentence=sentence(v, now, used, False))
     else:
-        out.update(pct=None, approx=False, used=0.0, projected=None, reset=None, reset_ts=None,
+        out.update(pct=None, approx=False, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
                    phrase=None, sentence=sentence(v, now, 0.0, False))
     return out
 
@@ -235,6 +253,12 @@ def window(v, now):
 def windows(v5, vw, now):
     a = window(dict(v5, window=FIVE_HOUR), now)
     b = window(dict(vw, window=SEVEN_DAY), now)
+    if vw.get("present") and vw["verdict"] == "maxed" and v5.get("present") and v5["verdict"] != "maxed":
+        # The week's limit blocks the 5 hours too: no forecast, no "faster".
+        a.update(kind="idle", pct=floor_pct(v5["used"]), approx=False, used=round(v5["used"], 2), projected=None,
+                 phrase=None, soft=False,
+                 sentence="5-hour: %d%% used, resets %s. Blocked by the weekly limit until %s." % (
+                     floor_pct(v5["used"]), at(v5["reset_ts"], now), render.dhm(vw["reset_ts"])))
     return [a, b]
 
 
@@ -329,8 +353,8 @@ def _window_segs(w, step, focus, s):
     approx = ("~" if s["x"] == "x" else "≈") if w["approx"] else ""
     out.append((approx + "%d%%" % w["pct"], "inactive" if focus and not attention else "text"))
     if p and (step["calm"] or not p["calm"]):
-        post = p["post"] if step["calm"] else p["narrow"]
-        out.append((" " + p["pre"] + p["num"] + post, p["tone"]))
+        pre, post = (p["pre"], p["post"]) if step["calm"] else (p["narrow_pre"], p["narrow"])
+        out.append((" " + pre + p["num"] + post, p["tone"]))
     if step["resets"] and w["reset"] and w["kind"] != "maxed":
         out.append(("  resets " + w["reset"], "inactive"))
     return out

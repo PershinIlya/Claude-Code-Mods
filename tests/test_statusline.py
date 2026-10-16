@@ -15,7 +15,7 @@ import time
 import unittest
 from unittest import mock
 
-from ctempo import config, render, winshell
+from ctempo import config, render, statusline, winshell
 
 from .helpers import MON, H, D, TZ_UTC, TempHome, payload, utc
 
@@ -239,6 +239,24 @@ class Statusline(unittest.TestCase):
         plain = text(p.stdout.decode())
         self.assertNotIn("1783720704", plain)
         self.assertIn("Week waiting", plain)
+
+    def test_only_a_reading_that_changes_the_band_touches_the_stamp(self):
+        # Review 18: a rejected window (no resets_at, one already passed, the
+        # epoch leak) touched the stamp on every run, so 2 Desktop chats kept
+        # waking each other every 5 s.
+        stamp = os.path.join(self.home, "changed")
+        run(self.p, self.home, args=["--source", "mod", "--format", "json"])
+        with open(stamp, encoding="utf-8") as f:
+            first = f.read()
+        bad = json.loads(json.dumps(self.p))
+        del bad["rate_limits"]["seven_day"]["resets_at"]
+        for p_ in (bad, bad, self.p):  # the 5h reading repeats (a heartbeat), the week is rejected, then repeats
+            run(p_, self.home, args=["--source", "mod", "--format", "json"])
+            with open(stamp, encoding="utf-8") as f:
+                self.assertEqual(f.read(), first)
+        self.assertFalse(statusline.shown_changed("rejected:reset_missing"))
+        self.assertFalse(statusline.shown_changed("anomaly"))
+        self.assertTrue(statusline.shown_changed("reset_drop"))
 
     def test_json_format_for_the_mod(self):
         p, _ = run(self.p, self.home, args=["--source", "mod", "--format", "json"])

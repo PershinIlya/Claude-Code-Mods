@@ -84,7 +84,7 @@ def compute(raw, cfg, opts, now, line_of=None):
             try:
                 actions = ingest.record(st, readings, now, opts["source"], sid, cfg, rejects, kinds)
                 recorded = True
-                if any(a not in QUIET for a in actions.values()):
+                if any(shown_changed(a) for a in actions.values()):
                     touch_stamp(now)
             except sqlite3.OperationalError as e:  # locked: skip this write, still render
                 log_error(e, "record")
@@ -104,8 +104,12 @@ def compute(raw, cfg, opts, now, line_of=None):
     return v5, vw, readings
 
 
-# What record() did that changes nothing shown: no need to wake other bands.
-QUIET = ("heartbeat", "throttled", "dup", "stale", "expired")
+def shown_changed(action):
+    """Whether what record() did with a reading changes what a band shows: a
+    new level, a new window, a reset. Heartbeats, duplicates, rejects and a
+    pending anomaly do not, and touching the stamp for them would keep
+    bands in other chats waking each other every few seconds."""
+    return action in ("fresh", "new_window", "rollover", "rise") or action.startswith("reset_")
 
 
 def touch_stamp(now):

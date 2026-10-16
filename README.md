@@ -36,9 +36,12 @@ there is something to say.
   `Can go 2.7x faster` (`about 2x` while the estimate is rough). A window
   that needs you says one thing in color: `Runs out 15:40` (red; `May run
   out` in yellow when it is close), `Ease off`, `40% will go unused` (green),
-  `Back at 16:30` when the limit is reached, or `Idle`.
+  `Back at 16:30` when the limit is reached, `Over your 80% target` (with a
+  target below 100), or `Idle`. While the week is at its limit, the 5-hour
+  bar turns grey: nothing more can be spent there either.
 - **Resets** follow when the band is wide. In a narrower window they, and the
-  calm words, move to the bar's tooltip.
+  calm words, move to Details, and the words that matter get shorter (`Out
+  15:40`).
 - **Details** (the button, or `d` when the band has the focus) adds one
   sentence per window, such as "5-hour: 70% used, resets 16:30. Runs out at
   15:40, 50 min before the reset. Ease off.", and how old the last reading is.
@@ -385,9 +388,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 449 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 454 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 59 tests
+claude plugin test mods/ctempo                 # 63 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 
@@ -421,8 +424,8 @@ Windows the launchers from cmd.exe, PowerShell and Git Bash, a drive-less
 `.gitattributes` keeps `bin/ctempo`, `*.py` and `*.sh` LF on a Windows
 checkout, where a CR breaks the `#!` line in Git Bash.
 
-The 17 review passes (2 of them model-based fuzzers, for install and for reset
-detection, the last 3 on Windows) found 171 defects; 168 are fixed and 3, which
+The 18 review passes (2 of them model-based fuzzers, for install and for reset
+detection, 3 on Windows, the last on the band) found 181 defects; 178 are fixed and 3, which
 need 2 Claude Code processes on 1 conversation, are documented limits (open a
 conversation in a second terminal with `--fork-session`); each fixed one has a
 regression test that fails on the code before its fix (for the 3 in these docs,
