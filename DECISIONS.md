@@ -489,7 +489,8 @@ uses it to price a 5h leftover in weekly points, and uses the clamp maximum
 
 ## Display
 
-**D-16. The line.**
+**D-16. The classic line.** The terminal's line until the band (D-30), kept
+as `display.style: "classic"`:
 `5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00`.
 `×` is the multiplier with a verdict glyph (▲ speed up, ▼ slow down, none on
 pace), so the verdict survives `NO_COLOR`. `+3` is points versus the on-pace
@@ -560,8 +561,9 @@ segment sent the cursor back over the user's text.
 json` through `$.process.run` (the flags are `runtime.json`'s `args`: `-I -S -X
 utf8` on Windows, and `-I -S` when a file written before `args` has none) and
 draws the tone-tagged segments it gets back (no ANSI parsing). It calls the CLI
-after each `session.measure` whose `rateLimits` changed and every 60 s
-(time-dependent numbers), never on the start path, and coalesces calls that
+after each `session.measure` whose `rateLimits` changed, when its 5 s poll sees
+a new reading (D-31) and every 60 s (time-dependent numbers), never on the
+start path, and coalesces calls that
 arrive while one runs (statusline-anywhere drops them). It draws on the
 surfaces in `mod.surfaces` (default `["desktop"]`; VS Code and mobile draw no
 band per the docs) and passes the band on in the terminal, where the statusLine
@@ -586,6 +588,55 @@ cmd.exe's whole message. That fallback is inferred from the engine's spawn
 code, not seen on Windows (the mod tests stub `$.process.run`). The band draws
 in the Desktop app's local sessions only: plugins are not available in WSL
 sessions.
+
+**D-30. The band.** The first band drew the line's segments as text, and the
+person using it found the symbols (`×0.9▼`, `→88%`, `@Thu`) unreadable. 3 design
+rounds, judged by 2 reviewers each, ended at "Quiet Bar Line": one 18 px row,
+English words only, at most one bold number per window. Each window is a dim
+name, a small SVG bar, the percent rounded down (D-31) and words only when they
+matter. The bar is solid orange (Claude's own accent) for what is used, then
+after a hairline gap a pale forecast to where the window lands at its reset;
+the forecast fades while the estimate is rough (fewer than 3 fresh readings
+for the 5 hours, a typical or assumed week); it turns red into a short wall
+when the window runs out before the reset; green dots fill quota that will go
+unused (the opportunity tone of D-16); the whole bar is red when maxed and
+grey when idle. A calm window says nothing ("on pace" is the bar), or a dim
+"Can go 2.7x faster" (halves of an early estimate, "about 2x"; "a bit" below
+1.5; "Plenty of room" from 10). A window that needs you says one thing in
+color: "Runs out 15:40" (red; "May run out" in yellow for the milder
+overshoot), "Ease off", "40% will go unused" (green), "Back at 16:30"; the
+other window's percent then dims. Widths are thresholds on the band's
+`bodyColumns`, checked in Chromium from 40 to 140 columns: halves with resets
+and calm words from 104, bars 64 px from 72 and 44 px below, no Details button
+and "Wk" below 52, and below 44 a calm window beside one that needs you keeps
+only its name and percent. Resets and calm words that do not fit go to the
+bar's tooltip (`<title>`, so the Svg is interactive) and to Details (hotkey
+d), one sentence per window plus how old the reading is. Text uses theme keys
+only; each SVG carries its own small style with a dark-scheme block, and its
+base colors read on both backgrounds in case the frame does not follow the
+app's theme. The words and sentences come from the CLI (`ctempo/band.py`),
+which also draws the terminal line with text bars (`━` used, `╍` forecast,
+`┈` unused; `#`, `=`, `.` in ascii mode), dropping resets, then calm words,
+then bar width, then "Week" for "Wk" to fit `display.max_width`.
+
+**D-31. Freshness.** The band lagged Claude Code's own usage bar by a point
+(36 against 37) because a reading is only as new as the last API response of
+some local chat, and other chats' readings reached a band only at its next
+60 s refresh. 3 cheap changes, none of them reading a token: percents are
+rounded down, as Claude Code's `/usage` shows them (rounding to nearest showed
+the same or 1 more on the same data, which hid real lag and invented false
+gaps); the mod polls every 5 s and runs Python only when its session's
+`rateLimits` changed (any amount; `session.measure` waits for a whole point) or
+`CTEMPO_HOME/changed` did (the CLI touches it when a reading changes what is
+shown, so another chat's reading arrives within seconds; a run ignores its own
+touch by the time written in it); and the 5-hour percent is nowcast: the last
+level plus the fitted rate times the time since that level was read, capped at
+1 point, only with a least-squares rate, a fresh reading in the last 5 minutes
+and a verdict that is neither idle, unknown nor maxed, shown only when it lifts
+the whole percent, as "≈37%", and never used for the verdict. A simulation of 2
+chats on one store put ctempo below the native bar 5% of the time in steady
+work (13% with sparse responses, 59% without the nowcast) and above it at most
+1%. Exact agreement needs the usage endpoint, which is left out (D-04).
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.

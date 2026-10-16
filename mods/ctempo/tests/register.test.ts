@@ -708,3 +708,18 @@ test("redraws when another chat's reading touches the stamp, not after its own",
   await clock.advance(15_000)
   expect(runs.length).toBe(2)
 })
+
+test('a failing run is not retried by the poll, only by the refresh timer', async ($, on) => {
+  const options: Options = { run: failed(2, 'Traceback: boom\n') }
+  const { runs, clock } = stub(on, options)
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(runs.length).toBe(1)
+  options.limits = [{ kind: 'five_hour', percentUsed: 63, resetsAt: '2026-10-14T10:20:00.000Z' }]
+  await clock.advance(5_000)
+  expect(runs.length).toBe(2)
+  await clock.advance(30_000)
+  expect(runs.length).toBe(2)
+  await clock.advance(30_000)
+  expect(runs.length).toBe(3)
+})

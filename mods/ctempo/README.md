@@ -1,10 +1,14 @@
 # ctempo mod
 
-Draws ctempo's pace line above the prompt, for the Claude Desktop Code tab
-where a custom statusLine does not render. All the math is in the Python CLI
-(`../../ctempo`); this mod only:
+Draws ctempo's band above the prompt, for the Claude Desktop Code tab where a
+custom statusLine does not render: one row with a small bar, the percent and,
+only when it matters, a few words per window; Details (`d`) adds a sentence per
+window. All the math and all the words are in the Python CLI (`../../ctempo`);
+this mod only:
 
-1. on `session.measure` (when `rateLimits` changed) and every 60 s, turns
+1. when a reading moved (a `session.measure` whose `rateLimits` changed, or its
+   5 s poll seeing new limits in this session or a new `changed` stamp from
+   another chat's run) and every 60 s, turns
    `$.session.usage().rateLimits` into the statusLine payload shape and runs
    `python -I -S bin/ctempo statusline --source mod --format json` through
    `$.process.run` (the interpreter, its flags and the entry come from
@@ -12,10 +16,12 @@ where a custom statusLine does not render. All the math is in the Python CLI
    written by `ctempo install`: `-I -S -X utf8` on Windows, `-I -S` when the
    file lists none; a `~` or relative `CTEMPO_HOME` is taken from your home
    directory, `HOME`, or `USERPROFILE` on Windows);
-2. stores the tone-tagged segments it prints in `$.state`;
+2. stores what it prints in `$.state`: one entry per window (bar kind,
+   percent, words, reset, sentence) and the text line;
 3. draws them on the `AbovePrompt` band for the surfaces listed in the CLI
-   config (`mod.surfaces`, default `["desktop"]`), keeping other mods' rows
-   below its own.
+   config (`mod.surfaces`, default `["desktop"]`) as SVG bars sized to the
+   band's width, keeping other mods' rows below its own. The terminal surface,
+   or a CLI too old to print windows, gets the text line.
 
 Each call also records a sample, so the Desktop app is a collector too.
 
