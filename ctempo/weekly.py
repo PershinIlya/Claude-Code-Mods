@@ -159,7 +159,8 @@ def weekly(store, now, cfg, reading=None, prof=None):
     on_pace = tgt * (1.0 - E / span) if start > week_start and span > 0 else tgt * (1.0 - E)
     v.update(present=True, used=used, reset_ts=reset, start_ts=start, remaining_h=(reset - now) / 3600.0,
              target=tgt, window_id=inst["id"], E=E, on_pace=on_pace, delta=used - on_pace,
-             profile_source=info["source"], awake_hours=info["awake_hours"], weekly_typical=info["weekly_total"])
+             profile_source=info["source"], awake_hours=info["awake_hours"], weekly_typical=info["weekly_total"],
+             last_seen=inst["last_seen"])
 
     # Intensity over the last N awake hours (the lookback may cross a reset).
     hours = float(cfg["profile"]["active_hours_lookback"])

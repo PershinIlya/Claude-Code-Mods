@@ -165,6 +165,11 @@ def five_hour(store, now, cfg, reading=None):
             rate, source = max(0.0, s), "lsq" if enough else "interpolated"
     v["rate"] = rate
     v["rate_source"] = source
+    # When the level was last read at what it is now: the start of a nowcast
+    # (band.level). A FIRST reading's timing may be stale (level_path), so not those.
+    at = [ts for ts, u in fresh if u >= used - 1e-9 and ts <= now]
+    v["known_ts"] = max(at) if at else None
+    v["last_seen"] = inst["last_seen"]
     v["rate_points"] = len(inside) + 2
     v["rate_since"] = since  # the fit start: `ctempo now` names why there is no rate
 

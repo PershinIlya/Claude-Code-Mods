@@ -82,8 +82,10 @@ def compute(raw, cfg, opts, now, line_of=None):
         recorded = False
         if opts["record"] and (readings or rejects or kinds):
             try:
-                ingest.record(st, readings, now, opts["source"], sid, cfg, rejects, kinds)
+                actions = ingest.record(st, readings, now, opts["source"], sid, cfg, rejects, kinds)
                 recorded = True
+                if any(a not in QUIET for a in actions.values()):
+                    touch_stamp(now)
             except sqlite3.OperationalError as e:  # locked: skip this write, still render
                 log_error(e, "record")
         # Once stored, the database has the judged level; the raw reading may
@@ -100,6 +102,18 @@ def compute(raw, cfg, opts, now, line_of=None):
     finally:
         st.close()
     return v5, vw, readings
+
+
+# What record() did that changes nothing shown: no need to wake other bands.
+QUIET = ("heartbeat", "throttled", "dup", "stale", "expired")
+
+
+def touch_stamp(now):
+    try:
+        with open(config.stamp_path(), "w", encoding="utf-8") as f:
+            f.write("%.3f\n" % now)
+    except OSError:
+        pass
 
 
 def note_render(st, now, source, line, rate_limits):
@@ -406,14 +420,15 @@ def main(argv):
                 log_error(e, "compose")
         now = opts["now"] or time.time()
         readings = {}
+        wins = updated = None
         try:
-            def segs_of(v5, vw):
-                if not any(v.get("present") or v.get("raw") for v in (v5, vw)):
-                    return render.fit([("ctempo: waiting for usage data", "dim")], cfg)
-                return render.segments(v5, vw, cfg)
+            from . import band
 
-            v5, vw, readings = compute(raw, cfg, opts, now, lambda a, b: render.plain(segs_of(a, b)))
-            segs = segs_of(v5, vw)
+            v5, vw, readings = compute(raw, cfg, opts, now, lambda a, b: render.plain(band.line(a, b, cfg, now)))
+            segs = band.line(v5, vw, cfg, now)
+            if opts["format"] == "json":
+                wins = band.windows(v5, vw, now)
+                updated = band.updated(v5, vw)
         except Exception as e:  # database trouble: degrade to the bare line
             log_error(e)
             if not readings:
@@ -435,6 +450,10 @@ def main(argv):
                     "refresh_s": cfg["mod"].get("refresh_s", 60),
                     "five_hour": _brief(v5),
                     "seven_day": _brief(vw),
+                    # The band: one entry per window (band.window), and when a reading last changed.
+                    "windows": wins,
+                    "updated_ts": updated,
+                    "now": now,
                 },
                 separators=(",", ":"),
             )

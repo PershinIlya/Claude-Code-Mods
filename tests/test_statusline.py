@@ -22,6 +22,12 @@ from .helpers import MON, H, D, TZ_UTC, TempHome, payload, utc
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENTRY = os.path.join(ROOT, "bin", "ctempo")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+BAR = re.compile(r"\b(5h|Week|Wk) [━╍─┈#=.-]+ ")
+
+
+def text(s):
+    """The line without colors and bars: "5h ━━━╍╍╍── 42%" reads "5h 42%"."""
+    return BAR.sub(r"\1 ", ANSI.sub("", s))
 WINDOWS = os.name == "nt"
 # The compose tests are written in POSIX shell. On Windows they run in Git
 # Bash, as Claude Code runs a statusLine there; without it they cannot. Git
@@ -78,9 +84,9 @@ class Statusline(unittest.TestCase):
         self.assertEqual(p.returncode, 0)
         out = p.stdout.decode()
         self.assertEqual(out.count("\n"), 1)
-        plain = ANSI.sub("", out.strip())
+        plain = text(out.strip())
         self.assertTrue(plain.startswith("5h 42%"), plain)
-        self.assertIn("wk 32%", plain)
+        self.assertIn("Week 31%", plain)  # 31.5, rounded down as Claude Code shows it
         self.assertLessEqual(len(plain), 80)
         self.assertEqual(p.stderr, b"")
         self.assertTrue(os.path.exists(os.path.join(self.home, "tempo.db")))
@@ -101,7 +107,7 @@ class Statusline(unittest.TestCase):
         open(blocker, "w").close()
         p, _ = run(self.p, os.path.join(blocker, "sub"))
         self.assertEqual(p.returncode, 0)
-        plain = ANSI.sub("", p.stdout.decode().strip())
+        plain = text(p.stdout.decode().strip())
         self.assertTrue(plain.startswith("5h 42% @"), plain)
         self.assertNotIn(b"Traceback", p.stdout + p.stderr)
 
@@ -115,9 +121,9 @@ class Statusline(unittest.TestCase):
         for args in ((), ("--format", "json")):
             p, _ = run(self.p, self.home, args=args)
             out = p.stdout.decode().strip()
-            line = json.loads(out)["line"] if args else ANSI.sub("", out)
+            line = json.loads(out)["line"] if args else text(out)
             self.assertTrue(line.startswith("5h 42% @"), line)
-            self.assertEqual(line[13:], " | wk 32...")  # 21 columns kept, then "..."
+            self.assertEqual(line[13:], " | wk 31...")  # 21 columns kept, then "..."
             self.assertLessEqual(len(line), 24)
 
     def test_waiting_line_follows_the_display_settings(self):
@@ -141,7 +147,7 @@ class Statusline(unittest.TestCase):
         self.assertEqual(cfg["min_free"], 10.0)
         self.assertEqual(cfg["future_key"], 1)
         p, _ = run(self.p, self.home)
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
+        self.assertTrue(text(p.stdout.decode()).startswith("5h 42%"), p.stdout)
 
     def test_non_utf8_stdout_encoding_still_prints(self):
         e = dict(os.environ, CTEMPO_HOME=self.home, TZ=TZ_UTC, PYTHONIOENCODING="latin-1")
@@ -149,8 +155,8 @@ class Statusline(unittest.TestCase):
         p = subprocess.run([sys.executable, "-S", ENTRY, "statusline"], input=json.dumps(self.p).encode(),
                            capture_output=True, env=e, timeout=30)
         out = p.stdout.decode("utf-8")
-        self.assertIn("×", out)
-        self.assertTrue(ANSI.sub("", out).startswith("5h 42%"))
+        self.assertIn("━", out)
+        self.assertTrue(text(out).startswith("5h 42%"))
 
     def compose_timeout(self, ms):
         with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
@@ -160,7 +166,7 @@ class Statusline(unittest.TestCase):
     def test_bad_columns_keeps_the_composed_line(self):
         for cols in ("abc", "80.0", "-5", ""):
             p, _ = run(self.p, self.home, args=["--compose", "printf theirs"], env={"COLUMNS": cols})
-            self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("theirs"), (cols, p.stdout))
+            self.assertTrue(text(p.stdout.decode()).startswith("theirs"), (cols, p.stdout))
 
     def test_invalid_config_values_are_dropped_or_clamped(self):
         with open(os.path.join(self.home, "config.json"), "w", encoding="utf-8", newline="") as f:
@@ -176,7 +182,7 @@ class Statusline(unittest.TestCase):
         self.assertEqual(cfg["display"]["max_width"], 20)
         self.assertEqual(cfg["display"]["symbols"], "unicode")
         p, _ = run(self.p, self.home)
-        line = ANSI.sub("", p.stdout.decode()).strip()
+        line = text(p.stdout.decode()).strip()
         self.assertTrue(line.startswith("5h 42%"), line)  # full math, not the bare fallback
         self.assertLessEqual(len(line), 20)
         self.assertNotIn("error", line)
@@ -206,7 +212,7 @@ class Statusline(unittest.TestCase):
             f.write("[" * 200000 + "]" * 200000)
         self.assertEqual(config.load(os.path.join(self.home, "config.json")), config.DEFAULTS)
         p, _ = run(self.p, self.home)
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
+        self.assertTrue(text(p.stdout.decode()).startswith("5h 42%"))
 
     def test_error_json_still_tells_the_mod_where_to_draw(self):
         from contextlib import redirect_stdout
@@ -230,23 +236,28 @@ class Statusline(unittest.TestCase):
     def test_epoch_leak_payload_is_not_shown(self):
         self.p["rate_limits"]["seven_day"]["used_percentage"] = 1783720704
         p, _ = run(self.p, self.home)
-        plain = ANSI.sub("", p.stdout.decode())
+        plain = text(p.stdout.decode())
         self.assertNotIn("1783720704", plain)
-        self.assertIn("wk 0%", plain)
+        self.assertIn("Week waiting", plain)
 
     def test_json_format_for_the_mod(self):
         p, _ = run(self.p, self.home, args=["--source", "mod", "--format", "json"])
         d = json.loads(p.stdout)
         self.assertTrue(d["ok"])
-        self.assertTrue(d["line"].startswith("5h 42%"))
+        self.assertTrue(text(d["line"]).startswith("5h 42%"), d["line"])
         self.assertEqual("".join(s["text"] for s in d["segments"]), d["line"])
-        self.assertIn(d["segments"][0]["tone"], ("dim", "plain", "opportunity", "warn", "alert"))
+        self.assertIn(d["segments"][0]["tone"], tuple(render.ANSI))
         self.assertIn("desktop", d["surfaces"])
+        h5, wk = d["windows"]
+        self.assertEqual((h5["id"], h5["name"], h5["pct"]), ("h5", "5h", 42))
+        self.assertEqual((wk["id"], wk["name"], wk["pct"]), ("wk", "Week", 31))
+        self.assertTrue(h5["sentence"].startswith("5-hour: 42% used, resets "), h5["sentence"])
+        self.assertAlmostEqual(d["updated_ts"], d["now"], delta=5)
 
     @posix_shell
     def test_compose_appends_to_existing_command(self):
         p, _ = run(self.p, self.home, args=["--compose", "printf 'theirs'"], env={"COLUMNS": "200"})
-        plain = ANSI.sub("", p.stdout.decode())
+        plain = text(p.stdout.decode())
         self.assertTrue(plain.startswith("theirs  5h 42%"), plain)
 
     @posix_shell
@@ -257,18 +268,18 @@ class Statusline(unittest.TestCase):
         p, _ = run(self.p, self.home, args=["--compose", "printf 'theirs\\r\\nmore\\r\\n'"], env={"COLUMNS": "200"})
         out = p.stdout.decode()
         self.assertNotIn("\r", out)
-        self.assertTrue(ANSI.sub("", out).startswith("theirs\nmore  5h 42%"), out)
+        self.assertTrue(text(out).startswith("theirs\nmore  5h 42%"), out)
 
     @posix_shell
     def test_compose_passes_stdin_through(self):
         cmd = "%s -c \"import sys, json; print(json.load(sys.stdin)['session_id'])\"" % sh_path(sys.executable)
         p, _ = run(self.p, self.home, args=["--compose", cmd], env={"COLUMNS": "200"})
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("abc  5h"), p.stdout)
+        self.assertTrue(text(p.stdout.decode()).startswith("abc  5h"), p.stdout)
 
     @posix_shell
     def test_compose_wraps_when_too_wide(self):
         p, _ = run(self.p, self.home, args=["--compose", "printf '%080d' 0"], env={"COLUMNS": "100"})
-        lines = ANSI.sub("", p.stdout.decode()).rstrip("\n").split("\n")
+        lines = text(p.stdout.decode()).rstrip("\n").split("\n")
         self.assertEqual(len(lines), 2)
         self.assertTrue(lines[1].startswith("5h 42%"))
 
@@ -276,9 +287,9 @@ class Statusline(unittest.TestCase):
     def test_compose_failure_and_timeout_show_ours(self):
         self.compose_timeout(1500)  # the default is 3000 on Windows
         p, _ = run(self.p, self.home, args=["--compose", "exit 3"])
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
+        self.assertTrue(text(p.stdout.decode()).startswith("5h 42%"))
         p, el = run(self.p, self.home, args=["--compose", "sleep 5; echo late"])
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"))
+        self.assertTrue(text(p.stdout.decode()).startswith("5h 42%"))
         self.assertLess(el, 4.0)
 
     @posix_shell
@@ -294,12 +305,12 @@ class Statusline(unittest.TestCase):
         self.compose_timeout(QUICK_TIMEOUT_MS)
         p, el = run(self.p, self.home, args=["--compose", "echo hi; (sleep 3; touch %s) &" % sh_path(left)],
                     env={"COLUMNS": "200"})
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("hi  5h 42%"), p.stdout)
+        self.assertTrue(text(p.stdout.decode()).startswith("hi  5h 42%"), p.stdout)
         self.assertLess(el, QUICK_LIMIT)
         self.compose_timeout(1500)
         t2 = time.time()
         p, _ = run(self.p, self.home, args=["--compose", "(sleep 3; touch %s) & sleep 5" % sh_path(killed)])
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("5h 42%"), p.stdout)
+        self.assertTrue(text(p.stdout.decode()).startswith("5h 42%"), p.stdout)
         while not os.path.exists(left) and time.time() < t + 10:
             time.sleep(0.1)
         self.assertTrue(os.path.exists(left))
@@ -313,12 +324,12 @@ class Statusline(unittest.TestCase):
         # stops is read until the deadline, and what arrived is used.
         self.compose_timeout(QUICK_TIMEOUT_MS)
         p, el = run(self.p, self.home, args=["--compose", "echo a; (sleep 0.2; echo b) &"], env={"COLUMNS": "200"})
-        self.assertTrue(ANSI.sub("", p.stdout.decode()).startswith("a\nb  5h 42%"), p.stdout)
+        self.assertTrue(text(p.stdout.decode()).startswith("a\nb  5h 42%"), p.stdout)
         self.assertLess(el, QUICK_LIMIT)
         self.compose_timeout(1500)
         chatty = "echo hi; (i=0; while [ $i -lt 40 ]; do echo x; sleep 0.1; i=$((i+1)); done) &"
         p, el = run(self.p, self.home, args=["--compose", chatty], env={"COLUMNS": "200"})
-        lines = ANSI.sub("", p.stdout.decode()).rstrip("\n").split("\n")
+        lines = text(p.stdout.decode()).rstrip("\n").split("\n")
         self.assertEqual(lines[0], "hi")
         self.assertIn("5h 42%", lines[-1])
         self.assertGreater(len(lines), 3 if WINDOWS else 5)  # each sleep is a process: slower in Git Bash
@@ -328,7 +339,7 @@ class Statusline(unittest.TestCase):
     def test_no_recursion_when_composed_with_itself(self):
         cmd = "%s -I -S %s statusline --compose 'printf x'" % (sh_path(sys.executable), sh_path(ENTRY))
         p, el = run(self.p, self.home, args=["--compose", cmd], env={"COLUMNS": "300"})
-        out = ANSI.sub("", p.stdout.decode())
+        out = text(p.stdout.decode())
         self.assertEqual(out.count("5h 42%"), 2)  # inner ctempo does not compose again
         self.assertNotIn("x", out.split("5h")[0])
 
@@ -507,25 +518,25 @@ class WriteFailedAtRollover(TempHome):
         finally:
             lock.execute("ROLLBACK")
             lock.close()
-        return p.stdout.decode("utf-8").rstrip("\n")
+        return text(p.stdout.decode("utf-8").rstrip("\n"))
 
     def test_5h_rollover_shows_the_payload_level(self):
         R1, R7 = int(MON + 5 * H), int(MON + 7 * D)
         self.feed(MON + 4 * H, five=(80, R1), week=(42, R7))
         self.feed(MON + 4 * H + 600, five=(84, R1), week=(43, R7))
         line = self.locked_render(R1 + 120, five=(12, R1 + 5 * H), week=(43, R7))
-        self.assertTrue(line.startswith("5h 12% @10:00 · wk 43% "), line)
+        self.assertTrue(line.startswith("5h 12%  resets 10:00 · Week 43% "), line)
 
     def test_weekly_rollover_shows_the_payload_level(self):
         R5, R7 = int(MON + D + 2 * H), int(MON + D)
         self.feed(MON + 22 * H, five=(5, R5), week=(60, R7))
         line = self.locked_render(R7 + 120, five=(5, R5), week=(1, R7 + 7 * D))
         self.assertTrue(line.startswith("5h 5% "), line)
-        self.assertTrue(line.endswith(" · wk 1% @Tue 00:00"), line)
+        self.assertTrue(line.endswith(" · Week 1%  resets Tue"), line)
 
     def test_first_render_does_not_wait_for_data_it_has(self):
         line = self.locked_render(MON, five=(42, MON + 2 * H), week=(31.5, MON + 3 * D))
-        self.assertEqual(line, "5h 42% @02:00 · wk 32% @Thu 00:00")
+        self.assertEqual(line, "5h 42%  resets 02:00 · Week 31%  resets Thu")
 
 
 class WobbledReset(TempHome):
@@ -635,10 +646,10 @@ class EncodedCompose(unittest.TestCase):
         now = time.time()
         p = payload((42, int(now + 2 * H)), (31.5, int(now + 3 * D)))
         out, _ = run(p, home, args=["--compose-b64", winshell.encoded("printf 'say \"hi\"'")], env={"COLUMNS": "200"})
-        self.assertTrue(ANSI.sub("", out.stdout.decode()).startswith('say "hi"  5h 42%'), out.stdout)
+        self.assertTrue(text(out.stdout.decode()).startswith('say "hi"  5h 42%'), out.stdout)
         out, _ = run(p, home, args=["--compose-b64", "b!!"], env={"COLUMNS": "200"})
         self.assertEqual(out.returncode, 0)
-        self.assertTrue(ANSI.sub("", out.stdout.decode()).startswith("5h 42%"), out.stdout)
+        self.assertTrue(text(out.stdout.decode()).startswith("5h 42%"), out.stdout)
         self.assertFalse(os.path.exists(os.path.join(home, "errors.log")))
 
 
@@ -794,7 +805,7 @@ class WindowsComposer(unittest.TestCase):
             os.environ.pop("CTEMPO_COMPOSED", None)
             statusline.main(["--compose", "printf 'theirs\\r\\n'"])
         out = o.buffer.getvalue().decode("utf-8")
-        self.assertTrue(out.startswith("theirs  5h 42%"), out)
+        self.assertTrue(text(out).startswith("theirs  5h 42%"), out)
         self.assertNotIn("\r", out)
 
 
