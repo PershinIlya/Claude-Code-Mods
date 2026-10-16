@@ -1,7 +1,8 @@
 import type { ProcessRunResult, RenderSurface, SessionRateLimit } from 'claude-code'
 import { expect, type MountTarget, mock, type TestBody, test } from 'claude-code/testing'
 
-import { fromGitBash, resolveHome, toPayload } from '../hooks/register'
+import { age, barSvg, fromGitBash, layout, resolveHome, toPayload } from '../hooks/register'
+import type { Phrase, Win } from '../types'
 
 type StubOn = Parameters<TestBody>[1]
 type Run = { argv: readonly string[]; init?: { stdin?: string; timeoutMs?: number; env?: Record<string, string> } }
@@ -36,6 +37,8 @@ type Options = {
   run?: () => { value: ProcessRunResult }
   // What $.fs.exists answers; left out, nothing answers it (the call rejects).
   exists?: (path: string) => boolean
+  // CTEMPO_HOME/changed as the CLI leaves it; absent, the file is missing.
+  stamp?: { mtimeMs: number; text: string }
 }
 
 function stub(on: StubOn, options: Options = {}) {
@@ -48,8 +51,17 @@ function stub(on: StubOn, options: Options = {}) {
       ? JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/ctempo' })
       : options.runtime
   on('fs.read', (_$, e) => {
-    reads.push(String((e as { path?: string }).path))
+    const path = String((e as { path?: string }).path)
+    if (/[\\/]changed$/.test(path)) {
+      return options.stamp ? { value: options.stamp.text } : { deny: 'ENOENT: no such file' }
+    }
+    reads.push(path)
     return runtime === null ? { deny: options.denied ?? 'ENOENT: no such file' } : { value: runtime }
+  })
+  on('fs.stat', (_$, e) => {
+    const stamp = options.stamp
+    if (!stamp || !/[\\/]changed$/.test(e.path)) return { deny: 'ENOENT: no such file' }
+    return { value: { kind: 'file', size: stamp.text.length, mtimeMs: stamp.mtimeMs, isLink: false } }
   })
   on('session.usage', () => ({
     value: { startedAt: NOW - 60_000, context: { window: 200_000 }, rateLimits: options.limits ?? LIMITS },
@@ -143,10 +155,12 @@ test('leaves the terminal band alone, where the statusLine already shows it', as
 })
 
 test('records new readings when a window moves and refreshes every minute', async ($, on) => {
-  const { runs, clock } = stub(on)
+  const options: Options = {}
+  const { runs, clock } = stub(on, options)
   await $.session.start(start('desktop'))
   await clock.advance(1)
   const moved: SessionRateLimit[] = [{ kind: 'five_hour', percentUsed: 63, resetsAt: '2026-10-14T10:20:00Z' }]
+  options.limits = moved
   await $.session.measure({ context: { window: 200_000 }, rateLimits: moved, changed: ['rateLimits'] })
   await clock.advance(1)
   expect(runs.length).toBe(2)
@@ -489,4 +503,208 @@ test("Windows: keeps cmd.exe's whole message when exists() cannot tell", async (
   expect(await ui.find({ type: 'Text', text: /Python not found/ })).toBeUndefined()
   await clock.advance(60_000)
   expect(reads.length).toBe(1)
+})
+
+// -- the band ---------------------------------------------------------------
+
+function win(over: Partial<Win> & Pick<Win, 'id'>): Win {
+  const week = over.id === 'wk'
+  return {
+    name: week ? 'Week' : '5h',
+    short: week ? 'Wk' : '5h',
+    kind: 'run',
+    pct: week ? 48 : 55,
+    approx: false,
+    used: week ? 48 : 55.3,
+    projected: week ? 96 : 95,
+    reset: week ? 'Fri' : '16:30',
+    reset_ts: week ? 1_792_123_200 : 1_791_991_800,
+    phrase: null,
+    sentence: week ? 'Week: 48% used, resets Fri 04:00. On pace, about 96% by then.' : '5-hour: 55% used, resets 16:30. On pace, about 95% by then.',
+    ...over,
+  }
+}
+
+const phrase = (p: Partial<Phrase>): Phrase => ({
+  pre: '',
+  num: '',
+  post: '',
+  narrow: p.post ?? '',
+  tone: 'inactive',
+  attention: false,
+  calm: false,
+  ...p,
+})
+
+const RUNS_OUT = phrase({ pre: 'Runs out ', num: '15:40', tone: 'error', attention: true })
+const FASTER = phrase({ pre: 'Can go ', num: '2.7x', post: ' faster', tone: 'inactive', calm: true })
+const UNUSED = phrase({ num: '40%', post: ' will go unused', narrow: ' unused', tone: 'success', attention: true })
+
+function cli(windows: Win[], extra: Record<string, unknown> = {}) {
+  return ran(JSON.stringify({ ...CLI, windows, updated_ts: 1_791_964_500, now: 1_791_964_680, ...extra }))
+}
+
+function sized(surface: RenderSurface, bodyColumns: number): MountTarget {
+  const target = band(surface)
+  return { ...target, props: { ...(target.props as object), bodyColumns } } as MountTarget
+}
+
+async function drawn($: Parameters<TestBody>[0], on: StubOn, windows: Win[], columns = 115, options: Options = {}) {
+  const { clock, runs } = stub(on, { run: () => cli(windows), ...options })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  return { ui: await $.ui.mount(sized('desktop', columns)), clock, runs }
+}
+
+test('draws a bar, the percent and the reset per window, and no words while on pace', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk' })])
+  const bars = await ui.findAll({ type: 'Svg' })
+  expect(bars.length).toBe(2)
+  expect(bars[0]?.props).toMatchObject({ width: 64, height: 14, isInteractive: true })
+  expect(String(bars[0]?.props.alt)).toMatch(/^5-hour: 55% used/)
+  expect(String(bars[0]?.props.source)).toContain('<title>5-hour: 55% used, resets 16:30.')
+  expect(await ui.find({ type: 'Text', text: '55%' })).toMatchObject({ props: { color: 'text', weight: 'medium' } })
+  expect(await ui.find({ type: 'Text', text: 'resets 16:30' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'resets Fri' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /faster|pace/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /drawn by Claude Code/ })).toBeDefined()
+})
+
+test('a window that needs you says so in color, and the other percent dims', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: RUNS_OUT }), win({ id: 'wk' })])
+  expect(await ui.find({ type: 'Text', text: 'Runs out 15:40' })).toMatchObject({
+    props: { color: 'error', weight: 'medium' },
+    children: ['Runs out ', { type: 'Text', props: { weight: 'semibold', color: 'error' }, children: ['15:40'] }, ''],
+  })
+  expect(await ui.find({ type: 'Text', text: '70%' })).toMatchObject({ props: { color: 'text' } })
+  expect(await ui.find({ type: 'Text', text: '48%' })).toMatchObject({ props: { color: 'inactive', weight: 'regular' } })
+})
+
+test('narrow: resets and calm words go to the tooltip, bars shrink, the words that matter stay', async ($, on) => {
+  const windows = [win({ id: 'h5', phrase: FASTER }), win({ id: 'wk', kind: 'expire', pct: 40, used: 40, projected: 60, phrase: UNUSED })]
+  const { ui } = await drawn($, on, windows, 55)
+  expect((await ui.find({ type: 'Svg' }))?.props.width).toBe(44)
+  expect(await ui.find({ type: 'Text', text: /resets/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /faster/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '40% unused' })).toMatchObject({ props: { color: 'success' } })
+  expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined()
+})
+
+test('tiny: no Details button and Wk; below 44 the calm window keeps its name and percent', async ($, on) => {
+  const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: RUNS_OUT }), win({ id: 'wk' })]
+  const { ui } = await drawn($, on, windows, 48)
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Wk' })).toBeDefined()
+  expect((await ui.findAll({ type: 'Svg' })).length).toBe(2)
+  const bare = await $.ui.mount(sized('desktop', 40))
+  expect((await bare.findAll({ type: 'Svg' })).length).toBe(1)
+  expect(await bare.find({ type: 'Text', text: '48%' })).toBeDefined()
+})
+
+test('the width thresholds', async () => {
+  expect(layout(115)).toEqual({ halves: true, W: 64, tiny: false, bare: false })
+  expect(layout(103)).toEqual({ halves: false, W: 64, tiny: false, bare: false })
+  expect(layout(71)).toEqual({ halves: false, W: 44, tiny: false, bare: false })
+  expect(layout(51)).toEqual({ halves: false, W: 44, tiny: true, bare: false })
+  expect(layout(43)).toEqual({ halves: false, W: 44, tiny: true, bare: true })
+})
+
+test('Details opens a sentence per window and says how old the reading is', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk' })])
+  await ui.press({ key: 'details' })
+  expect(await ui.find({ type: 'Text', text: /^5-hour: 55% used, resets 16:30\. On pace, about 95% by then\.$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /about 96% by then\. Updated 3 min ago\.$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: 'Hide' })).toBeDefined()
+  await ui.press({ key: 'details' })
+  expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()
+})
+
+test('an estimate reads ≈, and waiting shows one line and no Details', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5', pct: 37, approx: true }), win({ id: 'wk' })])
+  expect(await ui.find({ type: 'Text', text: '≈37%' })).toBeDefined()
+})
+
+test('waiting for the first reading', async ($, on) => {
+  const waiting = (id: 'h5' | 'wk') =>
+    win({ id, kind: 'wait', pct: null, used: 0, projected: null, reset: null, reset_ts: null, sentence: 'waiting' })
+  const { ui } = await drawn($, on, [waiting('h5'), waiting('wk')])
+  expect(await ui.find({ type: 'Text', text: 'Waiting for the first reading' })).toBeDefined()
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
+  expect(String((await ui.find({ type: 'Svg' }))?.props.source)).toContain('<animate')
+})
+
+test('an older CLI without windows, or broken ones, gets the text line', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5' })])
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '5h 62% ×1.4▲ →88% @10:20' })).toBeDefined()
+})
+
+test('the bars draw what each kind means', async () => {
+  const svg = (over: Partial<Win>) => barSvg(win({ id: 'h5', ...over }), 64)
+  expect(svg({})).toMatch(/class='ctb-bf'/)
+  expect(svg({})).not.toMatch(/class='ctb-b[wdmx]'|linearGradient/)
+  expect(svg({ kind: 'dry' })).toMatch(/class='ctb-bx'.*class='ctb-bw'/)
+  expect(svg({ kind: 'expire', used: 40, projected: 60 })).toMatch(/class='ctb-bd'/)
+  expect(svg({ kind: 'maxed', used: 100 })).toMatch(/class='ctb-bm'/)
+  expect(svg({ kind: 'idle' })).toMatch(/class='ctb-bi'/)
+  expect(svg({ kind: 'idle' })).not.toMatch(/class='ctb-bf'/)
+  const rough = svg({ kind: 'rough', used: 8, projected: 58 })
+  const id = /linearGradient id='(ctb[0-9a-f]{5})'/.exec(rough)?.[1]
+  expect(id).toBeDefined()
+  expect(rough).toContain(`fill='url(#${id})'`)
+  expect(svg({ projected: null })).not.toMatch(/class='ctb-bf'/)
+  expect(svg({ sentence: 'a < b & c' })).toContain('<title>a &lt; b &amp; c</title>')
+  expect(svg({}).length).toBeLessThan(131_072)
+})
+
+test('says how old the reading is', async () => {
+  expect(age(1000, 1030)).toBe('Updated just now.')
+  expect(age(1000, 1000 + 180)).toBe('Updated 3 min ago.')
+  expect(age(1000, 1000 + 7200)).toBe('Updated 2 h ago.')
+  expect(age(null, 1000)).toBe('')
+})
+
+test('runs Python at once when this session reads a new level, and not when nothing moved', async ($, on) => {
+  // The stub reads options.limits at each call.
+  const options: Options = { run: () => cli([win({ id: 'h5' }), win({ id: 'wk' })]) }
+  const { runs, clock } = stub(on, options)
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(runs.length).toBe(1)
+  await clock.advance(15_000)
+  expect(runs.length).toBe(1)
+  // A tenth of a point: session.measure waits for a whole one, the poll does not.
+  options.limits = [{ kind: 'five_hour', percentUsed: 62.1, resetsAt: '2026-10-14T10:20:00.000Z' }, LIMITS[1] as SessionRateLimit]
+  await clock.advance(5_000)
+  expect(runs.length).toBe(2)
+  expect(JSON.parse(runs[1]?.init?.stdin ?? '{}').rate_limits.five_hour.used_percentage).toBe(62.1)
+  await clock.advance(10_000)
+  expect(runs.length).toBe(2)
+})
+
+test("redraws when another chat's reading touches the stamp, not after its own", async ($, on) => {
+  const stamp = { mtimeMs: 1000, text: '1791964000.000\n' }
+  const options: Options = { stamp }
+  const { runs, clock } = stub(on, {
+    ...options,
+    run: () => {
+      // This run records a fresh reading: the CLI touches the stamp with its own time.
+      stamp.mtimeMs += 1
+      stamp.text = '1791964680.000\n'
+      return cli([win({ id: 'h5' }), win({ id: 'wk' })])
+    },
+  })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  expect(runs.length).toBe(1)
+  await clock.advance(15_000)
+  expect(runs.length).toBe(1)
+  stamp.mtimeMs = 5000 // another chat
+  stamp.text = '1791964700.000\n'
+  await clock.advance(5_000)
+  expect(runs.length).toBe(2)
+  await clock.advance(15_000)
+  expect(runs.length).toBe(2)
 })
