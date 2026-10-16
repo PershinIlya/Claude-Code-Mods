@@ -75,7 +75,9 @@ def cmd_now(args, cfg):
             print(json.dumps({"now": now, "data_age_s": age, "five_hour": v5, "seven_day": vw, "exchange_rate": ppw},
                              indent=2, default=str))
             return 0
-        segs = render.segments(v5, vw, cfg)
+        from . import band
+
+        segs = band.line(v5, vw, cfg, now)
         print(render.to_ansi(segs, render.use_color(cfg) and sys.stdout.isatty()))
         print()
         _print_5h(v5, cfg)

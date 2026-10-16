@@ -1,4 +1,5 @@
-"""The compact line, as ANSI text or as tone-tagged segments for the mod.
+"""The classic line (display.style "classic"), the helpers every line
+shares, and ANSI output. The default line is band.segments.
 
   5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00
 
@@ -8,6 +9,7 @@ but on pace, slow down without a dry time, or at or above a target below
 100), alert (red: runs dry with a slow down verdict, or maxed).
 """
 
+import math
 import os
 
 from . import clock
@@ -22,6 +24,19 @@ ANSI = {
     "opportunity": "\033[32m",
     "warn": "\033[33m",
     "alert": "\033[1;31m",
+    # The bars line (band.segments): words in the band's theme keys, and the bar.
+    "text": "",
+    "name": "\033[2m",
+    "inactive": "\033[2m",
+    "success": "\033[32m",
+    "warning": "\033[33m",
+    "error": "\033[1;31m",
+    "used": "\033[38;5;173m",  # Claude's orange
+    "forecast": "\033[2;38;5;173m",
+    "track": "\033[2m",
+    "idle": "\033[2m",
+    "over": "\033[31m",
+    "spare": "\033[32m",
 }
 RESET = "\033[0m"
 
@@ -40,11 +55,14 @@ def use_color(cfg, env=None):
     return not env.get("NO_COLOR") and env.get("TERM") != "dumb"
 
 
+def floor_pct(x):
+    """Whole percent, rounded down as Claude Code's own usage bar shows it:
+    36.7 is 36, and 100 only at 100."""
+    return max(0, min(100, int(math.floor(x + 1e-9))))
+
+
 def pct(x):
-    n = int(round(x))
-    if n >= 100 and x < 100:
-        n = 99
-    return "%d%%" % n
+    return "%d%%" % floor_pct(x)
 
 
 def mult(m):

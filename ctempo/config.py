@@ -72,6 +72,9 @@ DEFAULTS = {
         "drop_samples": 2,
     },
     "display": {
+        # "bars": a small bar per window and words only when they matter;
+        # "classic": the dense line of earlier versions.
+        "style": "bars",
         "symbols": "unicode",  # or "ascii"
         "max_width": 80,
         "color": "auto",  # "auto" honors NO_COLOR, "never", "always"
@@ -151,6 +154,12 @@ def runtime_path():
     return os.path.join(home(), "runtime.json")
 
 
+def stamp_path():
+    """Touched when a reading changes what the band shows; the mod polls its
+    time to redraw at once, not at its next refresh."""
+    return os.path.join(home(), "changed")
+
+
 def log_path():
     return os.path.join(home(), "errors.log")
 
@@ -213,7 +222,11 @@ RANGES = {
     ("write_min_interval_s",): (0, 3600),
     ("db_timeout_ms",): (10, 5000),
 }
-CHOICES = {("display", "symbols"): ("unicode", "ascii"), ("display", "color"): ("auto", "never", "always")}
+CHOICES = {
+    ("display", "style"): ("bars", "classic"),
+    ("display", "symbols"): ("unicode", "ascii"),
+    ("display", "color"): ("auto", "never", "always"),
+}
 
 
 def _num(v):
