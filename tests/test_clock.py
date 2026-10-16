@@ -108,7 +108,7 @@ class WindowsTz(unittest.TestCase):
                                   input=data.encode(), capture_output=True, env=env, timeout=60)
             self.assertEqual((h.returncode, line.returncode), (0, 0), (h.stderr, line.stderr))
             seen[tz] = (h.stdout.strip(), line.stdout.decode().strip())
-        self.assertIn(" @", seen[None][1])
+        self.assertIn(" resets ", seen[None][1])
         self.assertEqual(seen["Europe/Berlin"], seen[None])
 
 
