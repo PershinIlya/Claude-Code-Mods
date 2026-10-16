@@ -72,6 +72,7 @@ WINDOWS = os.name == "nt"
 GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
 PS_FLAGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+OURS = re.compile(r"\b5h [━╍─┈]+ 42%.* Week [━╍─┈]+ 17%")  # the bars line, its bars in UTF-8
 COLUMNS = "120"  # Claude Code sets COLUMNS from its terminal
 SEP = "\u00b7"  # the line's separator: not ASCII, so it shows whether UTF-8 came through intact
 FAILURES = []
@@ -205,12 +206,12 @@ def render(argv, cmd, env):
 
 
 def problems_of(p, lines, utf8, extra):
-    ours = next((s for s in lines if "5h 42%" in s and "wk 17%" in s), None)
+    ours = next((s for s in lines if OURS.search(s)), None)
     out = []
     if p.returncode != 0:
         out.append("exit %d" % p.returncode)
     if ours is None:
-        out.append("no ctempo line (5h 42% ... wk 17%)")
+        out.append("no ctempo line (5h [bar] 42% ... Week [bar] 17%)")
     elif not utf8 or SEP not in ours:
         out.append("UTF-8 garbled on the way (no %r in the line)" % SEP)
     if extra and not any(extra in s for s in lines):
