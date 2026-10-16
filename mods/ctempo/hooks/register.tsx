@@ -494,14 +494,19 @@ export const register: Register = (on) => {
       const waiting = wins.every((w) => w.pct === null)
       const focus = wins.some((w) => w.phrase?.attention)
       const said = (p: Phrase | null) => (p && (L.halves || !p.calm) ? p : null)
+      // The short lead ("Out 15:40") only with the small bars, below 72 cells.
       const words = (p: Phrase) =>
-        L.halves ? [p.pre, p.num, p.post] : [p.narrow_pre ?? p.pre, p.num, p.narrow]
+        L.halves ? [p.pre, p.num, p.post] : [L.W === 64 ? p.pre : (p.narrow_pre ?? p.pre), p.num, p.narrow]
       // Narrow, the Details button makes room for words that need it: 2
-      // windows that need you, or one long phrase ("May run out Sun 22:45").
+      // windows that need you, or one long phrase ("May run out Sun 22:45";
+      // below 56 cells, "Back Fri 04:00"). Below 56, 2 such phrases fit only
+      // without the bars. Measured in Chromium at 7 px a cell, 40 to 140.
+      const squeezed = e.props.bodyColumns < 56
+      const both = wins.filter((w) => w.phrase?.attention).length > 1
       const crowded =
         !L.halves &&
-        (wins.filter((w) => w.phrase?.attention).length > 1 ||
-          wins.some((w) => w.phrase?.attention && words(w.phrase).join('').length > 14))
+        (both ||
+          wins.some((w) => w.phrase?.attention && words(w.phrase).join('').length > (squeezed ? 12 : 14)))
       const button = !waiting && !L.tiny && !crowded
       const open = (await read($, details)) && button
       const toggle = () => update($, details, (v) => !v)
@@ -531,7 +536,7 @@ export const register: Register = (on) => {
                   <Text size="footnote" color="inactive">
                     {L.tiny && w.id === 'wk' ? w.short : w.name}
                   </Text>
-                  {L.bare && focus && !att ? null : (
+                  {(L.bare && focus && !att) || (squeezed && both) ? null : (
                     <Svg source={barSvg(w, L.W)} alt={w.sentence} width={L.W} height={SVG_H} />
                   )}
                   {w.pct === null ? (
