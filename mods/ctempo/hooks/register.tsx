@@ -247,6 +247,10 @@ async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] |
   const current = limits ?? (await $.session.usage()).rateLimits
   const payload = toPayload(await $.session.id(), current)
   const before = await stamp($, rt)
+  // Seen even when the run fails: the poll must not retry a failing run every
+  // 5 s; the refresh timer does, at its own pace.
+  seenLimits = limitsKey(current)
+  seenStamp = before.mtime
   const result = await $.process.run(
     [rt.python, ...rt.args, rt.entry, 'statusline', '--source', 'mod', '--format', 'json'],
     { stdin: JSON.stringify(payload), timeoutMs: RUN_TIMEOUT_MS, env: { CTEMPO_HOME: rt.home } },
@@ -270,11 +274,9 @@ async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] |
   if (!Array.isArray(parsed.segments)) {
     throw new Error(typeof parsed.line === 'string' ? parsed.line : 'unexpected output from ctempo')
   }
-  seenLimits = limitsKey(current)
   // This run's own touch of the stamp is no news; another chat's since is.
   const after = await stamp($, rt)
-  const ours = isNum(parsed.now) && Math.abs(after.ts - parsed.now) < 0.002
-  seenStamp = after.mtime === before.mtime || ours ? after.mtime : before.mtime
+  if (isNum(parsed.now) && Math.abs(after.ts - parsed.now) < 0.002) seenStamp = after.mtime
   const segments = parsed.segments
   await update($, view, () => ({
     line: typeof parsed.line === 'string' ? parsed.line : '',
@@ -322,13 +324,10 @@ async function refresh($: EngineInterface, limits: readonly SessionRateLimit[] |
 // where session.measure waits for a whole point), or the stamp another
 // chat's run touched.
 async function poll($: EngineInterface) {
-  if (running || seenLimits === null) return
-  let rt: Runtime
-  try {
-    rt = await loadRuntime($)
-  } catch {
-    return // the refresh timer reports it
-  }
+  // No runtime yet, or it is being read again after a failure: the refresh
+  // timer does that, and reports why.
+  const rt = runtime
+  if (running || seenLimits === null || rt === null) return
   const limits = (await $.session.usage()).rateLimits
   const now = await stamp($, rt)
   if (limitsKey(limits) !== seenLimits || now.mtime !== seenStamp) await refresh($, limits)

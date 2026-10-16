@@ -8,14 +8,58 @@ both windows: how fast am I spending, how fast can I afford to, and where will
 I land at the reset.
 
 ```
-5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00
+5h ━━━━╍╍╍╍ 55%  resets 16:30 · Week ━━━━╍╍╍╍ 48%  resets Fri
 ```
 
 No network, no token: it reads the rate limits Claude Code already hands to the
 status line, keeps a history in SQLite, and learns your hour-of-week rhythm.
 Python 3.8+ standard library only; macOS, Linux and Windows.
 
-## Reading the line
+## Reading the band
+
+One row per window: its name, a small bar, the percent, and words only when
+there is something to say.
+
+- **The bar.** Solid orange is what you have used. After a thin gap, a pale
+  segment runs to where you will land at the reset; it fades out while the
+  estimate is still rough (the first minutes of work, or an early week). A
+  red segment into a short red wall means you will run out before the reset.
+  In a window's last stretch (its last hour, or the last 2 days of the week),
+  green dots fill quota that will go unused, when that is at least 10 points.
+  A solid red bar means the limit is reached, a grey fill that nothing is
+  moving.
+- **The percent.** Rounded down, as Claude Code's own usage bar shows it.
+  `≈37%` is an estimate: the last reading plus what your current pace spent
+  since, at most 1 point more. When one window needs you, the other one's
+  percent turns grey.
+- **The words.** A window on pace says nothing. With room to spare it says
+  `Can go 2.7x faster` (`about 2x` while the estimate is rough). A window
+  that needs you says one thing in color: `Runs out 15:40` (red; `May run
+  out` in yellow when it is close), `Ease off`, `40% will go unused` (green),
+  `Back at 16:30` when the limit is reached, or `Idle`.
+- **Resets** follow when the band is wide. In a narrower window they, and the
+  calm words, move to the bar's tooltip.
+- **Details** (the button, or `d` when the band has the focus) adds one
+  sentence per window, such as "5-hour: 70% used, resets 16:30. Runs out at
+  15:40, 50 min before the reset. Ease off.", and how old the last reading is.
+
+The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
+unused (`#`, `=`, `.` with `display.symbols: "ascii"`), in color unless
+`NO_COLOR` is set. When it does not fit `display.max_width`, the resets go
+first, then the calm words, then the bars shrink.
+
+A reading is only as new as the last answer Claude got from the API in some
+chat on this machine, so the band can trail Claude Code's own usage bar by a
+point for a moment. The Desktop band checks every 5 seconds for a new reading,
+from its own chat or another one, and redraws at once (D-31).
+
+## The classic line
+
+`display.style: "classic"` brings back the denser line of earlier versions:
+
+```
+5h 62% ×1.4▲ →88% @13:20 · wk 48% +3 ×1.1 →95% @Thu 09:00
+```
 
 | Part | Meaning |
 |---|---|
@@ -45,7 +89,7 @@ at least 10 points about to expire below its target (the reserve that a target
 below 100 keeps never counts; never while the 5h burn rate is not known yet).
 `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
 
-`ctempo now` prints the same with the reasoning behind every number.
+`ctempo now` prints the line with the reasoning behind every number.
 
 ## The math
 
@@ -293,10 +337,11 @@ default):
 | `profile.floor` | 0.15 | off-hour weight relative to a typical awake hour |
 | `profile.override` | null | `{"work_days": [0,1,2,3,4], "wake_hours": [8, 23], "off_day_factor": 0.3, "mode": "prior"}`; days are 0 = Monday; mode `replace` ignores learning |
 | `reset.drop_points`, `reset.drop_samples` | 15, 2 | a sustained drop that counts as a reset |
-| `display.symbols` | `unicode` | `ascii` for `x ^ v ->` |
+| `display.style` | `bars` | the terminal line: `bars`, or `classic` for the dense line of earlier versions |
+| `display.symbols` | `unicode` | `ascii` for `# = .` bars (and `x ^ v ->` in the classic line) |
 | `display.max_width` | 80 | the line drops optional parts to fit, then is cut with `…` (`...` in ascii mode); each part keeps its color |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
-| `mod.refresh_s` | 60 | how often the mod refreshes the band (15 to 3600) |
+| `mod.refresh_s` | 60 | how often the mod refreshes the band when no reading moved (15 to 3600) |
 | `compose.timeout_ms` | 1500 (3000 on Windows) | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 5000 for a slow PowerShell or Git Bash script |
 | `retention_days` | 365 | history kept |
 
@@ -340,9 +385,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 435 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 449 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 45 tests
+claude plugin test mods/ctempo                 # 59 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 
@@ -387,7 +432,8 @@ a check that the Windows section says what the code does).
 
 ```
 bin/ctempo                 launcher (python -I -S safe)
-ctempo/                    the core: store, ingest, pace, weekly, profile, render,
+ctempo/                    the core: store, ingest, pace, weekly, profile, band
+                           (what the band and the line say), render,
                            statusline, commands, install, transcripts, clock
                            (local time), winshell (Windows shells and commands)
 mods/ctempo/               the Desktop mod (TypeScript, thin)
