@@ -608,10 +608,16 @@ test('narrow, 2 windows that need you get the room: short words, no Details butt
   const out = phrase({ pre: 'Runs out ', narrow_pre: 'Out ', num: '05:20', tone: 'error', attention: true })
   const back = phrase({ pre: 'Back ', num: 'Fri 04:00', tone: 'error', attention: true })
   const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: out }), win({ id: 'wk', kind: 'maxed', pct: 100, used: 100, phrase: back })]
-  const { ui } = await drawn($, on, windows, 55)
+  const { ui } = await drawn($, on, windows, 60)
   expect(await ui.find({ type: 'Text', text: 'Out 05:20' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Back Fri 04:00' })).toBeDefined()
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect((await ui.findAll({ type: 'Svg' })).length).toBe(2)
+  const tiny = await $.ui.mount(sized('desktop', 55)) // only without the bars do both phrases fit
+  expect(await tiny.find({ type: 'Svg' })).toBeUndefined()
+  expect(await tiny.find({ type: 'Text', text: 'Out 05:20' })).toBeDefined()
+  const mid = await $.ui.mount(sized('desktop', 80)) // the big bars, and room for the whole lead
+  expect(await mid.find({ type: 'Text', text: 'Runs out 05:20' })).toBeDefined()
   const wide = await $.ui.mount(sized('desktop', 115))
   expect(await wide.find({ type: 'Text', text: 'Runs out 05:20' })).toBeDefined()
   expect(await wide.find({ type: 'Button', text: 'Details' })).toBeDefined()
@@ -619,9 +625,11 @@ test('narrow, 2 windows that need you get the room: short words, no Details butt
 
 test('narrow, a long phrase takes the Details button\'s room; a short form keeps it', async ($, on) => {
   const may = phrase({ pre: 'May run out ', narrow_pre: 'Out ', num: 'Sun 22:45', tone: 'warning', attention: true })
-  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk', kind: 'dry', soft: true, phrase: may })], 55)
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk', kind: 'dry', soft: true, phrase: may })], 60)
   expect(await ui.find({ type: 'Text', text: 'Out Sun 22:45' })).toBeDefined()
   expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined()
+  const squeezed = await $.ui.mount(sized('desktop', 55)) // below 56 cells, 13 characters are long
+  expect(await squeezed.find({ type: 'Button' })).toBeUndefined()
 })
 
 test('narrow, an older CLI without the short form gives a long phrase the button\'s room', async ($, on) => {

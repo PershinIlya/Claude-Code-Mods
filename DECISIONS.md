@@ -615,10 +615,13 @@ review). Widths are thresholds on the band's
 `bodyColumns`, checked in Chromium from 40 to 140 columns: halves with resets
 and calm words from 104, bars 64 px from 72 and 44 px below, no Details button
 and "Wk" below 52, and below 44 a calm window beside one that needs you keeps
-only its name and percent. Narrow, the words that need you take short forms
-("Out 15:40", "Back Fri 04:00"), and when 2 windows need you, or one phrase
-is longer than 14 characters, the Details button leaves its room to them (in
-Chromium at 55 columns both phrases were cut mid-word, found in review).
+only its name and percent. With the small bars the words that need you take
+short forms ("Out 15:40", "Back Fri 04:00"); below 104 cells, when 2 windows
+need you or one phrase is longer than 14 characters (12 below 56 cells), the
+Details button leaves its room to them, and below 56 cells 2 such phrases drop
+the bars (in Chromium at 55 columns both phrases were cut mid-word, found in
+review). The mod's own tree, laid out in Chromium for 17 states at 10 widths
+from 40 to 115 cells, light and dark, cuts no word and stays one 18 px row.
 Resets and calm words that do not fit go to Details (hotkey d, one label in
 both states so the row never shifts), one sentence per window plus how old
 the reading is. The design put them in the bar's tooltip too, which needs an
