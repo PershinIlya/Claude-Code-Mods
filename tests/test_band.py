@@ -116,6 +116,38 @@ class Words(unittest.TestCase):
         self.assertEqual(wk["sentence"], "Week: 80% used, resets Fri 04:00. Runs out Wed 11:00, 1 day 17 h before "
                                          "the reset. Ease off.")
 
+    def test_over_a_target_below_100_is_a_warning_even_when_idle(self):
+        # Review 18: the classic line was yellow at or above a target below
+        # 100 whatever the verdict; the band said a calm grey "Idle".
+        for verdict in ("idle", "unknown"):
+            v = v5(verdict=verdict, used=85, target=80.0, severity="warn", rate=0.0, projected=85, multiplier=None)
+            p = band.phrase(v, NOW)
+            self.assertEqual((words(p), p["tone"], p["attention"]), ("Over your 80% target", "warning", True), verdict)
+            self.assertIn("Over your 80% target.", band.sentence(v, NOW, 85, False))
+
+    def test_nothing_green_for_less_than_a_point(self):
+        # Review 18: with min_free 0 a leftover of 0.6 said "0% will go unused".
+        v = vw(used=99.4, projected=99.4, expire=0.6, severity="opportunity", verdict="on_pace")
+        self.assertEqual(band.bar_kind(v), "run")
+        self.assertIsNone(band.phrase(v, NOW))
+        self.assertNotIn("unused", band.sentence(v, NOW, 99.4, False))
+
+    def test_a_maxed_week_blocks_the_5_hours(self):
+        # Review 18: the week at its limit, and the 5 hours still said "Can go 2.2x faster".
+        h5, wk = band.windows(v5(verdict="speed_up", multiplier=2.2, used=30, projected=70, known_ts=NOW - 100,
+                                 rate=40),
+                              vw(used=100, verdict="maxed", severity="alert", projected=100), NOW)
+        self.assertEqual((h5["kind"], h5["projected"], h5["phrase"], h5["approx"], h5["pct"]),
+                         ("idle", None, None, False, 30))
+        self.assertEqual(h5["sentence"], "5-hour: 30% used, resets 16:30. Blocked by the weekly limit until Fri 04:00.")
+        self.assertEqual(words(wk["phrase"]), "Back Fri 04:00")
+
+    def test_a_milder_run_out_is_soft(self):
+        h5, _ = band.windows(v5(verdict="on_pace", cap_ts=MON + 16 * H, severity="warn"), vw(), NOW)
+        self.assertEqual((h5["kind"], h5["soft"], h5["phrase"]["narrow_pre"]), ("dry", True, "Out "))
+        h5, _ = band.windows(*STATES["runs out"], NOW)
+        self.assertEqual((h5["kind"], h5["soft"]), ("dry", False))
+
     def test_percents_round_down_as_claude_code_shows_them(self):
         self.assertEqual([render.pct(x) for x in (36.7, 36.0, 99.99, 100.0, 0.4)], ["36%", "36%", "99%", "100%", "0%"])
         self.assertEqual(band.windows(v5(used=36.96, known_ts=None), vw(used=31.5), NOW)[0]["pct"], 36)
@@ -165,7 +197,8 @@ class TerminalLine(unittest.TestCase):
         self.assertEqual(self.line("runs out"), "5h ━━━━━━╍╍ 70% Runs out 15:40  resets 16:30 · "
                                                 "Week ━━━━╍╍╍╍ 48%  resets Fri")
         self.assertEqual(self.line("unused", 60), "5h ━╍╍───── 12% · Week ━━━╍╍┈┈┈ 40% 40% unused")
-        self.assertEqual(self.line("maxed", 40), "5h ━━━━━ 100% Back at 16:30 · Wk 52%")
+        self.assertEqual(self.line("maxed", 40), "5h ━━━━━ 100% Back 16:30 · Wk ━━━╍╍ 52%")
+        self.assertEqual(self.line("runs out", 40), "5h ━━━━╍ 70% Out 15:40 · Week ━━╍╍╍ 48%")
         self.assertEqual(self.line("half"), "5h ━━━━╍╍╍╍ 55%  resets 16:30 · Week waiting")
 
     def test_tones(self):
@@ -189,7 +222,8 @@ class TerminalLine(unittest.TestCase):
                     if width >= 40 and state in ("runs out", "maxed", "week dry"):
                         h5, wk = band.windows(*STATES[state], NOW)
                         p = (h5 if h5["phrase"] else wk)["phrase"]
-                        self.assertIn(p["pre"] + p["num"], line, (state, width))
+                        self.assertTrue(p["pre"] + p["num"] in line or p["narrow_pre"] + p["num"] in line,
+                                        (state, width, line))
 
     def test_classic_style_is_kept(self):
         self.cfg["display"]["style"] = "classic"

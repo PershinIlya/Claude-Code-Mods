@@ -224,7 +224,8 @@ function isPhrase(x: unknown): x is Phrase {
   const p = x as Phrase
   return (
     typeof p === 'object' && p !== null && isStr(p.pre) && isStr(p.num) && isStr(p.post) && isStr(p.narrow) &&
-    isStr(p.tone) && typeof p.attention === 'boolean' && typeof p.calm === 'boolean'
+    (p.narrow_pre === undefined || isStr(p.narrow_pre)) && isStr(p.tone) && typeof p.attention === 'boolean' &&
+    typeof p.calm === 'boolean'
   )
 }
 
@@ -377,8 +378,11 @@ function hash(s: string): string {
 
 // The bar of one window, W px wide: used in orange, then after a hairline gap
 // a pale forecast to where it lands at the reset (fading while the estimate
-// is rough); red into a wall when it runs out; green dots over what will go
-// unused; all red when maxed; grey when idle; a sliding pill while waiting.
+// is rough); red into a wall when it runs out (fading when it only may);
+// green dots over what will go unused; all red when maxed; grey when idle; a
+// pill while waiting. Drawn as an image: an interactive frame paints an
+// opaque white box where the app's theme and the system's differ (Chromium's
+// color-scheme rule), so the tooltip's words are in the row and in Details.
 export function barSvg(w: Win, W: number): string {
   const X = (p: number) => (Math.min(100, Math.max(0, p)) / 100) * W
   const pill = (x0: number, x1: number, c: string) =>
@@ -403,7 +407,19 @@ export function barSvg(w: Win, W: number): string {
   if (w.kind === 'maxed') out.push(pill(0, W, 'm'))
   else {
     if (w.kind === 'dry') {
-      out.push(pill(g0, W, 'x'), `<line x1='${W - 1}' y1='1.5' x2='${W - 1}' y2='12.5' class='ctb-bw'/>`)
+      // Red into a wall; a milder run-out (soft) fades, and so does its wall.
+      if (W - g0 >= BH && w.soft) {
+        const id = `ctb${hash(`${w.id}|soft|${w.used}|${W}`)}`
+        out.push(
+          `<linearGradient id='${id}' gradientUnits='userSpaceOnUse' x1='${r1(g0)}' x2='${W}'>` +
+            `<stop offset='.2' style='stop-color:var(--r);stop-opacity:.45'/>` +
+            `<stop offset='1' style='stop-color:var(--r);stop-opacity:.08'/></linearGradient>`,
+          pill(g0, W, `url(#${id})`),
+        )
+      } else if (W - g0 >= BH) out.push(pill(g0, W, 'x'))
+      out.push(
+        `<line x1='${W - 1}' y1='1.5' x2='${W - 1}' y2='12.5' class='ctb-bw'${w.soft ? " style='opacity:.45'" : ''}/>`,
+      )
     } else if (w.kind !== 'idle' && w.projected !== null && p - g0 >= BH) {
       if (w.kind === 'rough') {
         const id = `ctb${hash(`${w.id}|${w.kind}|${w.used}|${w.projected}|${W}`)}`
@@ -477,17 +493,32 @@ export const register: Register = (on) => {
       const L = layout(e.props.bodyColumns)
       const waiting = wins.every((w) => w.pct === null)
       const focus = wins.some((w) => w.phrase?.attention)
-      const open = (await read($, details)) && !waiting && !L.tiny
+      const said = (p: Phrase | null) => (p && (L.halves || !p.calm) ? p : null)
+      const words = (p: Phrase) =>
+        L.halves ? [p.pre, p.num, p.post] : [p.narrow_pre ?? p.pre, p.num, p.narrow]
+      // Narrow, the Details button makes room for words that need it: 2
+      // windows that need you, or one long phrase ("May run out Sun 22:45").
+      const crowded =
+        !L.halves &&
+        (wins.filter((w) => w.phrase?.attention).length > 1 ||
+          wins.some((w) => w.phrase?.attention && words(w.phrase).join('').length > 14))
+      const button = !waiting && !L.tiny && !crowded
+      const open = (await read($, details)) && button
       const toggle = () => update($, details, (v) => !v)
       const row = (
         <Box flexDirection="row" alignItems="center" columnGap="sm">
-          <Box flexDirection="row" alignItems="center" flexGrow={1} flexShrink={1} columnGap={L.halves ? 0 : 'md'}>
+          <Box
+            flexDirection="row"
+            alignItems="center"
+            flexGrow={1}
+            flexShrink={1}
+            columnGap={L.halves && !waiting ? 0 : 'md'}
+          >
             {wins.map((w) => {
-              const p = w.phrase
-              const att = Boolean(p?.attention)
+              const att = Boolean(w.phrase?.attention)
               const dim = focus && !att
-              const said = p && (L.halves || !p.calm) ? p : null
-              const post = said ? (L.halves ? said.post : said.narrow) : ''
+              const p = said(w.phrase)
+              const [pre, num, post] = p ? words(p) : ['', '', '']
               return (
                 <Box
                   key={`ctb-${w.id}`}
@@ -501,9 +532,15 @@ export const register: Register = (on) => {
                     {L.tiny && w.id === 'wk' ? w.short : w.name}
                   </Text>
                   {L.bare && focus && !att ? null : (
-                    <Svg source={barSvg(w, L.W)} alt={w.sentence} width={L.W} height={SVG_H} isInteractive />
+                    <Svg source={barSvg(w, L.W)} alt={w.sentence} width={L.W} height={SVG_H} />
                   )}
-                  {w.pct === null ? null : (
+                  {w.pct === null ? (
+                    waiting ? null : (
+                      <Text size="footnote" color="inactive">
+                        waiting
+                      </Text>
+                    )
+                  ) : (
                     <Text
                       size="footnote"
                       tabular
@@ -513,17 +550,17 @@ export const register: Register = (on) => {
                       {`${w.approx ? '≈' : ''}${w.pct}%`}
                     </Text>
                   )}
-                  {said ? (
+                  {p ? (
                     <Text
                       size="footnote"
                       wrap="truncate-end"
-                      color={said.tone}
-                      weight={said.tone === 'inactive' ? 'regular' : 'medium'}
+                      color={p.tone}
+                      weight={p.tone === 'inactive' ? 'regular' : 'medium'}
                     >
-                      {said.pre}
-                      {said.num ? (
-                        <Text weight="semibold" tabular color={said.tone === 'inactive' ? 'text' : said.tone}>
-                          {said.num}
+                      {pre}
+                      {num ? (
+                        <Text weight="semibold" tabular color={p.tone === 'inactive' ? 'text' : p.tone}>
+                          {num}
                         </Text>
                       ) : null}
                       {post}
@@ -545,9 +582,10 @@ export const register: Register = (on) => {
               </Text>
             ) : null}
           </Box>
-          {waiting || L.tiny ? null : (
-            <Button key="details" plain dimColor hotkey="d" label={open ? 'Hide' : 'Details'} onPress={toggle} />
-          )}
+          {button ? (
+            // One label in both states, so the row never shifts when it toggles.
+            <Button key="details" plain dimColor hotkey="d" label="Details" onPress={toggle} />
+          ) : null}
         </Box>
       )
       ours = open ? (

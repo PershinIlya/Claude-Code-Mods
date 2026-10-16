@@ -12,7 +12,8 @@ export type Phrase = {
   pre: string
   num: string
   post: string
-  // `post` in a narrow band.
+  // `pre` and `post` in a narrow band ("Out 15:40" for "Runs out 15:40").
+  narrow_pre?: string
   narrow: string
   tone: 'inactive' | 'success' | 'warning' | 'error'
   // The window needs you: its words always show, the other percent dims.
@@ -30,6 +31,8 @@ export type Win = {
   pct: number | null
   // The percent is a nowcast (at most 1 point above the last reading).
   approx: boolean
+  // A milder run-out (yellow): the red forecast fades.
+  soft?: boolean
   used: number
   projected: number | null
   reset: string | null

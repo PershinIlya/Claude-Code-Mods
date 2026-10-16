@@ -560,7 +560,9 @@ test('draws a bar, the percent and the reset per window, and no words while on p
   const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk' })])
   const bars = await ui.findAll({ type: 'Svg' })
   expect(bars.length).toBe(2)
-  expect(bars[0]?.props).toMatchObject({ width: 64, height: 14, isInteractive: true })
+  expect(bars[0]?.props).toMatchObject({ width: 64, height: 14 })
+  // An image, not a frame: a frame paints a white box where the app's and the system's themes differ.
+  expect(bars[0]?.props.isInteractive).toBeUndefined()
   expect(String(bars[0]?.props.alt)).toMatch(/^5-hour: 55% used/)
   expect(String(bars[0]?.props.source)).toContain('<title>5-hour: 55% used, resets 16:30.')
   expect(await ui.find({ type: 'Text', text: '55%' })).toMatchObject({ props: { color: 'text', weight: 'medium' } })
@@ -602,6 +604,40 @@ test('tiny: no Details button and Wk; below 44 the calm window keeps its name an
   expect(await bare.find({ type: 'Text', text: '48%' })).toBeDefined()
 })
 
+test('narrow, 2 windows that need you get the room: short words, no Details button', async ($, on) => {
+  const out = phrase({ pre: 'Runs out ', narrow_pre: 'Out ', num: '05:20', tone: 'error', attention: true })
+  const back = phrase({ pre: 'Back ', num: 'Fri 04:00', tone: 'error', attention: true })
+  const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: out }), win({ id: 'wk', kind: 'maxed', pct: 100, used: 100, phrase: back })]
+  const { ui } = await drawn($, on, windows, 55)
+  expect(await ui.find({ type: 'Text', text: 'Out 05:20' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Back Fri 04:00' })).toBeDefined()
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  const wide = await $.ui.mount(sized('desktop', 115))
+  expect(await wide.find({ type: 'Text', text: 'Runs out 05:20' })).toBeDefined()
+  expect(await wide.find({ type: 'Button', text: 'Details' })).toBeDefined()
+})
+
+test('narrow, a long phrase takes the Details button\'s room; a short form keeps it', async ($, on) => {
+  const may = phrase({ pre: 'May run out ', narrow_pre: 'Out ', num: 'Sun 22:45', tone: 'warning', attention: true })
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk', kind: 'dry', soft: true, phrase: may })], 55)
+  expect(await ui.find({ type: 'Text', text: 'Out Sun 22:45' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined()
+})
+
+test('narrow, an older CLI without the short form gives a long phrase the button\'s room', async ($, on) => {
+  const old = phrase({ pre: 'May run out ', num: 'Sun 22:45', tone: 'warning', attention: true })
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk', kind: 'dry', phrase: old })], 55)
+  expect(await ui.find({ type: 'Text', text: 'May run out Sun 22:45' })).toBeDefined()
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+})
+
+test('a window still waiting beside one with data says so', async ($, on) => {
+  const wait = win({ id: 'wk', kind: 'wait', pct: null, used: 0, projected: null, reset: null, reset_ts: null })
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), wait])
+  expect(await ui.find({ type: 'Text', text: 'waiting' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Waiting for/ })).toBeUndefined()
+})
+
 test('the width thresholds', async () => {
   expect(layout(115)).toEqual({ halves: true, W: 64, tiny: false, bare: false })
   expect(layout(103)).toEqual({ halves: false, W: 64, tiny: false, bare: false })
@@ -615,7 +651,7 @@ test('Details opens a sentence per window and says how old the reading is', asyn
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /^5-hour: 55% used, resets 16:30\. On pace, about 95% by then\.$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /about 96% by then\. Updated 3 min ago\.$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Button', text: 'Hide' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined() // the same label: the row never shifts
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()
 })
@@ -633,6 +669,8 @@ test('waiting for the first reading', async ($, on) => {
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /%/ })).toBeUndefined()
   expect(String((await ui.find({ type: 'Svg' }))?.props.source)).toContain('<animate')
+  // Wide, the windows are not halves while waiting, so they keep a gap between them and the words.
+  expect(JSON.stringify(await ui.drawn())).toContain('"columnGap":"md"')
 })
 
 test('an older CLI without windows, or broken ones, gets the text line', async ($, on) => {
@@ -645,7 +683,11 @@ test('the bars draw what each kind means', async () => {
   const svg = (over: Partial<Win>) => barSvg(win({ id: 'h5', ...over }), 64)
   expect(svg({})).toMatch(/class='ctb-bf'/)
   expect(svg({})).not.toMatch(/class='ctb-b[wdmx]'|linearGradient/)
-  expect(svg({ kind: 'dry' })).toMatch(/class='ctb-bx'.*class='ctb-bw'/)
+  expect(svg({ kind: 'dry' })).toMatch(/class='ctb-bx'.*class='ctb-bw'\/>/)
+  const soft = svg({ kind: 'dry', soft: true })
+  expect(soft).toMatch(/linearGradient id='ctb[0-9a-f]{5}'.*stop-color:var\(--r\)/)
+  expect(soft).toMatch(/class='ctb-bw' style='opacity:.45'/)
+  expect(svg({ kind: 'dry', used: 95 })).not.toMatch(/class='ctb-bx'/) // no room left: the wall alone
   expect(svg({ kind: 'expire', used: 40, projected: 60 })).toMatch(/class='ctb-bd'/)
   expect(svg({ kind: 'maxed', used: 100 })).toMatch(/class='ctb-bm'/)
   expect(svg({ kind: 'idle' })).toMatch(/class='ctb-bi'/)
