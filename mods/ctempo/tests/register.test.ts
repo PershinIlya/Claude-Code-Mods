@@ -39,6 +39,8 @@ type Options = {
   exists?: (path: string) => boolean
   // CTEMPO_HOME/changed as the CLI leaves it; absent, the file is missing.
   stamp?: { mtimeMs: number; text: string }
+  // What $.session.surfaces() answers.
+  surfaces?: RenderSurface[]
 }
 
 function stub(on: StubOn, options: Options = {}) {
@@ -46,6 +48,7 @@ function stub(on: StubOn, options: Options = {}) {
   const clock = mock.clock(on, { now: NOW })
   mock.env(on, options.env ?? { HOME: '/home/u' })
   const reads: string[] = []
+  const writes: { path: string; text: string }[] = []
   const runtime =
     options.runtime === undefined
       ? JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/ctempo' })
@@ -67,6 +70,11 @@ function stub(on: StubOn, options: Options = {}) {
     value: { startedAt: NOW - 60_000, context: { window: 200_000 }, rateLimits: options.limits ?? LIMITS },
   }))
   on('session.id', () => ({ value: 'sess-1' }))
+  on('session.surfaces', () => ({ value: options.surfaces ?? ['desktop'] }))
+  on('fs.write', (_$, e) => {
+    writes.push({ path: slashed(e.path), text: e.text })
+    return { value: undefined }
+  })
   const exists = options.exists
   if (exists) on('fs.exists', (_$, e) => ({ value: exists(e.path) }))
   on('process.run', (_$, e) => {
@@ -76,7 +84,7 @@ function stub(on: StubOn, options: Options = {}) {
   on('session.start', () => ({ cwd: '/work' }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['drawn by Claude Code'] }))
-  return { runs, clock, reads }
+  return { runs, clock, reads, writes }
 }
 
 function band(surface: RenderSurface): MountTarget {
@@ -772,4 +780,16 @@ test('a failing run is not retried by the poll, only by the refresh timer', asyn
   expect(runs.length).toBe(2)
   await clock.advance(30_000)
   expect(runs.length).toBe(3)
+})
+
+test('logs which surfaces the session draws on and whether one asked for the band', async ($, on) => {
+  const { clock, writes } = stub(on, { surfaces: [], run: () => cli([win({ id: 'h5' }), win({ id: 'wk' })]) })
+  await $.session.start(start('desktop'))
+  await clock.advance(1)
+  const log = () => writes.filter((w) => w.path.endsWith('/home/u/.claude-tempo/mod.log')).pop()?.text ?? ''
+  expect(log()).toMatch(/sess-1 start: surfaces \[\]\n$/)
+  await $.ui.mount(band('desktop'))
+  expect(log()).toMatch(/band asked on desktop: drawn\n$/)
+  await $.ui.mount(band('terminal'))
+  expect(log()).toMatch(/band asked on terminal: not drawn, not in mod.surfaces \[desktop\]\n$/)
 })
