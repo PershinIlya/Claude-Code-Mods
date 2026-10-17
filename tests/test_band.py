@@ -142,6 +142,28 @@ class Words(unittest.TestCase):
         self.assertEqual(h5["sentence"], "5-hour: 30% used, resets 16:30. Blocked by the weekly limit until Fri 04:00.")
         self.assertEqual(words(wk["phrase"]), "Back Fri 04:00")
 
+    def test_a_run_out_close_to_the_reset_is_on_pace(self):
+        # The person's first day: week 17%, the window average stretched over
+        # the week ran out 50 min before Friday's reset, and the band said "Out".
+        reset = int(MON + 4 * D + 4 * H)
+        v = vw(used=17, verdict="on_pace", multiplier=0.98, projected=100, dry_ts=reset - 50 * 60,
+               severity="warn", intensity_source="window", E=0.83)
+        self.assertIsNone(band.phrase(v, NOW))
+        self.assertEqual(band.bar_kind(v), "rough")
+        self.assertIn("On pace", band.sentence(v, NOW, 17, False))
+        h5 = v5(used=80, verdict="on_pace", cap_ts=int(MON + 16 * H + 25 * 60), severity="warn")  # 5 min early
+        self.assertIsNone(band.phrase(h5, NOW))
+        h5 = v5(used=80, verdict="on_pace", cap_ts=int(MON + 16 * H), severity="warn")  # 30 min early
+        self.assertEqual(words(band.phrase(h5, NOW)), "May run out 16:00")
+
+    def test_early_in_the_week_the_window_average_is_rough(self):
+        early = vw(used=17, verdict="slow_down", multiplier=0.7, projected=100, dry_ts=MON + 2 * D,
+                   severity="alert", intensity_source="window", E=0.85)
+        p = band.phrase(early, NOW)
+        self.assertEqual((words(p), p["tone"]), ("May run out Wed 00:00", "warning"))
+        later = dict(early, E=0.5)
+        self.assertEqual(band.phrase(later, NOW)["tone"], "error")
+
     def test_a_milder_run_out_is_soft(self):
         h5, _ = band.windows(v5(verdict="on_pace", cap_ts=MON + 16 * H, severity="warn"), vw(), NOW)
         self.assertEqual((h5["kind"], h5["soft"], h5["phrase"]["narrow_pre"]), ("dry", True, "Out "))

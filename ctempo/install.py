@@ -337,7 +337,7 @@ def probe_full(py):
             return False, None, None, None, str(e), None
         ms = (time.perf_counter() - t) * 1000
         if code != 0:
-            return False, None, None, None, (se.strip().splitlines() or ["failed"])[-1], None
+            return False, None, None, None, _probe_failure(se), None
         out = so.strip()
         best = ms if best is None else min(best, ms)
     try:
@@ -348,6 +348,16 @@ def probe_full(py):
     if (major, minor) < (3, 8):
         return False, ver, sq, best, "Python 3.8+ required", exe
     return True, ver, sq, best, "", exe
+
+
+def _probe_failure(stderr):
+    """Why a candidate failed the probe, in words. Python 2 (and 3 before 3.4)
+    has no -I and answers with its usage text, whose last line was all we
+    showed: Try `python -h' for more information."""
+    text = stderr.strip()
+    if re.search(r"Unknown option:? -I|unknown option -I|^usage: ", text, re.M | re.I):
+        return "too old: Python 3.8+ required (this one has no -I flag, as Python 2 or before 3.4)"
+    return (text.splitlines() or ["failed"])[-1]
 
 
 def _pin(py, exe):

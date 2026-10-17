@@ -2728,3 +2728,13 @@ class WindowsReadme(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProbeFailure(unittest.TestCase):
+    def test_python_2_says_it_is_too_old(self):
+        # Review 18: the installer showed Python 2.7's last usage line,
+        # "Try `python -h' for more information.", as the reason.
+        se = "Unknown option: -I\nusage: /usr/bin/python [option] ... [-c cmd | -m mod | file | -] [arg] ...\n" \
+             "Try `python -h' for more information.\n"
+        self.assertIn("Python 3.8+ required", install._probe_failure(se))
+        self.assertEqual(install._probe_failure("boom\nModuleNotFoundError: sqlite3\n"), "ModuleNotFoundError: sqlite3")
