@@ -81,8 +81,8 @@ class MenuBar(TempHome):
                 mock.patch.object(usagecmd, "fetch", side_effect=lambda now: real(now, run=lambda: (OUTPUT, 0))):
             menubar.show(cfg)
         lines = out.getvalue().splitlines()
-        self.assertTrue(lines[0].startswith("5h 11% · Wk 20%"), out.getvalue())
-        self.assertIn("Checked with /usage just now | size=11 color=%s" % menubar.DIM, lines)
+        self.assertTrue(lines[0].startswith("11% · 20% | image="), out.getvalue())
+        self.assertIn("Updated just now, checked just now | size=11 color=%s" % menubar.DIM, lines)
 
     def test_off_by_default(self):
         self.assertEqual(config.load()["menubar"]["fetch_usage_min"], 0)
