@@ -83,14 +83,27 @@ def level(v, now):
     return used, False
 
 
+# A run-out this close to the reset is on pace: the forecast is not that exact.
+ON_PACE_MARGIN_S = {FIVE_HOUR: 10 * 60, SEVEN_DAY: 6 * 3600}
+# Early in a week paced from the window alone (no profile, no recent hours to
+# go by), one day's work is stretched over the rest: a rough estimate.
+EARLY_WEEK_E = 0.75
+
+
 def _rough(v):
     if v["window"] == FIVE_HOUR:
         return v.get("rate_source") == "interpolated"
-    return v.get("intensity_source") in ("typical", "assumed")
+    source = v.get("intensity_source")
+    return source in ("typical", "assumed") or (source == "window" and (v.get("E") or 0) > EARLY_WEEK_E)
 
 
 def _out(v):
-    return v.get("cap_ts") if v["window"] == FIVE_HOUR else v.get("dry_ts")
+    """When the window runs out before its reset, or None: not when that is
+    within the margin of the reset."""
+    out = v.get("cap_ts") if v["window"] == FIVE_HOUR else v.get("dry_ts")
+    if out and v.get("reset_ts") and v["reset_ts"] - out <= ON_PACE_MARGIN_S[v["window"]]:
+        return None
+    return out
 
 
 def _unused(v):

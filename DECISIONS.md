@@ -635,6 +635,14 @@ which also draws the terminal line with text bars (`━` used, `╍` forecast,
 `┈` unused; `#`, `=`, `.` in ascii mode), dropping resets, then calm words,
 then bar width, then "Week" for "Wk" to fit `display.max_width`.
 
+**D-30a. Run-outs at the reset.** On the person's first day the band read
+"Week 17% Out Fri 04:09": the window average, one working day stretched over
+the week, ran out 50 minutes before Friday's reset. The band now calls a
+run-out within 10 minutes (5 hours) or 6 hours (week) of the reset on pace,
+and a week paced from the window average while more than 75% of its expected
+spend is still ahead is a rough estimate ("May run out", in yellow, its
+forecast fading). The verdicts, `check` and the classic line are unchanged.
+
 **D-31. Freshness.** The band lagged Claude Code's own usage bar by a point
 (36 against 37) because a reading is only as new as the last API response of
 some local chat, and other chats' readings reached a band only at its next
