@@ -677,6 +677,11 @@ names, so Python 3.9 or later) as readings of a session "usage-cmd": account
 levels whatever ran them, with no credential in ctempo's hands (D-04 still
 holds: Claude Code makes the request). On the person's Mac it took about 6 s.
 That it spends no quota is inferred (a local command), and is to be watched.
+The menu bar also posts a macOS notification (osascript) for the events
+worth acting on, once per window instance and kind: runs out (red, not the
+milder "may"), reached, will go unused; never from readings over 30 minutes
+old. Push to a phone (ntfy, as ccpace does) is left out: the numbers would pass
+through a third-party service.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.

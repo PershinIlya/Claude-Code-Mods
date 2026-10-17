@@ -115,3 +115,30 @@ class Plugin(TempHome):
                            capture_output=True, text=True, env=dict(os.environ, CTEMPO_HOME=self.dir), timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("\n---\n", p.stdout)
+
+
+class Notify(TempHome):
+    def test_what_is_worth_a_notification(self):
+        def titles(state):
+            return [t for _, t, _ in menubar.events(band.windows(*STATES[state], NOW))]
+
+        self.assertEqual(titles("runs out"), ["5-hour limit runs out at 15:40"])
+        self.assertEqual(titles("maxed"), ["5-hour limit reached, back at 16:30"])
+        self.assertEqual(titles("unused"), ["Weekly: 40% will go unused"])
+        self.assertEqual(titles("week dry"), ["Weekly limit runs out Wed 11:00"])
+        for calm in ("on pace", "early", "idle", "half"):
+            self.assertEqual(titles(calm), [], calm)
+
+    def test_once_per_window_and_never_from_old_readings(self):
+        ws = band.windows(*STATES["runs out"], NOW)
+        sent = []
+        send = lambda title, body: sent.append((title, body))  # noqa: E731
+        self.assertEqual(menubar.notify(self.st, ws, NOW - 3 * H, NOW, send), [])  # 3 h old: nothing
+        menubar.notify(self.st, ws, NOW - 60, NOW, send)
+        menubar.notify(self.st, ws, NOW, NOW + 60, send)
+        self.assertEqual(len(sent), 1)
+        self.assertTrue(sent[0][1].startswith("5-hour: 70% used"), sent[0])
+
+    def test_a_lone_waiting_window_reads_waiting(self):
+        out = menubar.lines(band.windows(*STATES["half"], NOW), NOW - 60, NOW, self.cfg)
+        self.assertIn("Week waiting | font=Menlo size=12 trim=false", out)
