@@ -69,9 +69,11 @@ open -a SwiftBar                  # once: it asks for a plugin folder
 ctempo menubar --install          # writes ctempo.1m.sh into that folder
 ```
 
-The menu bar then reads `5h 22% · Wk 18%`, in red, yellow or green when a
-window needs you (`5h 70% Out 15:40 · Wk 48%`); a click shows each window's bar
-and sentence, and how old the readings are. It refreshes every minute and
+The menu bar then shows two small bars, the 5 hours on top and the week below,
+with `22% · 18%` beside them, in red, yellow or green when a window needs you
+(`70% Out 15:40 · 48%`). A click shows each window's bar as the Desktop band
+draws it, its words and reset, and how old the readings are; the full sentence
+is the bar's tooltip. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
 records nothing itself: the readings come from Claude Code sessions on this
 Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
@@ -424,7 +426,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 480 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 483 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 64 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

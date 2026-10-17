@@ -92,7 +92,8 @@ DEFAULTS = {
     # Claude Code's own /usage for the account's levels (0: never).
     # notify: a macOS notification when a limit will run out or is reached,
     # or quota will go unused (once per window).
-    "menubar": {"fetch_usage_min": 0, "notify": True},
+    # style: "bars" draws the bars as pictures, "text" as plain text.
+    "menubar": {"fetch_usage_min": 0, "notify": True, "style": "bars"},
     "retention_days": 365,
     "write_min_interval_s": 60,
     "db_timeout_ms": 250,
@@ -230,6 +231,7 @@ RANGES = {
 }
 CHOICES = {
     ("display", "style"): ("bars", "classic"),
+    ("menubar", "style"): ("bars", "text"),
     ("display", "symbols"): ("unicode", "ascii"),
     ("display", "color"): ("auto", "never", "always"),
 }

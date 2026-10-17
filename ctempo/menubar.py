@@ -5,10 +5,10 @@ what it prints: the first line in the menu bar, the lines after `---` in the
 menu that opens on a click. The script `ctempo menubar --install` writes
 runs `ctempo menubar`, which reads the store and prints
 
-  5h 22% · Wk 18%                      (red, yellow or green when a window needs you)
-  ---
-  5h ━╍╍───── 22% 77% will go unused   (each window, as the terminal line draws it)
-  5-hour: 22% used, resets 12:00. ...  (the sentence Details shows)
+  [two small bars] 22% · 18%             (5 hours on top; red, yellow or green words
+  ---                                       when a window needs you)
+  [bar] 5-hour   22%                       (each window's bar as a picture, as the
+        77% will go unused · resets 12:00   Desktop band draws it, its words and reset)
   ...
   Updated 2 min ago
 
@@ -38,7 +38,70 @@ RANK = ("success", "warning", "error")
 
 def lines(ws, updated, now, cfg, checked=None, note=None):
     """SwiftBar's output for the windows: the title, `---`, the menu.
-    `checked`: when /usage last answered (usagecmd); `note`: why it did not."""
+    `checked`: when /usage last answered (usagecmd); `note`: why it did not.
+    menubar.style "bars" (the default) draws the bars as pictures; "text"
+    is the plain text of earlier versions."""
+    if cfg.get("menubar", {}).get("style", "bars") == "text":
+        return text_lines(ws, updated, now, cfg, checked, note)
+    from . import menuart
+
+    waiting = all(w["pct"] is None for w in ws)
+    newest = max([t for t in (updated, checked) if t is not None] or [0])
+    stale = not newest or now - newest > STALE_S
+    parts, tones = [], []
+    for w in ws:
+        if w["pct"] is None:
+            parts.append("-")
+            continue
+        part = "%s%d%%" % ("~" if w["approx"] else "", w["pct"])
+        p = w.get("phrase")
+        if p and p["attention"]:
+            if p["tone"] != "success":  # green says it by color; its words are in the menu
+                part += " " + p["narrow_pre"] + p["num"] + p["narrow"]
+            tones.append(p["tone"])
+        parts.append(part)
+    worst = max(tones, key=RANK.index) if tones else None
+    color = TONE[worst] if worst else (DIM if stale or waiting else None)
+    pic = "image=%s,%s width=24 height=18" % (menuart.icon(ws, False), menuart.icon(ws, True))
+    title = ("" if waiting else " · ".join(parts)) + " | " + pic + (" color=" + color if color else "")
+    out = [title, "---"]
+    if waiting:
+        out.append("Waiting for the first reading: start a Claude Code session | size=12")
+    for w in ws if not waiting else []:
+        name = "5-hour" if w["id"] == "h5" else "Week"
+        img = "image=%s,%s width=120 height=14" % (menuart.bar(w, 120, 14, False), menuart.bar(w, 120, 14, True))
+        head = "%s   %s" % (name, "waiting" if w["pct"] is None else "%s%d%%" % ("~" if w["approx"] else "", w["pct"]))
+        out.append("%s | %s size=13 tooltip=%s" % (head, img, w["sentence"].replace("|", "/")))
+        out.append("%s | size=11 color=%s" % (summary(w), TONE.get((w.get("phrase") or {}).get("tone"), DIM)))
+    out.append("---")
+    times = []
+    if updated is not None:
+        times.append(age(now - updated))
+    if checked is not None:
+        times.append("checked " + age(now - checked)[8:])
+    if times:
+        out.append("%s | size=11 color=%s" % (", ".join(times), DIM))
+    if note:
+        out.append("%s | size=11 color=%s" % (note, TONE["warning"]))
+    if stale and not waiting and checked is None:
+        out.append("Readings come from Claude Code sessions on this Mac | size=11 color=%s" % DIM)
+    out.append("Refresh | refresh=true")
+    return out
+
+
+def summary(w):
+    """The second line of a window in the menu: its words, and the reset."""
+    if w["pct"] is None:
+        return w["sentence"]
+    p = w.get("phrase")
+    words = (p["pre"] + p["num"] + p["post"]) if p else ("Limit reached" if w["kind"] == "maxed" else "On pace")
+    if w["kind"] == "maxed" or not w.get("reset"):
+        return words
+    return "%s · resets %s" % (words, w["reset"])
+
+
+def text_lines(ws, updated, now, cfg, checked=None, note=None):
+    """The plain text menu (menubar.style "text")."""
     title_parts, tones = [], []
     for w in ws:
         short = "5h" if w["id"] == "h5" else "Wk"

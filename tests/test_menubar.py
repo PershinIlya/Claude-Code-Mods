@@ -16,33 +16,46 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class Lines(TempHome):
-    def out(self, state, updated=NOW - 60):
-        return menubar.lines(band.windows(*STATES[state], NOW), updated, NOW, self.cfg)
+    def out(self, state, updated=NOW - 60, cfg=None):
+        return menubar.lines(band.windows(*STATES[state], NOW), updated, NOW, cfg or self.cfg)
 
-    def test_a_calm_title_is_plain_and_the_menu_has_each_window(self):
+    def test_a_calm_title_is_two_bars_and_the_numbers(self):
         out = self.out("on pace")
-        self.assertEqual(out[0], "5h 55% · Wk 48%")
+        self.assertRegex(out[0], r"^55% · 48% \| image=[A-Za-z0-9+/=]+,[A-Za-z0-9+/=]+ width=24 height=18$")
         self.assertEqual(out[1], "---")
-        self.assertEqual(out[2], "5h ━━━━╍╍╍╍ 55%  resets 16:30 | font=Menlo size=12 trim=false")
-        self.assertTrue(out[3].startswith("5-hour: 55% used, resets 16:30. On pace"), out[3])
+        self.assertRegex(out[2], r"^5-hour   55% \| image=\S+ width=120 height=14 size=13 tooltip=5-hour: 55% used")
+        self.assertEqual(out[3], "On pace · resets 16:30 | size=11 color=%s" % menubar.DIM)
+        self.assertEqual(out[5], "On pace · resets Fri | size=11 color=%s" % menubar.DIM)
         self.assertIn("Updated 1 min ago | size=11 color=%s" % menubar.DIM, out)
         self.assertEqual(out[-1], "Refresh | refresh=true")
 
     def test_a_window_that_needs_you_colors_the_title(self):
-        self.assertEqual(self.out("runs out")[0], "5h 70% Out 15:40 · Wk 48% | color=" + menubar.TONE["error"])
-        self.assertEqual(self.out("unused")[0], "5h 12% · Wk 40% 40% unused | color=" + menubar.TONE["success"])
-        self.assertEqual(self.out("maxed")[0], "5h 100% Back 16:30 · Wk 52% | color=" + menubar.TONE["error"])
+        title = self.out("runs out")[0]
+        self.assertTrue(title.startswith("70% Out 15:40 · 48% | image="), title)
+        self.assertTrue(title.endswith(" color=" + menubar.TONE["error"]), title)
+        self.assertEqual(self.out("runs out")[3], "Runs out 15:40 · resets 16:30 | size=11 color=%s" % menubar.TONE["error"])
+        title = self.out("unused")[0]  # green: the color says it, the words are in the menu
+        self.assertTrue(title.startswith("12% · 40% | image="), title)
+        self.assertTrue(title.endswith(" color=" + menubar.TONE["success"]), title)
+        self.assertTrue(self.out("maxed")[0].startswith("100% Back 16:30 · 52% | image="))
+        self.assertEqual(self.out("maxed")[3], "Back at 16:30 | size=11 color=%s" % menubar.TONE["error"])
 
     def test_old_readings_dim_the_title_and_say_where_they_come_from(self):
         out = self.out("on pace", updated=NOW - 2 * H)
-        self.assertEqual(out[0], "5h 55% · Wk 48% | color=" + menubar.DIM)
+        self.assertTrue(out[0].endswith(" color=" + menubar.DIM), out[0])
         self.assertIn("Updated 2 h ago | size=11 color=%s" % menubar.DIM, out)
         self.assertTrue(any(line.startswith("Readings come from Claude Code sessions") for line in out))
 
     def test_waiting(self):
         out = menubar.lines(band.windows({}, {}, NOW), None, NOW, self.cfg)
-        self.assertEqual(out[0], "ctempo | color=%s" % menubar.DIM)
+        self.assertTrue(out[0].startswith(" | image=") and out[0].endswith(" color=" + menubar.DIM), out[0])
         self.assertTrue(out[2].startswith("Waiting for the first reading"))
+
+    def test_the_text_style_is_kept(self):
+        cfg = dict(self.cfg, menubar=dict(self.cfg["menubar"], style="text"))
+        out = self.out("runs out", cfg=cfg)
+        self.assertEqual(out[0], "5h 70% Out 15:40 · Wk 48% | color=" + menubar.TONE["error"])
+        self.assertEqual(out[2], "5h ━━━━━━╍╍ 70% Runs out 15:40  resets 16:30 | font=Menlo size=12 trim=false")
 
     def test_no_pipe_reaches_swiftbar_from_the_words(self):
         # SwiftBar reads " | " as the start of a line's parameters.
@@ -62,7 +75,7 @@ class Show(TempHome):
         with contextlib.redirect_stdout(out), mock.patch("time.time", return_value=MON + H + 1600):
             self.assertEqual(menubar.show(self.cfg), 0)
         lines = out.getvalue().splitlines()
-        self.assertTrue(lines[0].startswith("5h 15% · Wk 30%"), lines[0])
+        self.assertTrue(lines[0].startswith("15% · 30% | image="), lines[0])
         self.assertEqual(self.st.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], count)
 
     def test_no_database_yet_is_waiting(self):
@@ -71,7 +84,7 @@ class Show(TempHome):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(menubar.show(self.cfg), 0)
-        self.assertTrue(out.getvalue().startswith("ctempo | color="))
+        self.assertTrue(out.getvalue().startswith(" | image="))
 
 
 class Plugin(TempHome):
@@ -86,7 +99,7 @@ class Plugin(TempHome):
             env = {k: v for k, v in os.environ.items() if k != "CTEMPO_HOME"}
             p = subprocess.run(["sh", path], capture_output=True, text=True, env=env, timeout=60)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertTrue(p.stdout.startswith("ctempo") or p.stdout.startswith("5h"), p.stdout)
+            self.assertIn(" | image=", p.stdout.splitlines()[0])
         with contextlib.redirect_stdout(io.StringIO()):
             menubar.uninstall()
         self.assertFalse(os.path.exists(path))
@@ -141,4 +154,35 @@ class Notify(TempHome):
 
     def test_a_lone_waiting_window_reads_waiting(self):
         out = menubar.lines(band.windows(*STATES["half"], NOW), NOW - 60, NOW, self.cfg)
-        self.assertIn("Week waiting | font=Menlo size=12 trim=false", out)
+        self.assertTrue(any(line.startswith("Week   waiting | image=") for line in out), out)
+
+
+class Pictures(TempHome):
+    def test_bars_are_png_at_twice_the_point_size(self):
+        import base64
+        import struct
+        import zlib
+
+        from ctempo import menuart
+
+        for state in STATES:
+            for w in band.windows(*STATES[state], NOW):
+                data = base64.b64decode(menuart.bar(w, 120, 14, dark=False))
+                self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertEqual(struct.unpack(">II", data[16:24]), (240, 28))
+                idat = data[data.index(b"IDAT") + 4:data.index(b"IEND") - 8]
+                self.assertEqual(len(zlib.decompress(idat)), 28 * (1 + 240 * 4))
+
+    def test_each_kind_draws_its_own_colors(self):
+        from ctempo import menuart
+        from ctempo.png import Canvas
+
+        def colors(state, i):
+            w = band.windows(*STATES[state], NOW)[i]
+            c = Canvas(240, 28)
+            menuart._draw(c, w, 0.5, 4.5, 118.5, 5, False)
+            return {tuple(int(v) for v in p[:3]) for p in c.px if p[3] > 0.95}
+
+        self.assertIn((217, 119, 87), colors("on pace", 0))  # orange: used
+        self.assertIn((208, 86, 76), colors("maxed", 0))  # red: reached
+        self.assertIn((91, 156, 100), colors("unused", 1))  # green dots
