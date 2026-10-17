@@ -57,6 +57,8 @@ def build_parser():
     s.add_argument("--install", nargs="?", const="", default=None, metavar="FOLDER",
                    help="write the SwiftBar plugin (default: the plugin folder SwiftBar uses)")
     s.add_argument("--uninstall", nargs="?", const="", default=None, metavar="FOLDER", help="remove it")
+    s.add_argument("--fetch", type=float, default=None, metavar="MIN",
+                   help="every MIN minutes ask Claude Code's /usage for the levels (0: never, the default)")
 
     s = sub.add_parser("config", help="show the effective config")
     s.add_argument("action", nargs="?", default="show", choices=["show", "init", "path"])

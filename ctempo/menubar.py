@@ -36,8 +36,9 @@ DIM = "#8a867c,#a3a19a"
 RANK = ("success", "warning", "error")
 
 
-def lines(ws, updated, now, cfg):
-    """SwiftBar's output for the windows: the title, `---`, the menu."""
+def lines(ws, updated, now, cfg, checked=None, note=None):
+    """SwiftBar's output for the windows: the title, `---`, the menu.
+    `checked`: when /usage last answered (usagecmd); `note`: why it did not."""
     title_parts, tones = [], []
     for w in ws:
         short = "5h" if w["id"] == "h5" else "Wk"
@@ -51,7 +52,8 @@ def lines(ws, updated, now, cfg):
             tones.append(p["tone"])
         title_parts.append(part)
     waiting = all(w["pct"] is None for w in ws)
-    stale = updated is None or now - updated > STALE_S
+    newest = max([t for t in (updated, checked) if t is not None] or [0])
+    stale = not newest or now - newest > STALE_S
     if waiting:
         title = "ctempo | color=%s" % DIM
     else:
@@ -71,7 +73,11 @@ def lines(ws, updated, now, cfg):
     out.append("---")
     if updated is not None:
         out.append("%s | size=11 color=%s" % (age(now - updated), DIM))
-    if stale and not waiting:
+    if checked is not None:
+        out.append("Checked with /usage %s | size=11 color=%s" % (age(now - checked)[8:], DIM))
+    if note:
+        out.append("%s | size=11 color=%s" % (note, TONE["warning"]))
+    if stale and not waiting and checked is None:
         out.append("Readings come from Claude Code sessions on this Mac | size=11 color=%s" % DIM)
     out.append("Refresh | refresh=true")
     return out
@@ -90,18 +96,29 @@ def age(s):
 def show(cfg):
     from .commands import _open, views
 
+    from . import usagecmd
+
     now = time.time()
+    note = None
     try:
-        st = _open()
+        every = cfg.get("menubar", {}).get("fetch_usage_min", 0)
+        st = _open(create=bool(every))
+        if st is not None and usagecmd.due(st, now, every):
+            st.close()
+            ok, msg = usagecmd.fetch(now)
+            note = None if ok else "/usage: " + msg
+            st = _open()
+        checked = None
         if st is None:
             ws, updated = band.windows({}, {}, now), None
         else:
             try:
                 v5, vw, _ = views(st, cfg, now)
+                checked = st.meta_get("usage_cmd_ok_at") if every else None
             finally:
                 st.close()
             ws, updated = band.windows(v5, vw, now), band.updated(v5, vw)
-        out = lines(ws, updated, now, cfg)
+        out = lines(ws, updated, now, cfg, checked, note)
     except Exception as e:  # the menu bar shows why instead of nothing
         out = ["ctempo ! | color=%s" % TONE["warning"], "---", "ctempo: %s | size=12" % str(e)[:200],
                "Refresh | refresh=true"]
@@ -207,6 +224,12 @@ def remove(path):
 
 
 def main(args, cfg):
+    if args.fetch is not None:
+        path = config.set_value(("menubar", "fetch_usage_min"), args.fetch)
+        print("Every %g min the menu bar asks Claude Code's /usage for your levels (%s)." % (args.fetch, path)
+              if args.fetch > 0 else "The menu bar no longer runs /usage (%s)." % path)
+        if args.install is None and args.uninstall is None:
+            return 0
     if args.install is not None:
         return install(args.install or None)
     if args.uninstall is not None:

@@ -77,6 +77,15 @@ Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
 `ctempo menubar --uninstall` (or `ctempo uninstall --apply`) removes it.
 
+To keep the numbers fresh while you work in chats, Cowork or cloud sessions,
+let the menu bar ask Claude Code itself: `ctempo menubar --fetch 10` runs
+`claude -p "/usage"` at most every 10 minutes (about 6 s each, in the
+background of the refresh) and records the account's levels it prints, as
+readings from a session of its own. ctempo never sees a credential: Claude
+Code makes the request with its own login. The menu then also says when
+`/usage` last answered. `ctempo menubar --fetch 0` turns it off (the default).
+It needs Python 3.9 or later (time zones).
+
 ## The classic line
 
 `display.style: "classic"` brings back the denser line of earlier versions:
@@ -409,7 +418,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 466 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 474 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 64 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
