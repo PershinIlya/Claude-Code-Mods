@@ -56,6 +56,27 @@ chat on this machine, so the band can trail Claude Code's own usage bar by a
 point for a moment. The Desktop band checks every 5 seconds for a new reading,
 from its own chat or another one, and redraws at once (D-31).
 
+## The menu bar (macOS)
+
+The band shows only in Claude Code (the Desktop Code tab, the terminal). To
+see the pace anywhere, in a regular chat or another app, ctempo can put it in
+the macOS menu bar through [SwiftBar](https://swiftbar.app), a free menu bar
+app:
+
+```sh
+brew install --cask swiftbar      # or download it from swiftbar.app
+open -a SwiftBar                  # once: it asks for a plugin folder
+ctempo menubar --install          # writes ctempo.1m.sh into that folder
+```
+
+The menu bar then reads `5h 22% · Wk 18%`, in red, yellow or green when a
+window needs you (`5h 70% Out 15:40 · Wk 48%`); a click shows each window's bar
+and sentence, and how old the readings are. It refreshes every minute and
+records nothing itself: the readings come from Claude Code sessions on this
+Mac (the status line and the Desktop mod), so while none runs the numbers
+grow old, the title turns grey after 30 minutes and the menu says so.
+`ctempo menubar --uninstall` (or `ctempo uninstall --apply`) removes it.
+
 ## The classic line
 
 `display.style: "classic"` brings back the denser line of earlier versions:
@@ -388,7 +409,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 455 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 466 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 64 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

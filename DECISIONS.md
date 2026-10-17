@@ -657,6 +657,20 @@ chats on one store put ctempo below the native bar 5% of the time in steady
 work (13% with sparse responses, 59% without the nowcast) and above it at most
 1%. Exact agreement needs the usage endpoint, which is left out (D-04).
 
+**D-32. Where the band can show.** A mod draws only where the app attaches a
+surface to the session. Tested on the person's Mac (desktop app 2.42304.0,
+Claude Code 2.1.302): a local session in the Code tab draws (`desktop`), and so
+does the terminal; a cloud session viewed in the same app loads the mod, and
+the mod reads the rate limits, but `$.session.surfaces()` is empty and
+`$.ui.open` answers "no-surface", so nothing it draws (band, status, toast,
+pane) is shown; regular chats run no Claude Code at all. The mod now logs, to
+`CTEMPO_HOME/mod.log`, the surfaces each session draws on and whether one asked
+for the band, and `ctempo doctor` prints the end of it. For everything outside
+Claude Code, `ctempo menubar` prints the band as a SwiftBar plugin for the macOS
+menu bar: read only, from the store, refreshed every minute; its readings are
+as old as the last Claude Code session's on that Mac, which the title (grey
+after 30 minutes) and the menu say.
+
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
 
