@@ -88,6 +88,9 @@ DEFAULTS = {
     # Surfaces where the mod draws its band. The terminal already has the
     # statusLine, so it is left out by default.
     "mod": {"surfaces": ["desktop"], "refresh_s": 60},
+    # The macOS menu bar (ctempo menubar): every this many minutes it asks
+    # Claude Code's own /usage for the account's levels (0: never).
+    "menubar": {"fetch_usage_min": 0},
     "retention_days": 365,
     "write_min_interval_s": 60,
     "db_timeout_ms": 250,
@@ -218,6 +221,7 @@ RANGES = {
     ("display", "max_width"): (20, 400),
     ("compose", "timeout_ms"): (0, 10000),
     ("mod", "refresh_s"): (15, 3600),
+    ("menubar", "fetch_usage_min"): (0, 1440),
     ("retention_days",): (7, 3650),
     ("write_min_interval_s",): (0, 3600),
     ("db_timeout_ms",): (10, 5000),
@@ -317,6 +321,28 @@ def target(cfg, window):
     except (TypeError, ValueError):
         t = 100.0
     return min(100.0, max(1.0, t))
+
+
+def set_value(keys, value, path=None):
+    """Set one key in config.json, keeping everything else in the file."""
+    path = path or config_path()
+    try:
+        user = _read(path)
+    except FileNotFoundError:
+        user = {}
+    if not isinstance(user, dict):
+        raise ValueError("%s is not a JSON object" % path)
+    d = user
+    for k in keys[:-1]:
+        if not isinstance(d.get(k), dict):
+            d[k] = {}
+        d = d[k]
+    d[keys[-1]] = value
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(user, f, indent=2)
+        f.write("\n")
+    return path
 
 
 def write_defaults(path=None):

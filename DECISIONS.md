@@ -669,7 +669,14 @@ for the band, and `ctempo doctor` prints the end of it. For everything outside
 Claude Code, `ctempo menubar` prints the band as a SwiftBar plugin for the macOS
 menu bar: read only, from the store, refreshed every minute; its readings are
 as old as the last Claude Code session's on that Mac, which the title (grey
-after 30 minutes) and the menu say.
+after 30 minutes) and the menu say. With `menubar.fetch_usage_min` above 0
+(`ctempo menubar --fetch 10`, off by default) the menu bar runs
+`claude -p "/usage"`, Claude Code's own usage command, at most that often and
+records the levels it prints (whole percents, resets read in the IANA zone it
+names, so Python 3.9 or later) as readings of a session "usage-cmd": account
+levels whatever ran them, with no credential in ctempo's hands (D-04 still
+holds: Claude Code makes the request). On the person's Mac it took about 6 s.
+That it spends no quota is inferred (a local command), and is to be watched.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
