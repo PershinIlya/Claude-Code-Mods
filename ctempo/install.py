@@ -1478,6 +1478,11 @@ def uninstall(args, out=print):
                     if lp and os.path.exists(lp) and _is_launcher(lp):
                         os.remove(lp)
                         out("Removed launcher %s" % lp)
+                from . import menubar
+
+                mp = state.pop("menubar", None)
+                if menubar.remove(mp):
+                    out("Removed the menu bar plugin %s" % mp)
                 if os.path.exists(config.runtime_path()):
                     os.remove(config.runtime_path())
     save_state(state)

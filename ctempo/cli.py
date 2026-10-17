@@ -53,6 +53,11 @@ def build_parser():
     s.add_argument("--settings", default=None)
     s.add_argument("--json", action="store_true")
 
+    s = sub.add_parser("menubar", help="the band in the macOS menu bar, through SwiftBar (prints its plugin output)")
+    s.add_argument("--install", nargs="?", const="", default=None, metavar="FOLDER",
+                   help="write the SwiftBar plugin (default: the plugin folder SwiftBar uses)")
+    s.add_argument("--uninstall", nargs="?", const="", default=None, metavar="FOLDER", help="remove it")
+
     s = sub.add_parser("config", help="show the effective config")
     s.add_argument("action", nargs="?", default="show", choices=["show", "init", "path"])
     return p
@@ -101,6 +106,13 @@ def main(argv):
 
         try:
             return install.install(args) if args.cmd == "install" else install.uninstall(args)
+        except config.HomeError as e:
+            return refused(e)
+    if args.cmd == "menubar":
+        from . import menubar
+
+        try:
+            return menubar.main(args, cfg)
         except config.HomeError as e:
             return refused(e)
     from . import commands
