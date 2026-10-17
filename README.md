@@ -86,6 +86,12 @@ Code makes the request with its own login. The menu then also says when
 `/usage` last answered. `ctempo menubar --fetch 0` turns it off (the default).
 It needs Python 3.9 or later (time zones).
 
+The menu bar also posts a macOS notification, once per window, when a limit
+will run out before its reset, when it is reached, or when quota will go
+unused at the end of a window ("5-hour limit runs out at 15:40"), and only
+from readings under 30 minutes old. `"menubar": {"notify": false}` in
+`config.json` turns them off.
+
 ## The classic line
 
 `display.style: "classic"` brings back the denser line of earlier versions:
@@ -418,7 +424,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 474 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 477 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 64 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

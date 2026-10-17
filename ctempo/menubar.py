@@ -68,7 +68,8 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         out.append("Waiting for the first reading: start a Claude Code session | size=12")
     else:
         for w in ws:
-            out.append("%s | font=Menlo size=12 trim=false" % render.plain(band.segments([w], cfg, 60)))
+            text = render.plain(band.segments([w], cfg, 60)) if w["pct"] is not None else w["name"] + " waiting"
+            out.append("%s | font=Menlo size=12 trim=false" % text)
             out.append("%s | size=11 color=%s" % (w["sentence"], DIM))
     out.append("---")
     if updated is not None:
@@ -115,15 +116,71 @@ def show(cfg):
             try:
                 v5, vw, _ = views(st, cfg, now)
                 checked = st.meta_get("usage_cmd_ok_at") if every else None
+                ws, updated = band.windows(v5, vw, now), band.updated(v5, vw)
+                if cfg.get("menubar", {}).get("notify", True):
+                    notify(st, ws, max([t for t in (updated, checked) if t] or [0]), now)
             finally:
                 st.close()
-            ws, updated = band.windows(v5, vw, now), band.updated(v5, vw)
         out = lines(ws, updated, now, cfg, checked, note)
     except Exception as e:  # the menu bar shows why instead of nothing
         out = ["ctempo ! | color=%s" % TONE["warning"], "---", "ctempo: %s | size=12" % str(e)[:200],
                "Refresh | refresh=true"]
     sys.stdout.write("\n".join(out) + "\n")
     return 0
+
+
+# -- notifications ----------------------------------------------------------------------
+
+def events(ws):
+    """[(key, title, body)]: what is worth a notification, once per window
+    and kind: a limit that runs out before its reset (not the milder "may"),
+    one that is reached, and quota that will go unused."""
+    out = []
+    for w in ws:
+        p = w.get("phrase")
+        if not p or not p["attention"] or w.get("reset_ts") is None:
+            continue
+        name = "5-hour" if w["id"] == "h5" else "Weekly"
+        if w["kind"] == "maxed":
+            title = "%s limit reached, back %s" % (name, ("at " + p["num"]) if " " not in p["num"] else p["num"])
+        elif w["kind"] == "dry" and not w.get("soft"):
+            title = "%s limit runs out %s" % (name, ("at " + p["num"]) if " " not in p["num"] else p["num"])
+        elif w["kind"] == "expire":
+            title = "%s: %s will go unused" % (name, p["num"])
+        else:
+            continue
+        out.append(("notified:%s:%s:%s" % (w["id"], w["reset_ts"], w["kind"]), title, w["sentence"]))
+    return out
+
+
+def notify(st, ws, newest, now, send=None):
+    """Post each new event as a macOS notification, once. Old readings post
+    nothing: a stale alarm is worse than none."""
+    if not newest or now - newest > STALE_S:
+        return []
+    sent = []
+    for key, title, body in events(ws):
+        if st.meta_get(key):
+            continue
+        try:
+            st.meta_set(key, now)
+        except Exception:
+            continue
+        (send or post)(title, body)
+        sent.append(title)
+    return sent
+
+
+def post(title, body):
+    if sys.platform != "darwin":
+        return
+    script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title \"ctempo\" "
+              "subtitle (item 1 of argv)", "-e", "end run"]
+    try:
+        subprocess.Popen(["osascript"] + script + [title, body], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
 
 
 # -- the SwiftBar plugin ---------------------------------------------------------------
