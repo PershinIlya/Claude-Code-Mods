@@ -500,6 +500,19 @@ class DoctorRuntime(DoctorCase):
         self.assertNotIn("no runtime.json", out)
 
 
+class DoctorModLog(DoctorCase):
+    def test_shows_the_end_of_the_mod_log(self):
+        # The mod logs which surfaces a session draws on and whether one asked
+        # for the band: on Desktop for Mac it ran and recorded, and drew nothing.
+        lines = ["2026-10-17T07:%02d:00.000Z 8865d914 line %d" % (i, i) for i in range(9)]
+        with open(os.path.join(self.dir, "mod.log"), "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        out = self.doctor("printf x", windows=False)
+        self.assertIn("mod log, last 6 lines", out)
+        self.assertIn("8865d914 line 8", out)
+        self.assertNotIn("8865d914 line 2", out)
+
+
 class DoctorShell(DoctorCase):
     """Windows: Claude Code runs the statusLine in Git Bash when it finds one,
     else in PowerShell, and that can change after install (Git for Windows

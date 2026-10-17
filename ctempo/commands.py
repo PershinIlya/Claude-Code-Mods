@@ -685,6 +685,14 @@ def cmd_doctor(args, cfg):
         with open(config.log_path(), encoding="utf-8", errors="replace") as f:
             n = sum(1 for line in f if line[:2] == "20")
         add("warn" if n else "ok", "errors.log has %d entries" % n, config.log_path())
+    modlog = None if home_err else os.path.join(config.home(), "mod.log")
+    if modlog and os.path.exists(modlog):
+        # The mod's own log: the surfaces each session draws on, and whether one asked for the band.
+        with open(modlog, encoding="utf-8", errors="replace") as f:
+            tail = [line.rstrip("\n") for line in f if line.strip()][-6:]
+        add("ok", "mod log, last %d lines" % len(tail), modlog)
+        for line in tail:
+            add("ok", "  " + line)
     if args.json:
         print(json.dumps([{"level": a, "check": b, "detail": c} for a, b, c in results], indent=2))
     else:

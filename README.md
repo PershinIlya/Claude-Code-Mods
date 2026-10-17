@@ -388,9 +388,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 454 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 455 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 63 tests
+claude plugin test mods/ctempo                 # 64 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

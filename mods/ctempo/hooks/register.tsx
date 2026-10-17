@@ -83,6 +83,28 @@ let queued: readonly SessionRateLimit[] | null | undefined
 let seenLimits: string | null = null
 let seenStamp: number | null = null
 
+// A short log for `ctempo doctor` (CTEMPO_HOME/mod.log): which surfaces the
+// session draws on, and whether one asked for the band. Written on those
+// events only, never on a timer; the last 40 lines.
+let logged: string[] = []
+const seenRenders = new Set<string>()
+async function surfacesOf($: EngineInterface): Promise<string> {
+  const list = await $.session.surfaces().catch(() => null)
+  return list === null ? '?' : `[${list.join(', ')}]`
+}
+
+async function trace($: EngineInterface, line: string) {
+  try {
+    const rt = await loadRuntime($)
+    const id = (await $.session.id()).slice(0, 8)
+    const at = new Date(await $.clock.now()).toISOString()
+    logged = [...logged.slice(-39), `${at} ${id} ${line}`]
+    await $.fs.write(join(rt.home, 'mod.log', rt.windows), `${logged.join('\n')}\n`)
+  } catch {
+    // no runtime yet: the band says why
+  }
+}
+
 // The user's home as Python's os.path.expanduser finds it, and whether
 // Windows path rules apply.
 export type UserHome = { windows: boolean; home: string | undefined }
@@ -453,6 +475,9 @@ export function age(updated: number | null | undefined, now: number | undefined)
 export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    $.clock.after(0, () => {
+      void (async () => trace($, `start: surfaces ${await surfacesOf($)}`))()
+    })
     // Off the start path: the first prompt never waits for Python.
     $.clock.after(0, () => {
       void refresh($)
@@ -474,11 +499,24 @@ export const register: Register = (on) => {
     return measured
   })
 
+  on('session.attach', async ($, e, next) => {
+    const attached = await next(e)
+    void (async () => trace($, `attach: ${e.surface}, surfaces ${await surfacesOf($)}`))()
+    return attached
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, view)
-    if (current === null || e.props.hasSurvey || !current.surfaces.includes(e.surface)) {
-      return next(e)
+    const why =
+      current === null ? 'no reading yet' : e.props.hasSurvey ? 'a survey' :
+      !current.surfaces.includes(e.surface) ? `not in mod.surfaces [${current.surfaces.join(', ')}]` : ''
+    const key = `${e.surface}|${why}`
+    if (!seenRenders.has(key)) {
+      seenRenders.add(key)
+      void trace($, `band asked on ${e.surface}: ${why ? `not drawn, ${why}` : 'drawn'}`)
     }
+    if (why) return next(e)
+    if (current === null) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const wins = current.windows
     let ours
