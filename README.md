@@ -449,7 +449,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 493 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 494 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 65 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

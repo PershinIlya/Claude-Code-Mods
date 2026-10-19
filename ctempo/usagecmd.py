@@ -27,7 +27,7 @@ SESSION_ID = "usage-cmd"
 SOURCE = "usage"
 TIMEOUT_S = 45
 LINE = re.compile(r"^\s*Current (session|week \(all models\)):\s*([0-9]+(?:\.[0-9]+)?)% used"
-                  r"(?:\s*\S\s*resets\s+(.+?)\s*\(([^()]+)\))?\s*$")
+                  r"(?:\s*\S+\s*resets\s+(.+?)\s*\(([^()]+)\))?\s*$")
 # What /usage prints instead of the plan's limits (fetch).
 COST = re.compile(r"^\s*Total cost:\s*\$", re.M)
 # "Oct 17 at 6:20pm" (2.1.302), "Oct 19, 2:59pm" (2.1.303), or the time alone.
@@ -98,8 +98,9 @@ def fetch(now=None, run=None):
     try:
         if run is None:
             env = {k: v for k, v in os.environ.items() if k not in SESSION_ENV}
-            p = subprocess.run([exe, "-p", "/usage"], capture_output=True, text=True, timeout=TIMEOUT_S,
-                               cwd=config.home(), env=env)
+            # Claude Code writes UTF-8 to a pipe; Windows' default (cp1252) read its "·" as "Â·".
+            p = subprocess.run([exe, "-p", "/usage"], capture_output=True, encoding="utf-8", errors="replace",
+                               timeout=TIMEOUT_S, cwd=config.home(), env=env)
             text, rc = p.stdout, p.returncode
         else:
             text, rc = run()

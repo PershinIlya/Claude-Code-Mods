@@ -44,6 +44,12 @@ class Parse(unittest.TestCase):
         self.assertEqual(usagecmd.parse(text, NOW), {config.FIVE_HOUR: (11.0, R5), config.SEVEN_DAY: (20.0, R7)})
 
     @needs_zones
+    def test_a_separator_read_in_the_wrong_encoding(self):
+        # The person's Windows machine before the fetch read UTF-8: "·" came as "Â·".
+        self.assertEqual(usagecmd.parse(OUTPUT.replace("·", "\u00c2\u00b7"), NOW),
+                         {config.FIVE_HOUR: (11.0, R5), config.SEVEN_DAY: (20.0, R7)})
+
+    @needs_zones
     def test_times_without_a_date_and_unknown_lines(self):
         self.assertEqual(usagecmd.reset_epoch("6:20pm", "Asia/Dubai", NOW), R5)
         self.assertEqual(usagecmd.reset_epoch("6am", "Asia/Dubai", NOW),
@@ -162,6 +168,7 @@ class Background(TempHome):
 
         def fake_run(cmd, **kw):
             seen.update(kw["env"])
+            seen["encoding"] = kw.get("encoding")
             return subprocess.CompletedProcess(cmd, 1, "", "")
 
         env = dict(os.environ, CLAUDECODE="1", CLAUDE_CODE_ENTRYPOINT="claude-desktop", CLAUDE_CONFIG_DIR="/x")
@@ -172,3 +179,4 @@ class Background(TempHome):
         self.assertNotIn("CLAUDECODE", seen)
         self.assertNotIn("CLAUDE_CODE_ENTRYPOINT", seen)
         self.assertEqual(seen.get("CLAUDE_CONFIG_DIR"), "/x")
+        self.assertEqual(seen["encoding"], "utf-8")  # whatever the system's code page
