@@ -14,6 +14,7 @@ import time
 import unittest
 from unittest import mock
 
+import ctempo
 from ctempo import cli, commands, config, install, profile, weekly, winshell
 from ctempo.config import SEVEN_DAY
 from ctempo.store import Store
@@ -427,6 +428,28 @@ class ProfileScale(TempHome):
         info = json.loads(out.getvalue())["info"]
         self.assertAlmostEqual(info["weekly_total"], 70.0)
         self.assertAlmostEqual(weekly.weekly(self.st, time.time(), self.cfg)["weekly_typical"], 70.0)
+
+
+class RunAsFolder(TempHome):
+    """`py ctempo ...` from the clone runs the package folder as a script
+    (the person typed it on Windows): it works as bin/ctempo does, with no
+    warning, and the folder's config.py and profile.py never shadow the
+    standard library's."""
+
+    def run_folder(self, folder, *args):
+        env = dict(os.environ, CTEMPO_HOME=self.dir)
+        return subprocess.run([sys.executable, "-W", "error", folder] + list(args), cwd=ROOT, env=env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_relative_and_absolute(self):
+        for folder in ("ctempo", os.path.join(ROOT, "ctempo")):
+            p = self.run_folder(folder, "--version")
+            self.assertEqual((p.returncode, p.stdout.strip(), p.stderr), (0, "ctempo " + ctempo.__version__, ""), folder)
+            p = self.run_folder(folder, "config", "path")
+            self.assertEqual((p.returncode, p.stdout.strip()), (0, config.config_path()), folder)
+
+    def test_the_exit_code_passes_through(self):
+        self.assertEqual(self.run_folder("ctempo", "no-such-command").returncode, 2)
 
 
 class Utf8Output(unittest.TestCase):

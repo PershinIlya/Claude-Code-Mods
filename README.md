@@ -251,6 +251,9 @@ py -3 bin\ctempo install                                    # dry run
 py -3 bin\ctempo install --apply --bin-dir $HOME\.local\bin
 ```
 
+From the clone, `py -3 ctempo ...` and `py -3 -m ctempo ...` work the same as
+`py -3 bin\ctempo ...`; after install, the `ctempo` launcher works from anywhere.
+
 In cmd.exe the same lines work with `%USERPROFILE%` for `$HOME` (and `cd /d`),
 each such path in double quotes (`"%USERPROFILE%\.local\bin"`), since a profile
 folder may hold a space, and without the comment. `~` in this README is
@@ -443,7 +446,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 488 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 490 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 65 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
