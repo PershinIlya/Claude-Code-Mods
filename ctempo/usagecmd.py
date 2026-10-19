@@ -28,6 +28,8 @@ SOURCE = "usage"
 TIMEOUT_S = 45
 LINE = re.compile(r"^\s*Current (session|week \(all models\)):\s*([0-9]+(?:\.[0-9]+)?)% used"
                   r"(?:\s*\S\s*resets\s+(.+?)\s*\(([^()]+)\))?\s*$")
+# What /usage prints instead of the plan's limits (fetch).
+COST = re.compile(r"^\s*Total cost:\s*\$", re.M)
 WHEN = re.compile(r"^(?:([A-Z][a-z]{2})\s+(\d{1,2})\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)$", re.I)
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 WINDOW = {"session": config.FIVE_HOUR, "week (all models)": config.SEVEN_DAY}
@@ -103,6 +105,11 @@ def fetch(now=None, run=None):
     except (OSError, subprocess.SubprocessError) as e:
         return False, "claude -p /usage failed: %s" % e
     readings = parse(text, now)
+    if rc == 0 and not readings and COST.search(text or ""):
+        # /usage showed the session's spend: a claude signed in with an API key, or
+        # one whose -p mode does not show the plan's limits.
+        return False, ("claude -p /usage shows spend, not plan limits: sign this claude in with your Claude "
+                       "subscription (claude, then /status and /login), or update it (claude update)")
     if rc != 0 or not readings:
         last = (text or "").strip().splitlines()[-1:]  # Claude Code's own error, if any
         return False, "could not read the usage from claude -p /usage" + (": " + last[0][:120] if last else "")

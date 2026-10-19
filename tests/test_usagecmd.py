@@ -65,6 +65,16 @@ class Fetch(TempHome):
         self.assertEqual(self.run_fetch("Error: not logged in", rc=1)[0], False)
         self.assertEqual(self.st.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 0)
 
+    def test_an_api_key_login_says_so(self):
+        # The person's Windows claude (2.1.301): /usage printed the session's spend.
+        spend = ("Total cost:            $0.0000\nTotal duration (API):  0s\nTotal duration (wall): 1s\n"
+                 "Total code changes:    0 lines added, 0 lines removed\n"
+                 "Usage:                 0 input, 0 output, 0 cache read, 0 cache write\n")
+        ok, msg = self.run_fetch(spend)
+        self.assertFalse(ok)
+        self.assertIn("shows spend, not plan limits", msg)
+        self.assertEqual(self.st.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 0)
+
     def test_due_runs_at_most_every_so_many_minutes(self):
         self.assertFalse(usagecmd.due(self.st, NOW, 0))
         self.assertTrue(usagecmd.due(self.st, NOW, 10))
