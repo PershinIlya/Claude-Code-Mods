@@ -715,7 +715,13 @@ window on Windows, with the session's markers (`CLAUDECODE`,
 `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`) removed so the nested
 `claude` neither refuses nor joins the session; one attempt per interval
 across all bands and the menu bar (the store's `usage_cmd_tried_at`), and
-`doctor` shows when it last answered or why not. And after a 5-hour window
+`doctor` shows when it last answered or why not. On the person's Windows
+machine, signed in with Max, `claude -p "/usage"` printed only the session's
+spend until the folder it ran in was trusted (in a trusted one it printed the
+limits): the fetch runs in `CTEMPO_HOME`, which is trusted once by hand, and
+its message says so. Claude Code 2.1.303 also writes the reset as "Oct 19,
+2:59pm" where 2.1.302 wrote "Oct 19 at 4:59pm"; both are read, and a line
+that does not read is named. And after a 5-hour window
 ends, the band read "waiting" until the first message of the day; it now
 reads "5h 0% Not started", since the next window opens only with that
 message.

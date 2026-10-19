@@ -30,7 +30,8 @@ LINE = re.compile(r"^\s*Current (session|week \(all models\)):\s*([0-9]+(?:\.[0-
                   r"(?:\s*\S\s*resets\s+(.+?)\s*\(([^()]+)\))?\s*$")
 # What /usage prints instead of the plan's limits (fetch).
 COST = re.compile(r"^\s*Total cost:\s*\$", re.M)
-WHEN = re.compile(r"^(?:([A-Z][a-z]{2})\s+(\d{1,2})\s+at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)$", re.I)
+# "Oct 17 at 6:20pm" (2.1.302), "Oct 19, 2:59pm" (2.1.303), or the time alone.
+WHEN = re.compile(r"^(?:([A-Z][a-z]{2})\s+(\d{1,2})(?:,|\s+at)\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)$", re.I)
 MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 WINDOW = {"session": config.FIVE_HOUR, "week (all models)": config.SEVEN_DAY}
 
@@ -106,10 +107,15 @@ def fetch(now=None, run=None):
         return False, "claude -p /usage failed: %s" % e
     readings = parse(text, now)
     if rc == 0 and not readings and COST.search(text or ""):
-        # /usage showed the session's spend: a claude signed in with an API key, or
-        # one whose -p mode does not show the plan's limits.
-        return False, ("claude -p /usage shows spend, not plan limits: sign this claude in with your Claude "
-                       "subscription (claude, then /status and /login), or update it (claude update)")
+        # /usage showed the session's spend. Seen on the person's Windows machine,
+        # signed in with Max: claude -p asks for the plan's limits only in a folder
+        # it trusts, and this runs in CTEMPO_HOME. Or an API-key login.
+        return False, ("claude -p /usage shows spend, not plan limits: Claude Code shows them only in a folder "
+                       "it trusts. Run claude once in %s and choose \"Yes, I trust this folder\" (or sign in "
+                       "with your Claude subscription: /login)" % config.home())
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip().startswith("Current ")]
+    if rc == 0 and not readings and lines:
+        return False, "could not read the reset time in /usage: %s" % lines[0][:120]  # a new format
     if rc != 0 or not readings:
         last = (text or "").strip().splitlines()[-1:]  # Claude Code's own error, if any
         return False, "could not read the usage from claude -p /usage" + (": " + last[0][:120] if last else "")

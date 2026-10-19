@@ -71,7 +71,10 @@ credential: Claude Code makes the request with its own login. `ctempo fetch`
 runs it once now; `ctempo fetch --every 0` turns it off (the default);
 `ctempo doctor` says when it last answered, or why not. It needs Python 3.9
 or later (time zones) and the `claude` command (on Windows in
-`%USERPROFILE%\.local\bin` or npm's folder).
+`%USERPROFILE%\.local\bin` or npm's folder). Claude Code answers `/usage`
+with the plan's limits only in a folder it trusts, and ctempo asks it in its
+own folder (`~/.claude-tempo`): once, run `claude` there, choose "Yes, I trust
+this folder", and exit (`doctor` says so when this is missing).
 
 ## The menu bar (macOS)
 
@@ -446,7 +449,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 490 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 493 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 65 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

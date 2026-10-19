@@ -38,6 +38,12 @@ class Parse(unittest.TestCase):
                          {config.FIVE_HOUR: (11.0, R5), config.SEVEN_DAY: (20.0, R7)})
 
     @needs_zones
+    def test_the_newer_output(self):
+        # The person's Windows machine (Claude Code 2.1.303): a comma, not "at".
+        text = OUTPUT.replace("Oct 17 at 6:20pm", "Oct 17, 6:20pm").replace("Oct 23 at 6am", "Oct 23, 6am")
+        self.assertEqual(usagecmd.parse(text, NOW), {config.FIVE_HOUR: (11.0, R5), config.SEVEN_DAY: (20.0, R7)})
+
+    @needs_zones
     def test_times_without_a_date_and_unknown_lines(self):
         self.assertEqual(usagecmd.reset_epoch("6:20pm", "Asia/Dubai", NOW), R5)
         self.assertEqual(usagecmd.reset_epoch("6am", "Asia/Dubai", NOW),
@@ -61,6 +67,11 @@ class Fetch(TempHome):
         self.assertEqual(self.st.meta_get("usage_cmd_ok_at"), NOW)
         self.assertTrue(os.path.exists(config.stamp_path()))  # a new window wakes the bands
 
+    def test_a_format_it_cannot_read_says_which_line(self):
+        ok, msg = self.run_fetch("Current session: 18% used · resets in a while (Europe/Berlin)\n")
+        self.assertEqual((ok, msg), (False, "could not read the reset time in /usage: Current session: 18% used · "
+                                            "resets in a while (Europe/Berlin)"))
+
     def test_a_failure_records_nothing(self):
         self.assertEqual(self.run_fetch("Error: not logged in", rc=1)[0], False)
         self.assertEqual(self.st.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 0)
@@ -73,6 +84,8 @@ class Fetch(TempHome):
         ok, msg = self.run_fetch(spend)
         self.assertFalse(ok)
         self.assertIn("shows spend, not plan limits", msg)
+        self.assertIn("trust", msg)
+        self.assertIn(config.home(), msg)
         self.assertEqual(self.st.db.execute("SELECT COUNT(*) FROM samples").fetchone()[0], 0)
 
     def test_due_runs_at_most_every_so_many_minutes(self):
