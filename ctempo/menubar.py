@@ -5,10 +5,11 @@ what it prints: the first line in the menu bar, the lines after `---` in the
 menu that opens on a click. The script `ctempo menubar --install` writes
 runs `ctempo menubar`, which reads the store and prints
 
-  [two small bars] 22% · 18%             (5 hours on top; red, yellow or green words
-  ---                                       when a window needs you)
+  [two small bars] 22% · 18%             (5 hours on top; green with room to spare,
+  ---                                       red or yellow words when a window needs you)
   [bar] 5-hour   22%                       (each window's bar as a picture, as the
-        77% will go unused · resets 12:00   Desktop band draws it, its words and reset)
+        Used            22%                 Desktop band draws it, and the rows of its
+        Pace            1.4x faster         Details: band.details)
   ...
   Updated 2 min ago
 
@@ -48,7 +49,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     waiting = all(w["pct"] is None for w in ws)
     newest = max([t for t in (updated, checked) if t is not None] or [0])
     stale = not newest or now - newest > STALE_S
-    parts, tones = [], []
+    parts = []
     for w in ws:
         if w["pct"] is None:
             parts.append("-")
@@ -57,11 +58,8 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         p = w.get("phrase")
         if p and p["attention"]:  # the words that need you; green ("1.4x faster") says it by color
             part += " " + p["narrow_pre"] + p["num"] + p["narrow"]
-        if p and (p["attention"] or p["tone"] == "success"):
-            tones.append(p["tone"])
         parts.append(part)
-    worst = max(tones, key=RANK.index) if tones else None
-    color = TONE[worst] if worst else (DIM if stale or waiting else None)
+    color = title_color(ws, stale or waiting)
     pic = "image=%s,%s width=24 height=18" % (menuart.icon(ws, False), menuart.icon(ws, True))
     title = ("" if waiting else " · ".join(parts)) + " | " + pic + (" color=" + color if color else "")
     out = [title, "---"]
@@ -104,9 +102,23 @@ def detail_lines(w):
         r["label"].ljust(width), r["value"].replace("|", "/"), TONE.get(r["tone"], DIM)) for r in rows]
 
 
+def title_color(ws, dim):
+    """The title's color: red or yellow when a window needs you; grey when
+    the readings are old (an old "faster" is no all-clear); green when a
+    window has room to spare; else the menu bar's own."""
+    tones = [w["phrase"]["tone"] for w in ws if w.get("pct") is not None and w.get("phrase")
+             and (w["phrase"]["attention"] or w["phrase"]["tone"] == "success")]
+    worst = max(tones, key=RANK.index) if tones else None
+    if worst in ("warning", "error"):
+        return TONE[worst]
+    if dim:
+        return DIM
+    return TONE[worst] if worst else None
+
+
 def text_lines(ws, updated, now, cfg, checked=None, note=None):
     """The plain text menu (menubar.style "text")."""
-    title_parts, tones = [], []
+    title_parts = []
     for w in ws:
         short = "5h" if w["id"] == "h5" else "Wk"
         if w["pct"] is None:
@@ -116,7 +128,6 @@ def text_lines(ws, updated, now, cfg, checked=None, note=None):
         p = w.get("phrase")
         if p and p["attention"]:
             part += " " + p["narrow_pre"] + p["num"] + p["narrow"]
-            tones.append(p["tone"])
         title_parts.append(part)
     waiting = all(w["pct"] is None for w in ws)
     newest = max([t for t in (updated, checked) if t is not None] or [0])
@@ -125,11 +136,9 @@ def text_lines(ws, updated, now, cfg, checked=None, note=None):
         title = "ctempo | color=%s" % DIM
     else:
         title = " · ".join(title_parts)
-        worst = max(tones, key=RANK.index) if tones else None
-        if worst:
-            title += " | color=%s" % TONE[worst]
-        elif stale:
-            title += " | color=%s" % DIM
+        color = title_color(ws, stale)
+        if color:
+            title += " | color=%s" % color
     out = [title, "---"]
     if waiting:
         out.append("Waiting for the first reading: start a Claude Code session | size=12")

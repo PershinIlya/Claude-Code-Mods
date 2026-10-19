@@ -17,8 +17,7 @@ Python 3.8+ standard library only; macOS, Linux and Windows.
 
 ## Reading the band
 
-One row per window: its name, a small bar, the percent, and words only when
-there is something to say.
+One row per window: its name, a small bar, the percent, and its pace.
 
 - **The bar.** Solid orange is what you have used. After a thin gap, a pale
   segment runs to where you will land at the reset; it fades out while the
@@ -454,7 +453,7 @@ start, the imports, and each phase of a render.
 ```sh
 python3 -m unittest discover -s tests -t .     # 495 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 66 tests
+claude plugin test mods/ctempo                 # 68 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

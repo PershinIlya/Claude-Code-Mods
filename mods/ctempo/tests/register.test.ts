@@ -704,6 +704,23 @@ test('Details opens a table, a column per window, and says how old the reading i
   expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()
 })
 
+test('Details rows keep the CLI order whichever window has them; an older CLI shows its sentences', async ($, on) => {
+  const short: Detail[] = [{ label: 'Used', value: '20%', tone: 'text' }, { label: 'Resets', value: '16:30', tone: 'text' }]
+  const { ui } = await drawn($, on, [win({ id: 'h5', details: short }), win({ id: 'wk', details: WEEK_ROWS })])
+  await ui.press({ key: 'details' })
+  const order = JSON.stringify(await ui.drawn())
+  // "Pace" and "Will go unused" (the week's only) come before "Resets", not after the 5 hours' last row.
+  expect(order.indexOf('"Pace"')).toBeLessThan(order.indexOf('"Resets"'))
+  expect(order.indexOf('"Will go unused"')).toBeLessThan(order.indexOf('"Resets"'))
+})
+
+test('an older CLI without Details rows shows each sentence there', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk' })])
+  await ui.press({ key: 'details' })
+  expect(await ui.find({ type: 'Text', text: 'Summary' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^5-hour: 55% used/ })).toBeDefined()
+})
+
 test('details rows that do not read are left out, not the band', async ($, on) => {
   const bad = [{ label: 'Used', value: 5 }, null, { label: 'Pace', value: 'On pace', tone: 'inactive' }] as unknown as Detail[]
   const { ui } = await drawn($, on, [win({ id: 'h5', details: bad }), win({ id: 'wk' })])

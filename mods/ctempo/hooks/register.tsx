@@ -251,6 +251,9 @@ function isPhrase(x: unknown): x is Phrase {
   )
 }
 
+// The order of Details' rows (band.details); a label the mod does not know goes last.
+const ORDER = ['Used', 'Pace', 'Limit', 'At reset', 'Runs out', 'Will go unused', 'Next window', 'Resets', 'Rate']
+
 const isRow = (r: unknown): r is Detail =>
   typeof r === 'object' && r !== null && isStr((r as Detail).label) && isStr((r as Detail).value) &&
   isStr((r as Detail).tone)
@@ -565,8 +568,14 @@ export const register: Register = (on) => {
       // window under the other (a run-out row, "Sun 22:45, 4 days 5 h
       // early", needs 28 cells).
       const LW = 16
+      // The rows in the CLI's order whichever window has them; a window with
+      // none (an older CLI) shows its sentence instead.
+      const rows = (w: Win): Detail[] =>
+        w.details?.length ? w.details : [{ label: 'Summary', value: w.sentence, tone: 'inactive' }]
       const labels: string[] = []
-      for (const w of wins) for (const r of w.details ?? []) if (!labels.includes(r.label)) labels.push(r.label)
+      for (const w of wins) for (const r of rows(w)) if (!labels.includes(r.label)) labels.push(r.label)
+      const rank = (label: string) => (ORDER.indexOf(label) + ORDER.length + 1) % (ORDER.length + 1)
+      labels.sort((a, b) => rank(a) - rank(b))
       const cell = (key: string, width: number, text: string, color: string, weight?: 'medium') => (
         <Box key={key} width={width} flexShrink={0}>
           <Text size="footnote" tabular wrap="truncate-end" color={color} weight={weight ?? 'regular'}>
@@ -575,21 +584,22 @@ export const register: Register = (on) => {
         </Box>
       )
       const value = (w: Win, label: string, width: number) => {
-        const r = (w.details ?? []).find((d) => d.label === label)
+        const r = rows(w).find((d) => d.label === label)
         return cell(`v-${w.id}-${label}`, width, r?.value ?? '', r ? (r.tone === 'text' ? 'text' : r.tone) : 'inactive')
       }
       const title = (w: Win) => (w.id === 'h5' ? '5 hours' : 'Week')
       const cols = e.props.bodyColumns
-      const CW = Math.max(12, Math.min(30, Math.floor((cols - LW) / 2)))
+      // 2 cells between the columns, so values never run into each other.
+      const CW = Math.max(12, Math.min(34, Math.floor((cols - LW) / 2) - 2))
       const table =
         cols >= 72 ? (
           <Box flexDirection="column">
-            <Box key="t-head" flexDirection="row">
+            <Box key="t-head" flexDirection="row" columnGap="md">
               {cell('h-label', LW, '', 'inactive')}
               {wins.map((w) => cell(`h-${w.id}`, CW, title(w), 'inactive', 'medium'))}
             </Box>
             {labels.map((label) => (
-              <Box key={`t-${label}`} flexDirection="row">
+              <Box key={`t-${label}`} flexDirection="row" columnGap="md">
                 {cell(`l-${label}`, LW, label, 'inactive')}
                 {wins.map((w) => value(w, label, CW))}
               </Box>
@@ -600,7 +610,7 @@ export const register: Register = (on) => {
             {wins.map((w) => (
               <Box key={`s-${w.id}`} flexDirection="column">
                 {cell(`sh-${w.id}`, cols, title(w), 'inactive', 'medium')}
-                {(w.details ?? []).map((r) => (
+                {rows(w).map((r) => (
                   <Box key={`s-${w.id}-${r.label}`} flexDirection="row">
                     {cell(`sl-${w.id}-${r.label}`, LW, r.label, 'inactive')}
                     {value(w, r.label, Math.max(8, cols - LW))}

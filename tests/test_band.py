@@ -82,7 +82,13 @@ class Words(unittest.TestCase):
         p = band.phrase(v5(verdict="slow_down", severity="warn", multiplier=0.7), NOW)
         self.assertEqual((words(p), p["tone"]), ("1.4x slower", "warning"))  # a mild overshoot
         p = band.phrase(v5(verdict="slow_down", severity="alert", multiplier=0.7), NOW)
-        self.assertEqual((words(p), p["tone"]), ("1.4x slower", "error"))
+        self.assertEqual((words(p), p["tone"]), ("1.4x slower", "warning"))  # above the target, no run-out
+        # Review: "Pause", the worst, was yellow beside a red "2x slower".
+        p = band.phrase(v5(verdict="slow_down", severity="alert", multiplier=0.05, cap_ts=MON + 15 * H), NOW)
+        self.assertEqual((words(p), p["tone"]), ("Pause", "error"))
+        # Review: a run-out within the margin of the reset (plain bar, no Runs out row) is not red.
+        v = v5(verdict="slow_down", severity="alert", multiplier=0.85, cap_ts=int(MON + 16 * H + 25 * 60))
+        self.assertEqual((band.bar_kind(v), band.phrase(v, NOW)["tone"]), ("run", "warning"))
         self.assertEqual(words(band.phrase(v5(verdict="slow_down", multiplier=None), NOW)), "Ease off")
         self.assertIsNone(band.phrase(v5(verdict="unknown", multiplier=None, projected=None), NOW))
 
@@ -121,7 +127,16 @@ class Words(unittest.TestCase):
         self.assertEqual(rows(h5), [("Used", "100%", "text"), ("Limit", "reached", "error"), ("Resets", "16:30", "text")])
         h5, _ = band.windows(*STATES["idle"], NOW)
         self.assertEqual(rows(h5)[-1], ("Rate", "idle, 18%/h fits", "text"))
-        self.assertEqual(band.windows({"present": False}, {"present": False}, NOW)[0]["details"], [])
+        # Review: a window without the math still fills its column in Details.
+        self.assertEqual(rows(band.windows({"present": False}, {"present": False}, NOW)[0]),
+                         [("Used", "waiting for a reading", "inactive")])
+        h5, _ = band.windows({"present": False, "raw": (12.0, MON + 17 * H)}, {"present": False}, NOW)
+        self.assertEqual(rows(h5), [("Used", "12%", "text"), ("Pace", "no pace yet", "inactive"),
+                                    ("Resets", "17:00", "text")])
+        # Review: an ended 5 hours does not open "with your next message" while the week is at its limit.
+        h5, _ = band.windows({"present": False, "ended_ts": MON + 3 * H}, vw(used=100, verdict="maxed"), NOW)
+        self.assertEqual((h5["phrase"], rows(h5)[1:]), (None, [("Pace", "blocked by the week", "error"),
+                                                               ("Next window", "after Fri 04:00", "text")]))
 
     def test_week_back_and_resets_name_the_day(self):
         v = vw(used=100, verdict="maxed", severity="alert")

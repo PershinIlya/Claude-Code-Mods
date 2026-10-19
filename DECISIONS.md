@@ -744,7 +744,18 @@ window under the other below 72 cells (a run-out row, "Sun 22:45, 4 days
 5 h early", needs 28 cells). The terminal
 line fits by dropping the resets, then grey words, then green ones (the
 second window's first); the words that need you stay. Notifications read
-the run-out time and the unused quota from fields of their own.
+the run-out time and the unused quota from fields of their own. A review
+(4 reviewers, each finding verified by another) confirmed 13: "Pause", the
+worst overshoot, was yellow beside a red "2x slower", and a run-out within
+the margin of the reset was red with a plain bar and no Runs out row (red
+now means a firm run-out before the reset, yellow everything else that
+needs you); a raw or waiting window left its Details column empty and an
+older CLI an empty table (rows for them, the sentence for the older CLI);
+rows came in the order one window happened to list them (a fixed order
+now), with no gutter between the columns; the menu bar title turned green
+on hours-old readings (grey now) and the text style lost its green; an ended
+5 hours said it opens with the next message while the week blocked it; and
+stale words in the docs.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.

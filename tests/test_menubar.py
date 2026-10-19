@@ -54,6 +54,9 @@ class Lines(TempHome):
     def test_old_readings_dim_the_title_and_say_where_they_come_from(self):
         out = self.out("on pace", updated=NOW - 2 * H)
         self.assertTrue(out[0].endswith(" color=" + menubar.DIM), out[0])
+        # Review: an old "faster" is no all-clear: grey, not green; what needs you stays red.
+        self.assertTrue(self.out("unused", updated=NOW - 2 * H)[0].endswith(" color=" + menubar.DIM))
+        self.assertTrue(self.out("runs out", updated=NOW - 2 * H)[0].endswith(" color=" + menubar.TONE["error"]))
         self.assertIn("Updated 2 h ago | size=11 color=%s" % menubar.DIM, out)
         self.assertTrue(any(line.startswith("Readings come from Claude Code sessions") for line in out))
 
@@ -66,6 +69,8 @@ class Lines(TempHome):
         cfg = dict(self.cfg, menubar=dict(self.cfg["menubar"], style="text"))
         out = self.out("runs out", cfg=cfg)
         self.assertEqual(out[0], "5h 70% 2x slower · Wk 48% | color=" + menubar.TONE["error"])
+        # Review: the text style's title is green with room to spare, as the bars style's.
+        self.assertEqual(self.out("unused", cfg=cfg)[0], "5h 12% · Wk 40% | color=" + menubar.TONE["success"])
         self.assertEqual(out[2], "5h ━━━━━━╍╍ 70% 2x slower  resets 16:30 | font=Menlo size=12 "
                                  "trim=false")
 

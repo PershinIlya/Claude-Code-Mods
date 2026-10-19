@@ -1,8 +1,8 @@
-"""What each window shows: a bar, the percent and, only when there is
-something to say, a few words. The mod draws it as one row of small bars
-(`windows`); the terminal statusLine draws the same as text (`segments`).
+"""What each window shows: a bar, the percent and its pace. The mod draws
+it as one row of small bars (`windows`); the terminal statusLine draws the
+same as text (`segments`).
 
-  5h ━━━━━╍╍╍╍─ 55%  resets 16:30 · Week ━━━━━╍╍╍╍─ 48%  resets Fri
+  5h ━━━━━╍╍╍╍─ 55% On pace  resets 16:30 · Week ━━━━━╍╍╍╍─ 48% 1.4x faster  resets Fri
 
 The bar: what is used, then a forecast to where the window lands at its
 reset. `kind` says how the forecast is drawn:
@@ -138,10 +138,13 @@ def phrase(v, now):
         return _p("Over your ", "%d%%" % int(round(v["target"])), " target", "warning", True, narrow_pre="Over ")
     if verdict == "idle":
         return _p("Idle", "", "", "inactive", False, calm=True)
-    if _out(v) or verdict == "slow_down":
+    out = _out(v)
+    if out or verdict == "slow_down":
+        # Red only when it runs out before the reset and the estimate is firm;
+        # above a target, a mild or rough overshoot, or a run-out within the
+        # margin of the reset (no "Runs out" row, a plain bar): yellow.
         pre, num, post = slower(v)
-        tone = "warning" if (_soft(v) or not num) else "error"
-        return _p(pre, num, post, tone, True)
+        return _p(pre, num, post, "error" if out and not _soft(v) else "warning", True)
     if verdict == "speed_up" and v.get("multiplier") is not None:
         pre, num, post = faster(v)
         return _p(pre, num, post, "success", False)
@@ -305,7 +308,9 @@ def window(v, now):
     elif v.get("raw"):
         used, reset = v["raw"]
         out.update(pct=floor_pct(used), used=round(used, 2), projected=None, soft=False,
-                   reset=day(reset, now), reset_ts=reset, phrase=None, sentence=sentence(v, now), details=[])
+                   reset=day(reset, now), reset_ts=reset, phrase=None, sentence=sentence(v, now),
+                   details=[_row("Used", "%d%%" % floor_pct(used)), _row("Pace", "no pace yet", "inactive"),
+                            _row("Resets", at(reset, now) if w == FIVE_HOUR else render.dhm(reset))])
     elif v.get("ended_ts"):
         # The window ended and no new one is seen yet: it opens with the next message.
         out.update(kind="idle", pct=0, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
@@ -313,13 +318,18 @@ def window(v, now):
                    details=[_row("Used", "0%"), _row("Next window", "with your next message")])
     else:
         out.update(pct=None, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
-                   phrase=None, sentence=sentence(v, now), details=[])
+                   phrase=None, sentence=sentence(v, now), details=[_row("Used", "waiting for a reading", "inactive")])
     return out
 
 
 def windows(v5, vw, now):
     a = window(dict(v5, window=FIVE_HOUR), now)
     b = window(dict(vw, window=SEVEN_DAY), now)
+    if vw.get("present") and vw["verdict"] == "maxed" and not v5.get("present") and v5.get("ended_ts"):
+        # No new 5 hours while the week is at its limit: not "with your next message".
+        a.update(phrase=None, details=[_row("Used", "0%"), _row("Pace", "blocked by the week", "error"),
+                                       _row("Next window", "after " + render.dhm(vw["reset_ts"]))],
+                 sentence="5-hour: no window open. Blocked by the weekly limit until %s." % render.dhm(vw["reset_ts"]))
     if vw.get("present") and vw["verdict"] == "maxed" and v5.get("present") and v5["verdict"] != "maxed":
         # The week's limit blocks the 5 hours too: no forecast, no "faster".
         a.update(kind="idle", pct=floor_pct(v5["used"]), used=round(v5["used"], 2), projected=None,
