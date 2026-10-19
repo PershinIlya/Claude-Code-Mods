@@ -652,7 +652,7 @@ test('tiny: Wk, only the words that need you, the calm window beside them keeps 
   expect((await wide.findAll({ type: 'Svg' })).length).toBe(2)
 })
 
-test('2 windows that need you at 40 cells: the words, no bars, no button', async ($, on) => {
+test('a window that needs you at 40 cells: its words, no button', async ($, on) => {
   const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER }), win({ id: 'wk', kind: 'maxed', pct: 100, used: 100, phrase: BACK })]
   const { ui } = await drawn($, on, windows, 40)
   expect(await ui.find({ type: 'Text', text: 'Back Fri 04:00' })).toBeDefined()

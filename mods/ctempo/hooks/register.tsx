@@ -551,10 +551,11 @@ export const register: Register = (on) => {
       }
       // The short lead ("Back 16:30", "Over 80% target") below the halves.
       const words = (p: Phrase) => (L.halves ? [p.pre, p.num, p.post] : [p.narrow_pre ?? p.pre, p.num, p.narrow])
-      // Below 56 cells, 2 windows that need you fit only without the bars
+      // Below 60 cells, 2 windows that need you fit only without the bars
       // (measured in Chromium at 7 px a cell, 40 to 140).
       const squeezed = e.props.bodyColumns < 56
-      const button = !waiting && !(L.bare && both)
+      const nobars = both && e.props.bodyColumns < 60
+      const button = !waiting && !(L.bare && focus)
       // A short label below 56 cells, or when 2 windows need you with the small bars.
       const short = squeezed || (both && L.W === 44)
       const open = (await read($, details)) && button
@@ -636,7 +637,7 @@ export const register: Register = (on) => {
                   <Text size="footnote" color="inactive">
                     {L.tiny && w.id === 'wk' ? w.short : w.name}
                   </Text>
-                  {(L.tiny && focus && !att) || (squeezed && both) ? null : (
+                  {(L.tiny && focus && !att) || nobars ? null : (
                     <Svg source={barSvg(w, L.W)} alt={w.sentence} width={L.W} height={SVG_H} />
                   )}
                   {w.pct === null ? (
