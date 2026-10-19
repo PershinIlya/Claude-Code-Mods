@@ -639,15 +639,25 @@ test('beside a window that needs you, the quiet one keeps only its percent with 
   expect(await mid.find({ type: 'Text', text: '2.7x faster' })).toBeDefined()
 })
 
-test('tiny: Wk, and below 44 the calm window keeps its name and percent; Details stays', async ($, on) => {
-  const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER }), win({ id: 'wk', phrase: ON_PACE })]
+test('tiny: Wk, only the words that need you, the calm window beside them keeps its name and percent', async ($, on) => {
+  const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER }), win({ id: 'wk', phrase: FASTER })]
   const { ui } = await drawn($, on, windows, 48)
   expect(await ui.find({ type: 'Button', text: '⋯' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Wk' })).toBeDefined()
-  expect((await ui.findAll({ type: 'Svg' })).length).toBe(2)
-  const bare = await $.ui.mount(sized('desktop', 40))
-  expect((await bare.findAll({ type: 'Svg' })).length).toBe(1)
-  expect(await bare.find({ type: 'Text', text: '48%' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '2x slower' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /faster/ })).toBeUndefined()
+  expect((await ui.findAll({ type: 'Svg' })).length).toBe(1)
+  expect(await ui.find({ type: 'Text', text: '48%' })).toBeDefined()
+  const wide = await $.ui.mount(sized('desktop', 52))
+  expect((await wide.findAll({ type: 'Svg' })).length).toBe(2)
+})
+
+test('2 windows that need you at 40 cells: the words, no bars, no button', async ($, on) => {
+  const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER }), win({ id: 'wk', kind: 'maxed', pct: 100, used: 100, phrase: BACK })]
+  const { ui } = await drawn($, on, windows, 40)
+  expect(await ui.find({ type: 'Text', text: 'Back Fri 04:00' })).toBeDefined()
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+  expect(await ui.find({ type: 'Svg' })).toBeUndefined()
 })
 
 test('narrow, 2 windows that need you get the room: short words, and below 56 no bars', async ($, on) => {

@@ -365,10 +365,9 @@ async function poll($: EngineInterface) {
 // -- drawing ----------------------------------------------------------------
 
 // Widths in the band's cells (bodyColumns), checked in Chromium at 7 px a
-// cell from 40 to 140 columns: halves with resets and the long words from
-// 112, 64 px bars from 72, no Details button and "Wk" below 52, and below 44
-// no grey words, and a calm window beside one that needs you keeps only its
-// name and percent.
+// cell from 40 to 140 columns: halves with resets from 112, 64 px bars from
+// 72, "Wk" and only the words that need you below 52, where a calm window
+// beside one that needs you keeps only its name and percent.
 export const layout = (body: number) => ({
   halves: body >= 112,
   W: body >= 72 ? 64 : 44,
@@ -542,20 +541,22 @@ export const register: Register = (on) => {
       // Every window says its pace ("1.4x faster", "On pace", "2x slower").
       // With the small bars, below 72 cells, only one window that does not
       // need you keeps its words (green before grey, the 5 hours first), and
-      // none beside one that does; below 44 no grey words at all.
+      // none beside one that does; below 52 only the words that need you.
       const quiet = wins.filter((w) => w.phrase && !w.phrase.attention)
       const kept = quiet.find((w) => !w.phrase?.calm) ?? quiet[0]
       const said = (w: Win) => {
         const p = w.phrase
         if (!p || p.attention || L.W === 64) return p
-        return !focus && !(L.bare && p.calm) && w === kept ? p : null
+        return !focus && !L.tiny && w === kept ? p : null
       }
       // The short lead ("Back 16:30", "Over 80% target") below the halves.
       const words = (p: Phrase) => (L.halves ? [p.pre, p.num, p.post] : [p.narrow_pre ?? p.pre, p.num, p.narrow])
       // Below 56 cells, 2 windows that need you fit only without the bars
       // (measured in Chromium at 7 px a cell, 40 to 140).
       const squeezed = e.props.bodyColumns < 56
-      const button = !waiting
+      const button = !waiting && !(L.bare && both)
+      // A short label below 56 cells, or when 2 windows need you with the small bars.
+      const short = squeezed || (both && L.W === 44)
       const open = (await read($, details)) && button
       const toggle = () => update($, details, (v) => !v)
       // Details: the CLI's rows (band.details, the same as the menu bar's
@@ -635,7 +636,7 @@ export const register: Register = (on) => {
                   <Text size="footnote" color="inactive">
                     {L.tiny && w.id === 'wk' ? w.short : w.name}
                   </Text>
-                  {(L.bare && focus && !att) || (squeezed && both) ? null : (
+                  {(L.tiny && focus && !att) || (squeezed && both) ? null : (
                     <Svg source={barSvg(w, L.W)} alt={w.sentence} width={L.W} height={SVG_H} />
                   )}
                   {w.pct === null ? (
@@ -687,7 +688,7 @@ export const register: Register = (on) => {
           {button ? (
             // One label in both states, so the row never shifts when it toggles;
             // below 56 cells a short one, so the words that need you keep their room.
-            <Button key="details" plain dimColor hotkey="d" label={squeezed ? '⋯' : 'Details'} onPress={toggle} />
+            <Button key="details" plain dimColor hotkey="d" label={short ? '⋯' : 'Details'} onPress={toggle} />
           ) : null}
         </Box>
       )

@@ -310,7 +310,7 @@ def window(v, now):
         # The window ended and no new one is seen yet: it opens with the next message.
         out.update(kind="idle", pct=0, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
                    phrase=_p("Not started", "", "", "inactive", False, calm=True), sentence=sentence(v, now),
-                   details=[_row("Used", "0%"), _row("Next window", "starts with your next message")])
+                   details=[_row("Used", "0%"), _row("Next window", "with your next message")])
     else:
         out.update(pct=None, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
                    phrase=None, sentence=sentence(v, now), details=[])

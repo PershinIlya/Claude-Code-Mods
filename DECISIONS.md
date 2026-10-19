@@ -738,7 +738,8 @@ room). Details is now a table, a column per window: Used, Pace, At reset,
 Will go unused, Runs out, Resets, Rate, from the CLI (`band.details`), and
 the menu bar's menu shows the same rows under each bar (Menlo columns), so
 the Mac and Windows read alike; the button is always there, "⋯" below 56
-cells so the words that need you keep their room, and the table puts one
+cells or when 2 windows need you with the small bars (gone only at 40 cells
+with 2 such windows), below 52 cells only the words that need you show, and the table puts one
 window under the other below 72 cells (a run-out row, "Sun 22:45, 4 days
 5 h early", needs 28 cells). The terminal
 line fits by dropping the resets, then grey words, then green ones (the
