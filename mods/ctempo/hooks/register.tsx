@@ -559,8 +559,9 @@ export const register: Register = (on) => {
       const open = (await read($, details)) && button
       const toggle = () => update($, details, (v) => !v)
       // Details: the CLI's rows (band.details, the same as the menu bar's
-      // menu) as a table, a column per window; narrower than 56 cells, one
-      // window under the other.
+      // menu) as a table, a column per window; narrower than 72 cells, one
+      // window under the other (a run-out row, "Sun 22:45, 4 days 5 h
+      // early", needs 28 cells).
       const LW = 16
       const labels: string[] = []
       for (const w of wins) for (const r of w.details ?? []) if (!labels.includes(r.label)) labels.push(r.label)
@@ -579,7 +580,7 @@ export const register: Register = (on) => {
       const cols = e.props.bodyColumns
       const CW = Math.max(12, Math.min(30, Math.floor((cols - LW) / 2)))
       const table =
-        cols >= 56 ? (
+        cols >= 72 ? (
           <Box flexDirection="column">
             <Box key="t-head" flexDirection="row">
               {cell('h-label', LW, '', 'inactive')}
@@ -684,8 +685,9 @@ export const register: Register = (on) => {
             ) : null}
           </Box>
           {button ? (
-            // One label in both states, so the row never shifts when it toggles.
-            <Button key="details" plain dimColor hotkey="d" label="Details" onPress={toggle} />
+            // One label in both states, so the row never shifts when it toggles;
+            // below 56 cells a short one, so the words that need you keep their room.
+            <Button key="details" plain dimColor hotkey="d" label={squeezed ? '⋯' : 'Details'} onPress={toggle} />
           ) : null}
         </Box>
       )

@@ -627,7 +627,7 @@ test('narrow: resets go to Details, bars shrink, one quiet window keeps its word
   expect((await narrow.find({ type: 'Svg' }))?.props.width).toBe(44)
   expect(await narrow.find({ type: 'Text', text: '2.7x faster' })).toBeDefined()
   expect(await narrow.find({ type: 'Text', text: 'On pace' })).toBeUndefined()
-  expect(await narrow.find({ type: 'Button', text: 'Details' })).toBeDefined()
+  expect(await narrow.find({ type: 'Button', text: '⋯' })).toBeDefined() // below 56, a short label
 })
 
 test('beside a window that needs you, the quiet one keeps only its percent with the small bars', async ($, on) => {
@@ -642,7 +642,7 @@ test('beside a window that needs you, the quiet one keeps only its percent with 
 test('tiny: Wk, and below 44 the calm window keeps its name and percent; Details stays', async ($, on) => {
   const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER }), win({ id: 'wk', phrase: ON_PACE })]
   const { ui } = await drawn($, on, windows, 48)
-  expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: '⋯' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Wk' })).toBeDefined()
   expect((await ui.findAll({ type: 'Svg' })).length).toBe(2)
   const bare = await $.ui.mount(sized('desktop', 40))
@@ -658,7 +658,7 @@ test('narrow, 2 windows that need you get the room: short words, and below 56 no
   expect((await ui.findAll({ type: 'Svg' })).length).toBe(2)
   const tiny = await $.ui.mount(sized('desktop', 55))
   expect(await tiny.find({ type: 'Svg' })).toBeUndefined()
-  expect(await tiny.find({ type: 'Button', text: 'Details' })).toBeDefined()
+  expect(await tiny.find({ type: 'Button', text: '⋯' })).toBeDefined()
 })
 
 test('a window still waiting beside one with data says so', async ($, on) => {
@@ -688,7 +688,7 @@ test('Details opens a table, a column per window, and says how old the reading i
   expect(await ui.find({ type: 'Text', text: 'Fri 04:00' })).toMatchObject({ props: { color: 'text' } })
   expect(await ui.find({ type: 'Text', text: /^Updated 3 min ago/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined() // the same label: the row never shifts
-  const narrow = await $.ui.mount(sized('desktop', 50)) // one window under the other
+  const narrow = await $.ui.mount(sized('desktop', 71)) // one window under the other
   expect((await narrow.findAll({ type: 'Text', text: 'Used' })).length).toBe(2)
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()

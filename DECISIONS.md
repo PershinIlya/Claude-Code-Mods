@@ -737,7 +737,10 @@ run together and, on narrow bands, gone (a long phrase took the button's
 room). Details is now a table, a column per window: Used, Pace, At reset,
 Will go unused, Runs out, Resets, Rate, from the CLI (`band.details`), and
 the menu bar's menu shows the same rows under each bar (Menlo columns), so
-the Mac and Windows read alike; the button is always there. The terminal
+the Mac and Windows read alike; the button is always there, "⋯" below 56
+cells so the words that need you keep their room, and the table puts one
+window under the other below 72 cells (a run-out row, "Sun 22:45, 4 days
+5 h early", needs 28 cells). The terminal
 line fits by dropping the resets, then grey words, then green ones (the
 second window's first); the words that need you stay. Notifications read
 the run-out time and the unused quota from fields of their own.
