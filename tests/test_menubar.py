@@ -24,8 +24,9 @@ class Lines(TempHome):
         self.assertRegex(out[0], r"^55% · 48% \| image=[A-Za-z0-9+/=]+,[A-Za-z0-9+/=]+ width=24 height=18$")
         self.assertEqual(out[1], "---")
         self.assertRegex(out[2], r"^5-hour   55% \| image=\S+ width=120 height=14 size=13 tooltip=5-hour: 55% used")
-        self.assertEqual(out[3], "On pace · resets 16:30 | size=11 color=%s" % menubar.DIM)
-        self.assertEqual(out[5], "On pace · resets Fri | size=11 color=%s" % menubar.DIM)
+        # A wide gap (2 em spaces) between the words and the reset.
+        self.assertEqual(out[3], "On pace\u2003\u2003resets 16:30 | size=11 color=%s" % menubar.DIM)
+        self.assertEqual(out[5], "On pace\u2003\u2003resets Fri | size=11 color=%s" % menubar.DIM)
         self.assertIn("Updated 1 min ago | size=11 color=%s" % menubar.DIM, out)
         self.assertEqual(out[-1], "Refresh | refresh=true")
 
@@ -33,7 +34,9 @@ class Lines(TempHome):
         title = self.out("runs out")[0]
         self.assertTrue(title.startswith("70% Out 15:40 · 48% | image="), title)
         self.assertTrue(title.endswith(" color=" + menubar.TONE["error"]), title)
-        self.assertEqual(self.out("runs out")[3], "Runs out 15:40 · resets 16:30 | size=11 color=%s" % menubar.TONE["error"])
+        self.assertEqual(self.out("runs out")[3], "Runs out 15:40, go 2x slower\u2003\u2003resets 16:30 | size=11 color=%s"
+                         % menubar.TONE["error"])
+        self.assertTrue(self.out("early")[3].startswith("Can go about 2x faster\u2003\u2003resets "))
         title = self.out("unused")[0]  # green: the color says it, the words are in the menu
         self.assertTrue(title.startswith("12% · 40% | image="), title)
         self.assertTrue(title.endswith(" color=" + menubar.TONE["success"]), title)
@@ -55,7 +58,8 @@ class Lines(TempHome):
         cfg = dict(self.cfg, menubar=dict(self.cfg["menubar"], style="text"))
         out = self.out("runs out", cfg=cfg)
         self.assertEqual(out[0], "5h 70% Out 15:40 · Wk 48% | color=" + menubar.TONE["error"])
-        self.assertEqual(out[2], "5h ━━━━━━╍╍ 70% Runs out 15:40  resets 16:30 | font=Menlo size=12 trim=false")
+        self.assertEqual(out[2], "5h ━━━━━━╍╍ 70% Runs out 15:40, go 2x slower  resets 16:30 | font=Menlo size=12 "
+                                 "trim=false")
 
     def test_no_pipe_reaches_swiftbar_from_the_words(self):
         # SwiftBar reads " | " as the start of a line's parameters.

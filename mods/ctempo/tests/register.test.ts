@@ -522,7 +522,6 @@ function win(over: Partial<Win> & Pick<Win, 'id'>): Win {
     short: week ? 'Wk' : '5h',
     kind: 'run',
     pct: week ? 48 : 55,
-    approx: false,
     used: week ? 48 : 55.3,
     projected: week ? 96 : 95,
     reset: week ? 'Fri' : '16:30',
@@ -545,7 +544,8 @@ const phrase = (p: Partial<Phrase>): Phrase => ({
 })
 
 const RUNS_OUT = phrase({ pre: 'Runs out ', num: '15:40', tone: 'error', attention: true })
-const FASTER = phrase({ pre: 'Can go ', num: '2.7x', post: ' faster', tone: 'inactive', calm: true })
+const FASTER = phrase({ pre: 'Can go ', narrow_pre: '', num: '2.7x', post: ' faster', tone: 'inactive', calm: true })
+const SLOWER = phrase({ pre: 'Runs out ', narrow_pre: 'Out ', num: '15:40', post: ', go 2x slower', narrow: '', tone: 'error', attention: true })
 const UNUSED = phrase({ num: '40%', post: ' will go unused', narrow: ' unused', tone: 'success', attention: true })
 
 function cli(windows: Win[], extra: Record<string, unknown> = {}) {
@@ -591,14 +591,46 @@ test('a window that needs you says so in color, and the other percent dims', asy
   expect(await ui.find({ type: 'Text', text: '48%' })).toMatchObject({ props: { color: 'inactive', weight: 'regular' } })
 })
 
-test('narrow: resets and calm words go to the tooltip, bars shrink, the words that matter stay', async ($, on) => {
+test('narrow: resets go to the tooltip, bars shrink, the words that matter stay', async ($, on) => {
   const windows = [win({ id: 'h5', phrase: FASTER }), win({ id: 'wk', kind: 'expire', pct: 40, used: 40, projected: 60, phrase: UNUSED })]
   const { ui } = await drawn($, on, windows, 55)
   expect((await ui.find({ type: 'Svg' }))?.props.width).toBe(44)
   expect(await ui.find({ type: 'Text', text: /resets/ })).toBeUndefined()
+  // Grey words beside a window that needs you go first with the small bars...
   expect(await ui.find({ type: 'Text', text: /faster/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '40% unused' })).toMatchObject({ props: { color: 'success' } })
   expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined()
+  // ...and stay, short, with the large ones.
+  const mid = await $.ui.mount(sized('desktop', 80))
+  expect(await mid.find({ type: 'Text', text: '2.7x faster' })).toBeDefined()
+})
+
+test('the multipliers show at every width but the narrowest', async ($, on) => {
+  const both = phrase({ pre: 'Can go about ', narrow_pre: '~', num: '2x', post: ' faster', tone: 'inactive', calm: true })
+  const { ui } = await drawn($, on, [win({ id: 'h5', phrase: both }), win({ id: 'wk', phrase: FASTER })])
+  expect(await ui.find({ type: 'Text', text: 'Can go about 2x faster' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Can go 2.7x faster' })).toBeDefined()
+  const mid = await $.ui.mount(sized('desktop', 80))
+  expect(await mid.find({ type: 'Text', text: '~2x faster' })).toBeDefined()
+  expect(await mid.find({ type: 'Text', text: '2.7x faster' })).toBeDefined()
+  const narrow = await $.ui.mount(sized('desktop', 55)) // the small bars: one window's, the 5 hours first
+  expect(await narrow.find({ type: 'Text', text: '~2x faster' })).toBeDefined()
+  expect(await narrow.find({ type: 'Text', text: /2\.7x/ })).toBeUndefined()
+  const bare = await $.ui.mount(sized('desktop', 43))
+  expect(await bare.find({ type: 'Text', text: /faster/ })).toBeUndefined()
+})
+
+test('a run-out says how much slower where there is room, and drops the reset for it', async ($, on) => {
+  const { ui } = await drawn($, on, [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER }), win({ id: 'wk' })])
+  expect(await ui.find({ type: 'Text', text: 'Runs out 15:40, go 2x slower' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'resets 16:30' })).toBeUndefined() // too long for both in a half
+  expect(await ui.find({ type: 'Text', text: 'resets Fri' })).toBeDefined()
+  const mid = await $.ui.mount(sized('desktop', 80))
+  expect(await mid.find({ type: 'Text', text: 'Runs out 15:40, go 2x slower' })).toBeDefined()
+  const narrow = await $.ui.mount(sized('desktop', 72))
+  expect(await narrow.find({ type: 'Text', text: 'Runs out 15:40' })).toBeDefined()
+  const small = await $.ui.mount(sized('desktop', 55))
+  expect(await small.find({ type: 'Text', text: 'Out 15:40' })).toBeDefined()
 })
 
 test('tiny: no Details button and Wk; below 44 the calm window keeps its name and percent', async ($, on) => {
@@ -655,8 +687,8 @@ test('a window still waiting beside one with data says so', async ($, on) => {
 })
 
 test('the width thresholds', async () => {
-  expect(layout(115)).toEqual({ halves: true, W: 64, tiny: false, bare: false })
-  expect(layout(103)).toEqual({ halves: false, W: 64, tiny: false, bare: false })
+  expect(layout(112)).toEqual({ halves: true, W: 64, tiny: false, bare: false })
+  expect(layout(111)).toEqual({ halves: false, W: 64, tiny: false, bare: false })
   expect(layout(71)).toEqual({ halves: false, W: 44, tiny: false, bare: false })
   expect(layout(51)).toEqual({ halves: false, W: 44, tiny: true, bare: false })
   expect(layout(43)).toEqual({ halves: false, W: 44, tiny: true, bare: true })
@@ -670,11 +702,6 @@ test('Details opens a sentence per window and says how old the reading is', asyn
   expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined() // the same label: the row never shifts
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()
-})
-
-test('an estimate reads ≈, and waiting shows one line and no Details', async ($, on) => {
-  const { ui } = await drawn($, on, [win({ id: 'h5', pct: 37, approx: true }), win({ id: 'wk' })])
-  expect(await ui.find({ type: 'Text', text: '≈37%' })).toBeDefined()
 })
 
 test('waiting for the first reading', async ($, on) => {

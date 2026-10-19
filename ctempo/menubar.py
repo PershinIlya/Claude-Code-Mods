@@ -53,7 +53,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         if w["pct"] is None:
             parts.append("-")
             continue
-        part = "%s%d%%" % ("~" if w["approx"] else "", w["pct"])
+        part = "%d%%" % w["pct"]
         p = w.get("phrase")
         if p and p["attention"]:
             if p["tone"] != "success":  # green says it by color; its words are in the menu
@@ -70,7 +70,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     for w in ws if not waiting else []:
         name = "5-hour" if w["id"] == "h5" else "Week"
         img = "image=%s,%s width=120 height=14" % (menuart.bar(w, 120, 14, False), menuart.bar(w, 120, 14, True))
-        head = "%s   %s" % (name, "waiting" if w["pct"] is None else "%s%d%%" % ("~" if w["approx"] else "", w["pct"]))
+        head = "%s   %s" % (name, "waiting" if w["pct"] is None else "%d%%" % w["pct"])
         out.append("%s | %s size=13 tooltip=%s" % (head, img, w["sentence"].replace("|", "/")))
         out.append("%s | size=11 color=%s" % (summary(w), TONE.get((w.get("phrase") or {}).get("tone"), DIM)))
     out.append("---")
@@ -89,6 +89,11 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     return out
 
 
+# Between a window's words and its reset in the menu: 2 em spaces, a gap
+# wider than the words' own spaces (SwiftBar keeps inner spaces as they are).
+GAP = "\u2003\u2003"
+
+
 def summary(w):
     """The second line of a window in the menu: its words, and the reset."""
     if w["pct"] is None:
@@ -97,7 +102,7 @@ def summary(w):
     words = (p["pre"] + p["num"] + p["post"]) if p else ("Limit reached" if w["kind"] == "maxed" else "On pace")
     if w["kind"] == "maxed" or not w.get("reset"):
         return words
-    return "%s · resets %s" % (words, w["reset"])
+    return "%s%sresets %s" % (words, GAP, w["reset"])
 
 
 def text_lines(ws, updated, now, cfg, checked=None, note=None):
@@ -108,7 +113,7 @@ def text_lines(ws, updated, now, cfg, checked=None, note=None):
         if w["pct"] is None:
             title_parts.append(short + " -")
             continue
-        part = "%s %s%d%%" % (short, "~" if w["approx"] else "", w["pct"])
+        part = "%s %d%%" % (short, w["pct"])
         p = w.get("phrase")
         if p and p["attention"]:
             part += " " + p["narrow_pre"] + p["num"] + p["narrow"]
@@ -165,11 +170,11 @@ def show(cfg):
     now = time.time()
     note = None
     try:
-        every = cfg.get("menubar", {}).get("fetch_usage_min", 0)
+        every = usagecmd.every(cfg)
         st = _open(create=bool(every))
         if st is not None and usagecmd.due(st, now, every):
             st.close()
-            ok, msg = usagecmd.fetch(now)
+            ok, msg = usagecmd.run_now(now)
             note = None if ok else "/usage: " + msg
             st = _open()
         checked = None
@@ -345,9 +350,9 @@ def remove(path):
 
 def main(args, cfg):
     if args.fetch is not None:
-        path = config.set_value(("menubar", "fetch_usage_min"), args.fetch)
-        print("Every %g min the menu bar asks Claude Code's /usage for your levels (%s)." % (args.fetch, path)
-              if args.fetch > 0 else "The menu bar no longer runs /usage (%s)." % path)
+        from . import usagecmd
+
+        usagecmd.say_every(args.fetch, usagecmd.set_every(args.fetch))
         if args.install is None and args.uninstall is None:
             return 0
     if args.install is not None:

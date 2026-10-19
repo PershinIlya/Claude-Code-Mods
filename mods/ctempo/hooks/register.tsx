@@ -359,11 +359,12 @@ async function poll($: EngineInterface) {
 // -- drawing ----------------------------------------------------------------
 
 // Widths in the band's cells (bodyColumns), checked in Chromium at 7 px a
-// cell from 40 to 140 columns: halves with resets and calm words from 104,
-// 64 px bars from 72, no Details button and "Wk" below 52, and below 44 a
-// calm window beside one that needs you keeps only its name and percent.
+// cell from 40 to 140 columns: halves with resets and the long words from
+// 112, 64 px bars from 72, no Details button and "Wk" below 52, and below 44
+// no grey words, and a calm window beside one that needs you keeps only its
+// name and percent.
 export const layout = (body: number) => ({
-  halves: body >= 104,
+  halves: body >= 112,
   W: body >= 72 ? 64 : 44,
   tiny: body < 52,
   bare: body < 44,
@@ -531,16 +532,29 @@ export const register: Register = (on) => {
       const L = layout(e.props.bodyColumns)
       const waiting = wins.every((w) => w.pct === null)
       const focus = wins.some((w) => w.phrase?.attention)
-      const said = (p: Phrase | null) => (p && (L.halves || !p.calm) ? p : null)
-      // The short lead ("Out 15:40") only with the small bars, below 72 cells.
+      // Grey words ("Can go 2.7x faster") show wherever they fit: with the
+      // large bars always; with the small ones for one window (the one with
+      // a number), and not beside a window that needs you.
+      const calm = wins.find((w) => w.phrase?.calm && w.phrase.num) ?? wins.find((w) => w.phrase?.calm)
+      const said = (w: Win) => {
+        const p = w.phrase
+        if (!p || !p.calm || L.W === 64) return p
+        return !focus && !L.bare && w === calm ? p : null
+      }
+      // Narrow, grey words are short ("2.7x faster"). Words that need you
+      // keep their tail ("Runs out 15:40, go 2x slower") from 80 cells when
+      // they are the only such words, and their short lead ("Out
+      // 15:40") only with the small bars, below 72.
+      const both = wins.filter((w) => w.phrase?.attention).length > 1
       const words = (p: Phrase) =>
-        L.halves ? [p.pre, p.num, p.post] : [L.W === 64 ? p.pre : (p.narrow_pre ?? p.pre), p.num, p.narrow]
+        L.halves || (e.props.bodyColumns >= 80 && p.attention && !both)
+          ? [p.pre, p.num, p.post]
+          : [L.W === 64 && !p.calm ? p.pre : (p.narrow_pre ?? p.pre), p.num, p.narrow]
       // Narrow, the Details button makes room for words that need it: 2
       // windows that need you, or one long phrase ("May run out Sun 22:45";
       // below 56 cells, "Back Fri 04:00"). Below 56, 2 such phrases fit only
       // without the bars. Measured in Chromium at 7 px a cell, 40 to 140.
       const squeezed = e.props.bodyColumns < 56
-      const both = wins.filter((w) => w.phrase?.attention).length > 1
       const crowded =
         !L.halves &&
         (both ||
@@ -560,7 +574,7 @@ export const register: Register = (on) => {
             {wins.map((w) => {
               const att = Boolean(w.phrase?.attention)
               const dim = focus && !att
-              const p = said(w.phrase)
+              const p = said(w)
               const [pre, num, post] = p ? words(p) : ['', '', '']
               return (
                 <Box
@@ -590,27 +604,30 @@ export const register: Register = (on) => {
                       weight={dim ? 'regular' : 'medium'}
                       color={dim ? 'inactive' : 'text'}
                     >
-                      {`${w.approx ? '≈' : ''}${w.pct}%`}
+                      {`${w.pct}%`}
                     </Text>
                   )}
                   {p ? (
-                    <Text
-                      size="footnote"
-                      wrap="truncate-end"
-                      color={p.tone}
-                      weight={p.tone === 'inactive' ? 'regular' : 'medium'}
-                    >
-                      {pre}
-                      {num ? (
-                        <Text weight="semibold" tabular color={p.tone === 'inactive' ? 'text' : p.tone}>
-                          {num}
-                        </Text>
-                      ) : null}
-                      {post}
-                    </Text>
+                    // A little more air between the percent and the words than inside them.
+                    <Box marginLeft={squeezed ? undefined : 'xs'} flexShrink={1}>
+                      <Text
+                        size="footnote"
+                        wrap="truncate-end"
+                        color={p.tone}
+                        weight={p.tone === 'inactive' ? 'regular' : 'medium'}
+                      >
+                        {pre}
+                        {num ? (
+                          <Text weight="semibold" tabular color={p.tone === 'inactive' ? 'text' : p.tone}>
+                            {num}
+                          </Text>
+                        ) : null}
+                        {post}
+                      </Text>
+                    </Box>
                   ) : null}
-                  {L.halves && w.reset && w.pct !== null && w.kind !== 'maxed' ? (
-                    <Box marginLeft="xs">
+                  {L.halves && w.reset && w.pct !== null && w.kind !== 'maxed' && (!p || words(p).join('').length <= 24) ? (
+                    <Box marginLeft="sm">
                       <Text size="footnote" color="inactive" tabular>
                         {`resets ${w.reset}`}
                       </Text>

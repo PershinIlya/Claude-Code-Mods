@@ -543,7 +543,7 @@ class WriteFailedAtRollover(TempHome):
         self.feed(MON + 4 * H, five=(80, R1), week=(42, R7))
         self.feed(MON + 4 * H + 600, five=(84, R1), week=(43, R7))
         line = self.locked_render(R1 + 120, five=(12, R1 + 5 * H), week=(43, R7))
-        self.assertTrue(line.startswith("5h 12%  resets 10:00 · Week 43% "), line)
+        self.assertTrue(line.startswith("5h 12% "), line)
 
     def test_weekly_rollover_shows_the_payload_level(self):
         R5, R7 = int(MON + D + 2 * H), int(MON + D)

@@ -15,13 +15,15 @@ reset. `kind` says how the forecast is drawn:
   idle    nothing is moving: the used part grey, no forecast
   wait    no reading yet
 
-Words: a calm window says nothing at all ("on pace" is the bar itself), or
-a dim "Can go 2.7x faster" with room to spare. A window that needs you says
-one short thing in color ("Runs out 15:40", "40% will go unused", "Back at
-16:30"); `attention` marks it, and the other window's percent dims.
+Words: a window on pace says nothing at all (the bar says it), one with
+room to spare says by how much in grey ("Can go 2.7x faster"). A window that
+needs you says one short thing in color ("Go 1.4x slower", "Runs out 15:40
+· 2x slower", "40% will go unused", "Back at 16:30"); `attention` marks it,
+and the other window's percent dims.
 
-Percents are whole and rounded down, as Claude Code's own usage bar shows
-them. The 5-hour level may be lifted by a nowcast of at most 1 point (`level`).
+Percents are the last reading's, whole and rounded down, as Claude Code's
+own usage bar shows them. A 5-hour window that ended with no new one seen
+yet reads 0%, "Not started": the next one opens with the next message.
 """
 
 from . import clock, render
@@ -34,8 +36,6 @@ SHORT = {FIVE_HOUR: "5h", SEVEN_DAY: "Wk"}
 LONG = {FIVE_HOUR: "5-hour", SEVEN_DAY: "Week"}
 ID = {FIVE_HOUR: "h5", SEVEN_DAY: "wk"}
 
-NOWCAST_MAX_S = 300  # no reading this long: work may have stopped, so no nowcast
-NOWCAST_MAX_PTS = 1.0
 FAR_S = 20 * 3600  # a time further ahead than this names its weekday
 
 
@@ -62,25 +62,6 @@ def dur(s):
 
 def times(m):
     return ("%.1f" % m).rstrip("0").rstrip(".")
-
-
-def level(v, now):
-    """(level, lifted): the 5-hour level, nowcast by at most a point.
-
-    The level is the last reading's, and work since then is not in it yet,
-    so the bar can lag Claude Code's own by a point. While a rate is known
-    and a reading came in the last 5 minutes, add what that rate spent
-    since, capped at 1 point. Only when it lifts the whole percent shown is
-    it used, and marked as an estimate; it never changes the verdict."""
-    used = v["used"]
-    rate, known = v.get("rate"), v.get("known_ts")
-    if (v.get("window") != FIVE_HOUR or v.get("verdict") in ("maxed", "idle", "unknown")
-            or v.get("rate_source") != "lsq" or not rate or known is None or not 0 < now - known <= NOWCAST_MAX_S):
-        return used, False
-    lifted = min(used + rate * (now - known) / 3600.0, used + NOWCAST_MAX_PTS, 99.9)
-    if floor_pct(lifted) > floor_pct(used):
-        return lifted, True
-    return used, False
 
 
 # A run-out this close to the reset is on pace: the forecast is not that exact.
@@ -156,29 +137,58 @@ def phrase(v, now):
     out = _out(v)
     if out:
         soft = _soft(v)
-        return _p("May run out " if soft else "Runs out ", at(out, now), "", "warning" if soft else "error", True,
-                  narrow_pre="Out ")
+        pace = slower(v)
+        return _p("May run out " if soft else "Runs out ", at(out, now), (", " + pace[3]) if pace else "",
+                  "warning" if soft else "error", True, narrow="", narrow_pre="Out ")
     if verdict == "slow_down":
-        return _p("Ease off", "", "", "warning", True)
+        pace = slower(v)
+        if not pace:
+            return _p("Ease off", "", "", "warning", True)
+        return _p(pace[0], pace[1], pace[2], "warning", True, narrow_pre=pace[4], narrow=pace[2])
     if _harvest(v):
         return _p("", "%d%%" % floor_pct(_unused(v) or 0), " will go unused", "success", True, narrow=" unused")
     if verdict == "speed_up" and v.get("multiplier") is not None:
-        pre, num = faster(v)
-        return _p(pre, num, " faster" if num else "", "inactive", False, calm=True)
+        pre, num, post, _, narrow_pre = faster(v)
+        return _p(pre, num, post, "inactive", False, calm=True, narrow_pre=narrow_pre)
     return None
 
 
 def faster(v):
-    """("Can go ", "2.7x"), with "about" and halves for an early estimate,
-    or the words alone for a bit or plenty of room."""
+    """How much faster the window can go: (pre, num, post, short, narrow
+    pre) of "Can go 2.7x faster", with "about" and halves for an early
+    estimate, or words alone for a bit or plenty of room."""
     m = v["multiplier"]
-    if _rough(v):
+    rough = _rough(v)
+    if rough:
         m = round(m * 2) / 2
         if m < 1.5:
-            return "Can go a bit faster", ""
+            return "Can go a bit faster", "", "", "a bit faster", "A bit faster"
     if m >= 10:
-        return "Plenty of room", ""
-    return ("Can go about " if _rough(v) else "Can go "), times(m) + "x"
+        return "Plenty of room", "", "", "plenty of room", "Plenty of room"
+    num = times(m) + "x"
+    return ("Can go about " if rough else "Can go "), num, " faster", ("~" if rough else "") + num + " faster", \
+        ("~" if rough else "")
+
+
+def slower(v):
+    """How much slower the window must go to land on its target at the
+    reset, as faster(): "Go 1.4x slower" (1 / the multiplier), "Pause" from
+    10x; None without a multiplier, or when it is close to 1 (under 1.1x, or
+    1.5x for an early estimate)."""
+    m = v.get("multiplier")
+    if m is None:
+        return None
+    rough = _rough(v)
+    if m <= 0.1:
+        return "Pause until the reset", "", "", "pause", "Pause"
+    f = 1.0 / m
+    if rough:
+        f = round(f * 2) / 2
+    if f < (1.5 if rough else 1.1):
+        return None
+    num = times(f) + "x"
+    return ("Go about " if rough else "Go "), num, " slower", "go " + ("~" if rough else "") + num + " slower", \
+        ("~" if rough else "")
 
 
 def _p(pre, num, post, tone, attention, narrow=None, calm=False, narrow_pre=None):
@@ -186,22 +196,22 @@ def _p(pre, num, post, tone, attention, narrow=None, calm=False, narrow_pre=None
             "narrow": post if narrow is None else narrow, "tone": tone, "attention": attention, "calm": calm}
 
 
-def sentence(v, now, shown, lifted):
+def sentence(v, now):
     """The window in words, for the bar's tooltip and Details."""
     name = LONG[v["window"]]
     if not v.get("present"):
         if v.get("raw"):
             used, reset = v["raw"]
             return "%s: %d%% used, resets %s." % (name, floor_pct(used), at(reset, now))
+        if v.get("ended_ts"):
+            ended = v["ended_ts"]
+            when = ("at " + render.hm(ended)) if now - ended < FAR_S else render.dhm(ended)
+            return "%s: the last window ended %s; a new one starts with your next message." % (name, when)
         return "%s: waiting for the first reading." % name
     if v["verdict"] == "maxed":
         return "%s: limit reached. Back %s." % (name, _at_words(v["reset_ts"], now))
     reset = render.dhm(v["reset_ts"]) if v["window"] == SEVEN_DAY else at(v["reset_ts"], now)
-    if lifted:
-        head = "%s: about %d%% used (%d%% at the last reading), resets %s." % (
-            name, floor_pct(shown), floor_pct(v["used"]), reset)
-    else:
-        head = "%s: %d%% used, resets %s." % (name, floor_pct(shown), reset)
+    head = "%s: %d%% used, resets %s." % (name, floor_pct(v["used"]), reset)
     return head + " " + _verdict_words(v, now)
 
 
@@ -223,19 +233,24 @@ def _verdict_words(v, now):
     out = _out(v)
     if out:
         lead = "May run out" if _soft(v) else "Runs out"
-        return "%s %s, %s before the reset. Ease off." % (lead, _at_words(out, now), dur(v["reset_ts"] - out))
+        return "%s %s, %s before the reset. %s." % (lead, _at_words(out, now), dur(v["reset_ts"] - out), _ease(v))
     if verdict == "unknown":
         if v["window"] == FIVE_HOUR:
             return over + "No pace yet: up to %s%% an hour is safe." % render.rate(v.get("allowed"))
         return over + "No pace yet."
     if verdict == "slow_down":
-        return "Heading for %s, above your %d%% target. Ease off." % (by, int(round(v.get("target", 100.0))))
+        return "Heading for %s, above your %d%% target. %s." % (by, int(round(v.get("target", 100.0))), _ease(v))
     if _harvest(v):
         return "%s: %d%% will go unused. Use it." % (by[0].upper() + by[1:], floor_pct(_unused(v) or 0))
     if verdict == "speed_up" and v.get("multiplier") is not None:
-        pre, num = faster(v)
-        return "%s%s: %s%s." % (pre, num + " faster" if num else "", by, early)
+        pre, num, post = faster(v)[:3]
+        return "%s%s%s: %s%s." % (pre, num, post, by, early)
     return "On pace, %s%s." % (by, early)
+
+
+def _ease(v):
+    pace = slower(v)
+    return (pace[0] + pace[1] + pace[2]) if pace else "Ease off"
 
 
 def window(v, now):
@@ -243,23 +258,27 @@ def window(v, now):
     w = v.get("window")
     out = {"id": ID[w], "name": NAME[w], "short": SHORT[w], "kind": bar_kind(v)}
     if v.get("present"):
-        shown, lifted = level(v, now)
+        used = v["used"]
         proj = v.get("projected")
         out.update(
-            pct=floor_pct(shown), approx=lifted, used=round(shown, 2),
-            projected=None if proj is None else round(max(proj, shown), 2),
+            pct=floor_pct(used), used=round(used, 2),
+            projected=None if proj is None else round(max(proj, used), 2),
             reset=day(v["reset_ts"], now), reset_ts=v["reset_ts"],
-            phrase=phrase(v, now), sentence=sentence(v, now, shown, lifted),
+            phrase=phrase(v, now), sentence=sentence(v, now),
             # A milder run-out: the bar's red forecast fades, as a rough estimate does.
             soft=out["kind"] == "dry" and _soft(v),
         )
     elif v.get("raw"):
         used, reset = v["raw"]
-        out.update(pct=floor_pct(used), approx=False, used=round(used, 2), projected=None, soft=False,
-                   reset=day(reset, now), reset_ts=reset, phrase=None, sentence=sentence(v, now, used, False))
+        out.update(pct=floor_pct(used), used=round(used, 2), projected=None, soft=False,
+                   reset=day(reset, now), reset_ts=reset, phrase=None, sentence=sentence(v, now))
+    elif v.get("ended_ts"):
+        # The window ended and no new one is seen yet: it opens with the next message.
+        out.update(kind="idle", pct=0, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
+                   phrase=_p("Not started", "", "", "inactive", False, calm=True), sentence=sentence(v, now))
     else:
-        out.update(pct=None, approx=False, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
-                   phrase=None, sentence=sentence(v, now, 0.0, False))
+        out.update(pct=None, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
+                   phrase=None, sentence=sentence(v, now))
     return out
 
 
@@ -268,7 +287,7 @@ def windows(v5, vw, now):
     b = window(dict(vw, window=SEVEN_DAY), now)
     if vw.get("present") and vw["verdict"] == "maxed" and v5.get("present") and v5["verdict"] != "maxed":
         # The week's limit blocks the 5 hours too: no forecast, no "faster".
-        a.update(kind="idle", pct=floor_pct(v5["used"]), approx=False, used=round(v5["used"], 2), projected=None,
+        a.update(kind="idle", pct=floor_pct(v5["used"]), used=round(v5["used"], 2), projected=None,
                  phrase=None, soft=False,
                  sentence="5-hour: %d%% used, resets %s. Blocked by the weekly limit until %s." % (
                      floor_pct(v5["used"]), at(v5["reset_ts"], now), render.dhm(vw["reset_ts"])))
@@ -324,21 +343,23 @@ def bar_cells(win, cells, sym):
 def segments(ws, cfg, width=None):
     """[(text, tone)] of the terminal line, fitted to the width.
 
-    Optional parts go first: the resets, then calm words, then the bars
-    shrink, then Week becomes Wk, then a calm window beside one that needs
-    you keeps only its name and percent; a last resort cuts the line."""
+    Optional parts go first: the resets, then the words get short ("2.7x
+    faster", "Out 15:40"), then the grey words go, then the bars shrink,
+    then Week becomes Wk, then a calm window beside one that needs you
+    keeps only its name and percent; a last resort cuts the line."""
     s = render.symbols(cfg)
     width = int(width or cfg["display"].get("max_width", 80))
     if not any(w["pct"] is not None for w in ws):
         return render.fit([("ctempo: waiting for usage data", "dim")], cfg, width)
     focus = any(w.get("phrase") and w["phrase"]["attention"] for w in ws)
     steps = [
-        dict(resets=True, calm=True, cells=CELLS[0], short=False, bare=False),
-        dict(resets=False, calm=True, cells=CELLS[0], short=False, bare=False),
-        dict(resets=False, calm=False, cells=CELLS[0], short=False, bare=False),
-        dict(resets=False, calm=False, cells=CELLS[1], short=False, bare=False),
-        dict(resets=False, calm=False, cells=CELLS[1], short=True, bare=False),
-        dict(resets=False, calm=False, cells=CELLS[1], short=True, bare=True),
+        dict(resets=True, wide=True, calm=True, cells=CELLS[0], short=False, bare=False),
+        dict(resets=False, wide=True, calm=True, cells=CELLS[0], short=False, bare=False),
+        dict(resets=False, wide=False, calm=True, cells=CELLS[0], short=False, bare=False),
+        dict(resets=False, wide=False, calm=False, cells=CELLS[0], short=False, bare=False),
+        dict(resets=False, wide=False, calm=False, cells=CELLS[1], short=False, bare=False),
+        dict(resets=False, wide=False, calm=False, cells=CELLS[1], short=True, bare=False),
+        dict(resets=False, wide=False, calm=False, cells=CELLS[1], short=True, bare=True),
     ]
     for step in steps:
         segs = []
@@ -363,10 +384,9 @@ def _window_segs(w, step, focus, s):
     if not (step["bare"] and focus and not attention):
         out.extend(bar_cells(w, step["cells"], s))
         out.append((" ", "plain"))
-    approx = ("~" if s["x"] == "x" else "≈") if w["approx"] else ""
-    out.append((approx + "%d%%" % w["pct"], "inactive" if focus and not attention else "text"))
+    out.append(("%d%%" % w["pct"], "inactive" if focus and not attention else "text"))
     if p and (step["calm"] or not p["calm"]):
-        pre, post = (p["pre"], p["post"]) if step["calm"] else (p["narrow_pre"], p["narrow"])
+        pre, post = (p["pre"], p["post"]) if step["wide"] else (p["narrow_pre"], p["narrow"])
         out.append((" " + pre + p["num"] + post, p["tone"]))
     if step["resets"] and w["reset"] and w["kind"] != "maxed":
         out.append(("  resets " + w["reset"], "inactive"))

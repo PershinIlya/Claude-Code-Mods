@@ -28,33 +28,50 @@ there is something to say.
   green dots fill quota that will go unused, when that is at least 10 points.
   A solid red bar means the limit is reached, a grey fill that nothing is
   moving.
-- **The percent.** Rounded down, as Claude Code's own usage bar shows it.
-  `≈37%` is an estimate: the last reading plus what your current pace spent
-  since, at most 1 point more. When one window needs you, the other one's
-  percent turns grey.
+- **The percent.** The last reading, rounded down, as Claude Code's own
+  usage bar shows it. When one window needs you, the other one's percent
+  turns grey. After a 5-hour window ends, the next one starts only with your
+  next message: until then the band reads `5h 0% Not started`.
 - **The words.** A window on pace says nothing. With room to spare it says
-  `Can go 2.7x faster` (`about 2x` while the estimate is rough). A window
-  that needs you says one thing in color: `Runs out 15:40` (red; `May run
-  out` in yellow when it is close), `Ease off`, `40% will go unused` (green),
-  `Back at 16:30` when the limit is reached, `Over your 80% target` (with a
-  target below 100), or `Idle`. While the week is at its limit, the 5-hour
-  bar turns grey: nothing more can be spent there either.
-- **Resets** follow when the band is wide. In a narrower window they, and the
-  calm words, move to Details, and the words that matter get shorter (`Out
-  15:40`).
+  by how much in grey: `Can go 2.7x faster` (`about 2x` while the estimate is
+  rough). A window that needs you says one thing in color: `Runs out 15:40,
+  go 2x slower` (red; `May run out` in yellow when it is close), `Go 1.4x
+  slower` (above a target below 100), `40% will go unused` (green), `Back at
+  16:30` when the limit is reached, `Over your 80% target`, or `Idle`. While
+  the week is at its limit, the 5-hour bar turns grey: nothing more can be
+  spent there either.
+- **Resets** follow when the band is wide. In a narrower window they move to
+  Details and the words get shorter (`2.7x faster`, `Out 15:40`); with the
+  smallest bars only one window keeps its grey words.
 - **Details** (the button, or `d` when the band has the focus) adds one
   sentence per window, such as "5-hour: 70% used, resets 16:30. Runs out at
-  15:40, 50 min before the reset. Ease off.", and how old the last reading is.
+  15:40, 50 min before the reset. Go 2x slower.", and how old the last
+  reading is.
 
 The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
 unused (`#`, `=`, `.` with `display.symbols: "ascii"`), in color unless
 `NO_COLOR` is set. When it does not fit `display.max_width`, the resets go
-first, then the calm words, then the bars shrink.
+first, then the words get shorter, then the grey words go, then the bars
+shrink.
 
 A reading is only as new as the last answer Claude got from the API in some
 chat on this machine, so the band can trail Claude Code's own usage bar by a
 point for a moment. The Desktop band checks every 5 seconds for a new reading,
-from its own chat or another one, and redraws at once (D-31).
+from its own chat or another one, and redraws at once (D-31). Work elsewhere
+(claude.ai chats, Cowork, cloud sessions, another computer) reaches it only
+through `/usage`, below.
+
+### Usage from everywhere
+
+`ctempo fetch --every 10` lets ctempo ask Claude Code itself: at most every
+10 minutes the macOS menu bar, or a Desktop band on any system, runs
+`claude -p "/usage"` in the background (about 6 s) and records the account's
+levels it prints, as readings from a session of its own. ctempo never sees a
+credential: Claude Code makes the request with its own login. `ctempo fetch`
+runs it once now; `ctempo fetch --every 0` turns it off (the default);
+`ctempo doctor` says when it last answered, or why not. It needs Python 3.9
+or later (time zones) and the `claude` command (on Windows in
+`%USERPROFILE%\.local\bin` or npm's folder).
 
 ## The menu bar (macOS)
 
@@ -80,13 +97,9 @@ grow old, the title turns grey after 30 minutes and the menu says so.
 `ctempo menubar --uninstall` (or `ctempo uninstall --apply`) removes it.
 
 To keep the numbers fresh while you work in chats, Cowork or cloud sessions,
-let the menu bar ask Claude Code itself: `ctempo menubar --fetch 10` runs
-`claude -p "/usage"` at most every 10 minutes (about 6 s each, in the
-background of the refresh) and records the account's levels it prints, as
-readings from a session of its own. ctempo never sees a credential: Claude
-Code makes the request with its own login. The menu then also says when
-`/usage` last answered. `ctempo menubar --fetch 0` turns it off (the default).
-It needs Python 3.9 or later (time zones).
+turn on [Usage from everywhere](#usage-from-everywhere) (`ctempo fetch --every
+10`; `ctempo menubar --fetch 10` does the same). The menu then also says when
+`/usage` last answered.
 
 The menu bar also posts a macOS notification, once per window, when a limit
 will run out before its reset, when it is reached, or when quota will go
@@ -356,6 +369,8 @@ marketplace (you ran them yourself), it completes. Your history stays in
 | `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
 | `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
 | `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen; on Windows, the shell Claude Code runs the status line in and whether the command suits it |
+| `ctempo fetch [--every MIN]` | ask Claude Code's `/usage` for the account's levels now, or from now on every MIN minutes (0: never) |
+| `ctempo menubar [--install|--uninstall]` | the band in the macOS menu bar (SwiftBar) |
 | `ctempo config [show|init|path]` | effective configuration |
 
 `ctempo` with no command is `ctempo now`.
@@ -384,6 +399,8 @@ default):
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
 | `mod.refresh_s` | 60 | how often the mod refreshes the band when no reading moved (15 to 3600) |
 | `compose.timeout_ms` | 1500 (3000 on Windows) | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 5000 for a slow PowerShell or Git Bash script |
+| `fetch_usage_min` | 0 | every this many minutes the menu bar or a Desktop band runs `claude -p "/usage"` for the account's levels; 0 never (`ctempo fetch --every N`) |
+| `menubar.notify`, `menubar.style` | true, `bars` | macOS notifications; `text` for the plain text menu |
 | `retention_days` | 365 | history kept |
 
 `CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
@@ -426,9 +443,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 483 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 488 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 64 tests
+claude plugin test mods/ctempo                 # 65 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

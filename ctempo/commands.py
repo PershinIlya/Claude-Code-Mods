@@ -658,6 +658,11 @@ def cmd_doctor(args, cfg):
                 if lr:
                     add("ok", "last %s line (%s ago): %s" % (src, dur(now - lr["ts"]), lr["line"]),
                         "rate_limits received: %s" % json.dumps(lr.get("rate_limits"), separators=(",", ":")))
+            every = cfg.get("fetch_usage_min") or 0
+            if every:
+                ok_at, note = st.meta_get("usage_cmd_ok_at"), st.meta_get("usage_cmd_note")
+                add("warn" if note else "ok", "/usage every %g min" % every,
+                    note or ("last answered %s ago" % dur(now - ok_at) if ok_at else "not run yet"))
             kinds = st.kinds()
             if kinds:
                 add("ok", "rate-limit kinds seen", ", ".join("%s (%s, %d)" % (k, s, c) for k, s, _, _, c in kinds))

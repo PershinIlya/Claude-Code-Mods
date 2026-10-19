@@ -88,12 +88,15 @@ DEFAULTS = {
     # Surfaces where the mod draws its band. The terminal already has the
     # statusLine, so it is left out by default.
     "mod": {"surfaces": ["desktop"], "refresh_s": 60},
-    # The macOS menu bar (ctempo menubar): every this many minutes it asks
-    # Claude Code's own /usage for the account's levels (0: never).
+    # Every this many minutes the menu bar or a Desktop band asks Claude
+    # Code's own /usage for the account's levels, so work in chats, cloud
+    # sessions or on another computer shows too (0: never; `ctempo fetch`).
+    "fetch_usage_min": 0,
+    # The macOS menu bar (ctempo menubar).
     # notify: a macOS notification when a limit will run out or is reached,
     # or quota will go unused (once per window).
     # style: "bars" draws the bars as pictures, "text" as plain text.
-    "menubar": {"fetch_usage_min": 0, "notify": True, "style": "bars"},
+    "menubar": {"notify": True, "style": "bars"},
     "retention_days": 365,
     "write_min_interval_s": 60,
     "db_timeout_ms": 250,
@@ -224,7 +227,7 @@ RANGES = {
     ("display", "max_width"): (20, 400),
     ("compose", "timeout_ms"): (0, 10000),
     ("mod", "refresh_s"): (15, 3600),
-    ("menubar", "fetch_usage_min"): (0, 1440),
+    ("fetch_usage_min",): (0, 1440),
     ("retention_days",): (7, 3650),
     ("write_min_interval_s",): (0, 3600),
     ("db_timeout_ms",): (10, 5000),
@@ -311,6 +314,10 @@ def load(path=None):
             user = _read(path)
             if isinstance(user, dict):
                 _merge(cfg, user)
+                bar = user.get("menubar")
+                old = bar.get("fetch_usage_min") if isinstance(bar, dict) else None
+                if "fetch_usage_min" not in user and _compatible(0, old):  # where it was before
+                    cfg["fetch_usage_min"] = old
         except (OSError, ValueError):
             pass
         return normalize(cfg)
@@ -327,8 +334,9 @@ def target(cfg, window):
     return min(100.0, max(1.0, t))
 
 
-def set_value(keys, value, path=None):
-    """Set one key in config.json, keeping everything else in the file."""
+def set_value(keys, value, path=None, drop=()):
+    """Set one key in config.json, keeping everything else in the file but
+    the keys in `drop` (tuples of keys, as `keys`)."""
     path = path or config_path()
     try:
         user = _read(path)
@@ -342,6 +350,12 @@ def set_value(keys, value, path=None):
             d[k] = {}
         d = d[k]
     d[keys[-1]] = value
+    for gone in drop:
+        d = user
+        for k in gone[:-1]:
+            d = d.get(k) if isinstance(d, dict) else None
+        if isinstance(d, dict):
+            d.pop(gone[-1], None)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(user, f, indent=2)

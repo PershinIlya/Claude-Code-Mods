@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import unittest
 from unittest import mock
 
@@ -74,7 +75,7 @@ class Fetch(TempHome):
 class MenuBar(TempHome):
     @needs_zones
     def test_the_menu_bar_fetches_when_asked_and_says_so(self):
-        config.set_value(("menubar", "fetch_usage_min"), 10)
+        usagecmd.set_every(10)
         cfg = config.load()
         out, real = io.StringIO(), usagecmd.fetch
         with contextlib.redirect_stdout(out), mock.patch("time.time", return_value=NOW + 60), \
@@ -85,15 +86,66 @@ class MenuBar(TempHome):
         self.assertIn("Updated just now, checked just now | size=11 color=%s" % menubar.DIM, lines)
 
     def test_off_by_default(self):
-        self.assertEqual(config.load()["menubar"]["fetch_usage_min"], 0)
+        self.assertEqual(config.load()["fetch_usage_min"], 0)
         with mock.patch.object(usagecmd, "fetch") as fetch, contextlib.redirect_stdout(io.StringIO()):
             menubar.show(config.load())
         fetch.assert_not_called()
 
-    def test_set_value_keeps_the_rest_of_the_file(self):
+    def test_set_every_keeps_the_rest_of_the_file(self):
         path = config.config_path()
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"target_5h": 90, "menubar": {"other": 1}}, f)
-        config.set_value(("menubar", "fetch_usage_min"), 5)
+            json.dump({"target_5h": 90, "menubar": {"other": 1, "fetch_usage_min": 10}}, f)
+        self.assertEqual(config.load(path)["fetch_usage_min"], 10)  # where it was before: still read
+        usagecmd.set_every(5)
         with open(path, encoding="utf-8") as f:
-            self.assertEqual(json.load(f), {"target_5h": 90, "menubar": {"other": 1, "fetch_usage_min": 5}})
+            self.assertEqual(json.load(f), {"target_5h": 90, "menubar": {"other": 1}, "fetch_usage_min": 5})
+        usagecmd.set_every(0)
+        self.assertEqual(config.load(path)["fetch_usage_min"], 0)
+
+
+class Background(TempHome):
+    """A Desktop band (statusline --source mod) starts `ctempo fetch` in the
+    background when one is due, and never waits for it."""
+
+    def test_spawn_when_due_only(self):
+        started = []
+        popen = lambda cmd, **kw: started.append((cmd, kw))  # noqa: E731
+        cfg = dict(self.cfg, fetch_usage_min=10)
+        rt = ("/py", ["-I", "-S"], "/repo/bin/ctempo")
+        self.assertTrue(usagecmd.spawn(self.st, NOW, cfg, rt, popen))
+        self.assertFalse(usagecmd.spawn(self.st, NOW + 300, cfg, rt, popen))  # 5 min later: not yet
+        self.assertFalse(usagecmd.spawn(self.st, NOW + 900, dict(cfg, fetch_usage_min=0), rt, popen))
+        self.assertEqual(len(started), 1)
+        cmd, kw = started[0]
+        self.assertEqual(cmd, ["/py", "-I", "-S", "/repo/bin/ctempo", "fetch"])
+        self.assertIs(kw["stdout"], subprocess.DEVNULL)
+        self.assertEqual(kw["env"]["CTEMPO_HOME"], config.home())
+
+    def test_the_mod_run_spawns_and_the_terminal_does_not(self):
+        from ctempo import statusline
+
+        cfg = dict(self.cfg, fetch_usage_min=10)
+        self.st.close()
+        with mock.patch.object(usagecmd, "spawn", return_value=True) as spawn:
+            for source in ("statusline", "mod"):
+                opts = dict(statusline.parse_args([]), source=source)
+                statusline.compute("{}", cfg, opts, NOW, lambda a, b: "")
+        self.assertEqual(spawn.call_count, 1)  # the mod's run only
+        statusline.compute("{}", self.cfg, dict(statusline.parse_args([]), source="mod"), NOW, lambda a, b: "")
+        self.assertEqual(spawn.call_count, 1)  # off: not even asked
+
+    def test_a_nested_claude_does_not_see_the_session(self):
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(kw["env"])
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+
+        env = dict(os.environ, CLAUDECODE="1", CLAUDE_CODE_ENTRYPOINT="claude-desktop", CLAUDE_CONFIG_DIR="/x")
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(usagecmd, "claude_bin", return_value="claude"), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            ok, msg = usagecmd.fetch(NOW)
+        self.assertFalse(ok)
+        self.assertNotIn("CLAUDECODE", seen)
+        self.assertNotIn("CLAUDE_CODE_ENTRYPOINT", seen)
+        self.assertEqual(seen.get("CLAUDE_CONFIG_DIR"), "/x")

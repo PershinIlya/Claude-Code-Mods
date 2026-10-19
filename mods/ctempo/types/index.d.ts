@@ -18,7 +18,7 @@ export type Phrase = {
   tone: 'inactive' | 'success' | 'warning' | 'error'
   // The window needs you: its words always show, the other percent dims.
   attention: boolean
-  // Shown only when there is room.
+  // Grey words ("Can go 2.7x faster"): the first to go when room is short.
   calm: boolean
 }
 
@@ -29,8 +29,6 @@ export type Win = {
   short: string
   kind: BarKind
   pct: number | null
-  // The percent is a nowcast (at most 1 point above the last reading).
-  approx: boolean
   // A milder run-out (yellow): the red forecast fades.
   soft?: boolean
   used: number

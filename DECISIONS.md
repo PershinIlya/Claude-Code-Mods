@@ -656,14 +656,13 @@ shown: a new level, window or reset, never a heartbeat or a rejected window,
 which kept 2 chats waking each other every 5 s, found in review; another
 chat's reading arrives within seconds, and a run ignores its own touch by the
 time written in it); a failing run is retried by the 60 s refresh, not the
-poll; and the 5-hour percent is nowcast: the last
+poll; and the 5-hour percent was nowcast: the last
 level plus the fitted rate times the time since that level was read, capped at
-1 point, only with a least-squares rate, a fresh reading in the last 5 minutes
-and a verdict that is neither idle, unknown nor maxed, shown only when it lifts
-the whole percent, as "≈37%", and never used for the verdict. A simulation of 2
-chats on one store put ctempo below the native bar 5% of the time in steady
-work (13% with sparse responses, 59% without the nowcast) and above it at most
-1%. Exact agreement needs the usage endpoint, which is left out (D-04).
+1 point, shown as "≈37%". A simulation of 2 chats on one store put ctempo
+below the native bar 5% of the time in steady work and above it at most 1%.
+On the person's Windows machine it read 15% against the account's 14% when
+work had paused, which read as wrong, so it is gone (D-33). Exact agreement
+needs the usage endpoint, which is left out (D-04).
 
 **D-32. Where the band can show.** A mod draws only where the app attaches a
 surface to the session. Tested on the person's Mac (desktop app 2.42304.0,
@@ -678,7 +677,7 @@ Claude Code, `ctempo menubar` prints the band as a SwiftBar plugin for the macOS
 menu bar: read only, from the store, refreshed every minute; its readings are
 as old as the last Claude Code session's on that Mac, which the title (grey
 after 30 minutes) and the menu say. With `menubar.fetch_usage_min` above 0
-(`ctempo menubar --fetch 10`, off by default) the menu bar runs
+(now `fetch_usage_min`, D-33; `ctempo menubar --fetch 10`, off by default) the menu bar runs
 `claude -p "/usage"`, Claude Code's own usage command, at most that often and
 records the levels it prints (whole percents, resets read in the IANA zone it
 names, so Python 3.9 or later) as readings of a session "usage-cmd": account
@@ -690,6 +689,36 @@ worth acting on, once per window instance and kind: runs out (red, not the
 milder "may"), reached, will go unused; never from readings over 30 minutes
 old. Push to a phone (ntfy, as ccpace does) is left out: the numbers would pass
 through a third-party service.
+
+**D-33. Multipliers back, and readings from everywhere.** The person's
+feedback after a day on Windows: the band had become only percents, and the
+multipliers ("how much faster I can go, how much slower I must go") were the
+most useful part. Now the grey "Can go 2.7x faster" shows at every width but
+the narrowest, short ("2.7x faster", "~2x faster") below the halves, and for
+one window only with the small bars; the slow side has a number too: "Go 1.4x
+slower" for a pace above a target (1 / the multiplier, halves for an early
+estimate, under 1.1x or 1.5x it stays "Ease off", from 10x "Pause until the
+reset") and a run-out says it after the time: "Runs out 15:40, go 2x slower"
+(from 80 cells when it is the only window that needs you; the reset then goes
+to Details in the halves, which start at 112 cells now). Words sit a little
+further from the percent, and in the menu bar 2 em spaces separate the words
+from the reset. Laid out in Chromium for 19 states at 19 widths from 40 to
+140 cells, light and dark: no word cut. Accuracy: the nowcast is gone (D-31),
+so a percent is always a reading. The remaining gaps are readings that have
+not arrived: work in claude.ai chats, Cowork, cloud sessions or on another
+computer reaches a machine only through `/usage`. So the fetch of D-32 is no
+longer the menu bar's alone: `fetch_usage_min` (top level now; the old
+`menubar.fetch_usage_min` is still read) also lets a Desktop band, on any
+system, start `ctempo fetch` in the background when one is due (never the
+terminal status line, which must stay fast), detached and without a console
+window on Windows, with the session's markers (`CLAUDECODE`,
+`CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`) removed so the nested
+`claude` neither refuses nor joins the session; one attempt per interval
+across all bands and the menu bar (the store's `usage_cmd_tried_at`), and
+`doctor` shows when it last answered or why not. And after a 5-hour window
+ends, the band read "waiting" until the first message of the day; it now
+reads "5h 0% Not started", since the next window opens only with that
+message.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.

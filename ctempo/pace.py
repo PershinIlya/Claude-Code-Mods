@@ -125,6 +125,8 @@ def five_hour(store, now, cfg, reading=None):
         v["severity"] = "dim"
         if reading:  # the write failed before it opened this window: show its level, no math
             v["raw"] = reading
+        elif inst is not None:  # it ended, and no new one is seen yet: that opens with the next message
+            v["ended_ts"] = inst["reset_ts"]
         return v
     tgt = config.target(cfg, FIVE_HOUR)
     used = current_used(store, inst, reading)

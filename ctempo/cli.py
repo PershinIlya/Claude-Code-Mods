@@ -57,8 +57,11 @@ def build_parser():
     s.add_argument("--install", nargs="?", const="", default=None, metavar="FOLDER",
                    help="write the SwiftBar plugin (default: the plugin folder SwiftBar uses)")
     s.add_argument("--uninstall", nargs="?", const="", default=None, metavar="FOLDER", help="remove it")
-    s.add_argument("--fetch", type=float, default=None, metavar="MIN",
-                   help="every MIN minutes ask Claude Code's /usage for the levels (0: never, the default)")
+    s.add_argument("--fetch", type=float, default=None, metavar="MIN", help="the same as `ctempo fetch --every MIN`")
+
+    s = sub.add_parser("fetch", help="ask Claude Code's /usage for the account's levels and record them")
+    s.add_argument("--every", type=float, default=None, metavar="MIN",
+                   help="from now on, every MIN minutes from the menu bar or a Desktop band (0: never, the default)")
 
     s = sub.add_parser("config", help="show the effective config")
     s.add_argument("action", nargs="?", default="show", choices=["show", "init", "path"])
@@ -108,6 +111,13 @@ def main(argv):
 
         try:
             return install.install(args) if args.cmd == "install" else install.uninstall(args)
+        except config.HomeError as e:
+            return refused(e)
+    if args.cmd == "fetch":
+        from . import usagecmd
+
+        try:
+            return usagecmd.main(args)
         except config.HomeError as e:
             return refused(e)
     if args.cmd == "menubar":

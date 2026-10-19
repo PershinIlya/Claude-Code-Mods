@@ -1,11 +1,12 @@
-"""Readings from Claude Code's own `/usage` command, for the menu bar.
+"""Readings from Claude Code's own `/usage` command.
 
 The status line and the mod see the rate limits only when a Claude Code
 session on this machine talks to the API. `claude -p "/usage"` asks for the
-account's current levels whenever it runs, so work in chats, Cowork or cloud
-sessions shows too. ctempo never sees a credential: Claude Code makes the
-request. Off by default (menubar.fetch_usage_min 0); the menu bar runs it at
-most every that many minutes. It prints
+account's current levels whenever it runs, so work in chats, Cowork, cloud
+sessions or on another computer shows too. ctempo never sees a credential:
+Claude Code makes the request. Off by default (fetch_usage_min 0); the menu
+bar runs it at most every that many minutes, and so does a Desktop band, in
+the background (`spawn`). It prints
 
   Current session: 11% used · resets Oct 17 at 6:20pm (Asia/Dubai)
   Current week (all models): 20% used · resets Oct 23 at 6am (Asia/Dubai)
@@ -71,9 +72,16 @@ def parse(text, now):
     return out
 
 
+# What marks a process as running inside a Claude Code session: a nested
+# `claude` refuses to start, or takes it for its own.
+SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "CTEMPO_HOME")
+
+
 def claude_bin():
     """claude on PATH, or where its installers put it (SwiftBar runs plugins with a bare PATH)."""
     extra = [os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+    if os.environ.get("APPDATA"):  # npm's global folder on Windows
+        extra.append(os.path.join(os.environ["APPDATA"], "npm"))
     path = os.pathsep.join([os.environ.get("PATH", "")] + extra)
     return shutil.which("claude", path=path)
 
@@ -86,7 +94,7 @@ def fetch(now=None, run=None):
         return False, "claude not found"
     try:
         if run is None:
-            env = {k: v for k, v in os.environ.items() if k != "CTEMPO_HOME"}
+            env = {k: v for k, v in os.environ.items() if k not in SESSION_ENV}
             p = subprocess.run([exe, "-p", "/usage"], capture_output=True, text=True, timeout=TIMEOUT_S,
                                cwd=config.home(), env=env)
             text, rc = p.stdout, p.returncode
@@ -96,7 +104,8 @@ def fetch(now=None, run=None):
         return False, "claude -p /usage failed: %s" % e
     readings = parse(text, now)
     if rc != 0 or not readings:
-        return False, "could not read the usage from claude -p /usage"
+        last = (text or "").strip().splitlines()[-1:]  # Claude Code's own error, if any
+        return False, "could not read the usage from claude -p /usage" + (": " + last[0][:120] if last else "")
     payload_rl = {w: {"used_percentage": u, "resets_at": r} for w, (u, r) in readings.items()}
     record(payload_rl, now)
     return True, ", ".join("%s %g%%" % (config.LABEL[w], u) for w, (u, _) in sorted(readings.items()))
@@ -117,6 +126,76 @@ def record(rate_limits, now):
         st.close()
     if any(shown_changed(a) for a in actions.values()):
         touch_stamp(now)
+
+
+def every(cfg):
+    return cfg.get("fetch_usage_min") or 0
+
+
+def set_every(minutes):
+    """Turn the fetch on (every so many minutes) or off (0). Returns the config path."""
+    return config.set_value(("fetch_usage_min",), minutes, drop=[("menubar", "fetch_usage_min")])
+
+
+def say_every(minutes, path):
+    print("Every %g min the menu bar and the Desktop band ask Claude Code's /usage for your levels (%s)."
+          % (minutes, path) if minutes > 0 else "ctempo no longer runs /usage (%s)." % path)
+
+
+def main(args):
+    """`ctempo fetch [--every MIN]`."""
+    if args.every is not None:
+        say_every(args.every, set_every(args.every))
+        return 0
+    ok, msg = run_now()
+    print(("Recorded " if ok else "ctempo fetch: ") + msg)
+    return 0 if ok else 1
+
+
+def run_now(now=None):
+    """`ctempo fetch`: one fetch, its outcome kept for doctor. Returns (ok, message)."""
+    from .store import Store
+
+    now = time.time() if now is None else now
+    ok, msg = fetch(now)
+    try:
+        st = Store(timeout_ms=2000)
+        try:
+            st.meta_set("usage_cmd_note", None if ok else msg)
+        finally:
+            st.close()
+    except Exception:
+        pass
+    return ok, msg
+
+
+def spawn(st, now, cfg, runtime=None, popen=None):
+    """A Desktop band's run: start `ctempo fetch` in the background when one is
+    due, so the band never waits for it; its readings wake the bands when
+    they land (the stamp). Returns whether it started one."""
+    if not due(st, now, every(cfg)):
+        return False
+    if runtime is None:
+        from .menubar import runtime as installed
+
+        runtime = installed()
+    python, args, entry = runtime
+    kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+              cwd=config.home(), env=dict(os.environ, CTEMPO_HOME=config.home()))
+    if config.IS_WINDOWS:
+        # No console window; out of the band's process group, and of its job when allowed.
+        flags = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        tries = [dict(kw, creationflags=flags | 0x01000000), dict(kw, creationflags=flags)]  # | BREAKAWAY_FROM_JOB
+    else:
+        tries = [dict(kw, start_new_session=True)]
+    popen = popen or subprocess.Popen
+    for opts in tries:
+        try:
+            popen([python] + list(args) + [entry, "fetch"], **opts)
+            return True
+        except OSError:
+            continue
+    return False
 
 
 def due(st, now, every_min):

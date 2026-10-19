@@ -99,6 +99,13 @@ def compute(raw, cfg, opts, now, line_of=None):
         if opts["record"] and line_of is not None:
             rl = payload.get("rate_limits") if isinstance(payload, dict) else None
             note_render(st, now, opts["source"], line_of(v5, vw), rl)
+        if opts["record"] and opts["source"] == "mod" and cfg.get("fetch_usage_min"):
+            try:  # a band asks /usage in the background now and then (usagecmd)
+                from . import usagecmd
+
+                usagecmd.spawn(st, now, cfg)
+            except Exception as e:
+                log_error(e, "fetch")
     finally:
         st.close()
     return v5, vw, readings
