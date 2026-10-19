@@ -24,24 +24,32 @@ class Lines(TempHome):
         self.assertRegex(out[0], r"^55% · 48% \| image=[A-Za-z0-9+/=]+,[A-Za-z0-9+/=]+ width=24 height=18$")
         self.assertEqual(out[1], "---")
         self.assertRegex(out[2], r"^5-hour   55% \| image=\S+ width=120 height=14 size=13 tooltip=5-hour: 55% used")
-        # A wide gap (2 em spaces) between the words and the reset.
-        self.assertEqual(out[3], "On pace\u2003\u2003resets 16:30 | size=11 color=%s" % menubar.DIM)
-        self.assertEqual(out[5], "On pace\u2003\u2003resets Fri | size=11 color=%s" % menubar.DIM)
+        # Under each bar, the rows of the Desktop band's Details, in columns.
+        menlo = " | font=Menlo size=11 trim=false color="
+        self.assertEqual(out[3], "Used            55%" + menlo + menubar.DIM)
+        self.assertEqual(out[4], "Pace            On pace" + menlo + menubar.DIM)
+        self.assertIn("Resets          16:30" + menlo + menubar.DIM, out)
+        self.assertIn("Rate            17%/h, 18%/h fits" + menlo + menubar.DIM, out)
+        self.assertIn("Resets          Fri 04:00" + menlo + menubar.DIM, out)
         self.assertIn("Updated 1 min ago | size=11 color=%s" % menubar.DIM, out)
         self.assertEqual(out[-1], "Refresh | refresh=true")
 
     def test_a_window_that_needs_you_colors_the_title(self):
         title = self.out("runs out")[0]
-        self.assertTrue(title.startswith("70% Out 15:40 · 48% | image="), title)
+        self.assertTrue(title.startswith("70% 2x slower · 48% | image="), title)
         self.assertTrue(title.endswith(" color=" + menubar.TONE["error"]), title)
-        self.assertEqual(self.out("runs out")[3], "Runs out 15:40, go 2x slower\u2003\u2003resets 16:30 | size=11 color=%s"
-                         % menubar.TONE["error"])
-        self.assertTrue(self.out("early")[3].startswith("Can go about 2x faster\u2003\u2003resets "))
-        title = self.out("unused")[0]  # green: the color says it, the words are in the menu
+        menu = self.out("runs out")
+        self.assertIn("Pace            2x slower | font=Menlo size=11 trim=false color=" + menubar.TONE["error"], menu)
+        self.assertIn("Runs out        15:40, 50 min early | font=Menlo size=11 trim=false color="
+                      + menubar.TONE["error"], menu)
+        self.assertIn("Pace            ~2x faster | font=Menlo size=11 trim=false color=" + menubar.TONE["success"],
+                      self.out("early"))
+        title = self.out("unused")[0]  # green ("faster"): the color says it, the words are in the menu
         self.assertTrue(title.startswith("12% · 40% | image="), title)
         self.assertTrue(title.endswith(" color=" + menubar.TONE["success"]), title)
         self.assertTrue(self.out("maxed")[0].startswith("100% Back 16:30 · 52% | image="))
-        self.assertEqual(self.out("maxed")[3], "Back at 16:30 | size=11 color=%s" % menubar.TONE["error"])
+        self.assertIn("Limit           reached | font=Menlo size=11 trim=false color=" + menubar.TONE["error"],
+                      self.out("maxed"))
 
     def test_old_readings_dim_the_title_and_say_where_they_come_from(self):
         out = self.out("on pace", updated=NOW - 2 * H)
@@ -57,8 +65,8 @@ class Lines(TempHome):
     def test_the_text_style_is_kept(self):
         cfg = dict(self.cfg, menubar=dict(self.cfg["menubar"], style="text"))
         out = self.out("runs out", cfg=cfg)
-        self.assertEqual(out[0], "5h 70% Out 15:40 · Wk 48% | color=" + menubar.TONE["error"])
-        self.assertEqual(out[2], "5h ━━━━━━╍╍ 70% Runs out 15:40, go 2x slower  resets 16:30 | font=Menlo size=12 "
+        self.assertEqual(out[0], "5h 70% 2x slower · Wk 48% | color=" + menubar.TONE["error"])
+        self.assertEqual(out[2], "5h ━━━━━━╍╍ 70% 2x slower  resets 16:30 | font=Menlo size=12 "
                                  "trim=false")
 
     def test_no_pipe_reaches_swiftbar_from_the_words(self):

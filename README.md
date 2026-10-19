@@ -32,21 +32,22 @@ there is something to say.
   usage bar shows it. When one window needs you, the other one's percent
   turns grey. After a 5-hour window ends, the next one starts only with your
   next message: until then the band reads `5h 0% Not started`.
-- **The words.** A window on pace says nothing. With room to spare it says
-  by how much in grey: `Can go 2.7x faster` (`about 2x` while the estimate is
-  rough). A window that needs you says one thing in color: `Runs out 15:40,
-  go 2x slower` (red; `May run out` in yellow when it is close), `Go 1.4x
-  slower` (above a target below 100), `40% will go unused` (green), `Back at
-  16:30` when the limit is reached, `Over your 80% target`, or `Idle`. While
-  the week is at its limit, the 5-hour bar turns grey: nothing more can be
-  spent there either.
+- **The pace.** Both windows say the same kind of thing: how fast you can
+  go and still land on your target at the reset. `1.4x faster` (green: room
+  to spare; `~2x` while the estimate is rough, `Plenty of room` from 10x),
+  `On pace` (grey), `2x slower` (red; yellow while the estimate is rough or
+  the overshoot mild; `Pause` from 10x, `Ease off` when it is close to 1),
+  `Back at 16:30` when the limit is reached, `Over your 80% target` (with a
+  target below 100), `Idle`. While the week is at its limit, the 5-hour bar
+  turns grey: nothing more can be spent there either.
 - **Resets** follow when the band is wide. In a narrower window they move to
-  Details and the words get shorter (`2.7x faster`, `Out 15:40`); with the
-  smallest bars only one window keeps its grey words.
-- **Details** (the button, or `d` when the band has the focus) adds one
-  sentence per window, such as "5-hour: 70% used, resets 16:30. Runs out at
-  15:40, 50 min before the reset. Go 2x slower.", and how old the last
-  reading is.
+  Details; with the smallest bars only one window that does not need you
+  keeps its words.
+- **Details** (the button, or `d` when the band has the focus) opens a small
+  table, a column per window: Used, Pace, At reset (where it lands at this
+  pace), Will go unused, Runs out (when, and how long before the reset),
+  Resets, Rate (the 5 hours: what you spend an hour and what fits), and how
+  old the last reading is. The menu bar's menu shows the same rows.
 
 The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
 unused (`#`, `=`, `.` with `display.symbols: "ascii"`), in color unless
@@ -90,10 +91,12 @@ ctempo menubar --install          # writes ctempo.1m.sh into that folder
 ```
 
 The menu bar then shows two small bars, the 5 hours on top and the week below,
-with `22% · 18%` beside them, in red, yellow or green when a window needs you
-(`70% Out 15:40 · 48%`). A click shows each window's bar as the Desktop band
-draws it, its words and reset, and how old the readings are; the full sentence
-is the bar's tooltip. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
+with `22% · 18%` beside them: green when there is room to spare, red or yellow
+with the words when a window needs you (`70% 2x slower · 48%`). A click shows
+each window's bar as the Desktop band draws it and, under it, the rows of the
+Desktop band's Details (Used, Pace, At reset, Will go unused, Runs out,
+Resets, Rate) in columns, and how old the readings are; the full sentence is
+the bar's tooltip. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
 records nothing itself: the readings come from Claude Code sessions on this
 Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
@@ -449,9 +452,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 494 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 495 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 65 tests
+claude plugin test mods/ctempo                 # 66 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

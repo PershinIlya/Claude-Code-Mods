@@ -16,11 +16,15 @@ export type Phrase = {
   narrow_pre?: string
   narrow: string
   tone: 'inactive' | 'success' | 'warning' | 'error'
-  // The window needs you: its words always show, the other percent dims.
+  // The window needs you (slower, reached, over a target): its words always
+  // show, the other percent dims.
   attention: boolean
-  // Grey words ("Can go 2.7x faster"): the first to go when room is short.
+  // Grey words ("On pace", "Idle"): the first to go when room is short.
   calm: boolean
 }
+
+// A row of Details, the same as the menu bar's menu (band.details).
+export type Detail = { label: string; value: string; tone: string }
 
 // One window of the band (band.window).
 export type Win = {
@@ -37,6 +41,7 @@ export type Win = {
   reset_ts: number | null
   phrase: Phrase | null
   sentence: string
+  details?: Detail[]
 }
 
 // What `ctempo statusline --format json` prints, plus the mod's own error.

@@ -54,61 +54,74 @@ class Words(unittest.TestCase):
         utc()
 
     def test_each_state_reads_as_designed(self):
+        # The same kind of words for both windows: the pace against the reset.
         want = {
-            "on pace": (("run", None), ("run", None)),
-            "early": (("rough", "Can go about 2x faster"), ("run", "Can go 2.7x faster")),
-            "runs out": (("dry", "Runs out 15:40, go 2x slower"), ("run", None)),
-            "maxed": (("maxed", "Back at 16:30"), ("run", None)),
-            "idle": (("idle", "Idle"), ("run", None)),
-            "unused": (("run", "Can go 1.7x faster"), ("expire", "40% will go unused")),
-            "week dry": (("run", None), ("dry", "Runs out Wed 11:00, go 2.5x slower")),
-            "half": (("run", None), ("wait", None)),
+            "on pace": (("run", "On pace"), ("run", "On pace")),
+            "early": (("rough", "~2x faster"), ("run", "2.7x faster")),
+            "runs out": (("dry", "2x slower"), ("run", "On pace")),
+            "maxed": (("maxed", "Back at 16:30"), ("run", "On pace")),
+            "idle": (("idle", "Idle"), ("run", "On pace")),
+            "unused": (("run", "1.7x faster"), ("expire", "2.5x faster")),
+            "week dry": (("run", "On pace"), ("dry", "2.5x slower")),
+            "half": (("run", "On pace"), ("wait", None)),
         }
         for name, (a, b) in STATES.items():
             got = tuple((w["kind"], words(w["phrase"])) for w in band.windows(a, b, NOW))
             self.assertEqual(got, want[name], name)
 
-    def test_attention_tones_and_the_narrow_wording(self):
+    def test_tones_and_attention(self):
         h5, wk = band.windows(*STATES["unused"], NOW)
-        self.assertEqual((wk["phrase"]["tone"], wk["phrase"]["attention"], wk["phrase"]["narrow"]),
-                         ("success", True, " unused"))
-        self.assertEqual((h5["phrase"]["tone"], h5["phrase"]["attention"], h5["phrase"]["calm"]),
-                         ("inactive", False, True))
-        h5, _ = band.windows(*STATES["runs out"], NOW)
-        p = h5["phrase"]
-        self.assertEqual((p["tone"], p["num"], p["narrow_pre"] + p["num"] + p["narrow"]), ("error", "15:40", "Out 15:40"))
-        # On pace but running out (a milder overshoot), or an early estimate: may.
+        self.assertEqual([(w["phrase"]["tone"], w["phrase"]["attention"], w["phrase"]["calm"]) for w in (h5, wk)],
+                         [("success", False, False)] * 2)  # green, kept where room is short
+        h5, wk = band.windows(*STATES["runs out"], NOW)
+        self.assertEqual((h5["phrase"]["tone"], h5["phrase"]["attention"], h5["phrase"]["num"]), ("error", True, "2x"))
+        self.assertEqual((wk["phrase"]["tone"], wk["phrase"]["calm"]), ("inactive", True))  # "On pace" goes first
+        # A milder overshoot or an early estimate: yellow; close to 1: "Ease off".
         soft = band.phrase(v5(verdict="on_pace", cap_ts=MON + 16 * H, severity="warn"), NOW)
-        self.assertEqual((words(soft), soft["tone"]), ("May run out 16:00", "warning"))  # 1.05x: no "slower"
+        self.assertEqual((words(soft), soft["tone"], soft["attention"]), ("Ease off", "warning", True))
         p = band.phrase(v5(verdict="slow_down", severity="warn", multiplier=0.7), NOW)
-        self.assertEqual((words(p), p["narrow_pre"] + p["num"] + p["narrow"], p["tone"], p["attention"]),
-                         ("Go 1.4x slower", "1.4x slower", "warning", True))
+        self.assertEqual((words(p), p["tone"]), ("1.4x slower", "warning"))  # a mild overshoot
+        p = band.phrase(v5(verdict="slow_down", severity="alert", multiplier=0.7), NOW)
+        self.assertEqual((words(p), p["tone"]), ("1.4x slower", "error"))
         self.assertEqual(words(band.phrase(v5(verdict="slow_down", multiplier=None), NOW)), "Ease off")
         self.assertIsNone(band.phrase(v5(verdict="unknown", multiplier=None, projected=None), NOW))
 
     def test_multipliers(self):
-        cases = [(1.3, "lsq", "Can go 1.3x faster", "1.3x faster"), (2.0, "lsq", "Can go 2x faster", "2x faster"),
-                 (12, "lsq", "Plenty of room", "Plenty of room"),
-                 (1.2, "interpolated", "Can go a bit faster", "A bit faster"),
-                 (1.3, "interpolated", "Can go about 1.5x faster", "~1.5x faster"),
-                 (2.3, "interpolated", "Can go about 2.5x faster", "~2.5x faster")]
-        for m, source, want, narrow in cases:
+        cases = [(1.3, "lsq", "1.3x faster"), (2.0, "lsq", "2x faster"), (12, "lsq", "Plenty of room"),
+                 (1.2, "interpolated", "A bit faster"), (1.3, "interpolated", "~1.5x faster"),
+                 (2.3, "interpolated", "~2.5x faster")]
+        for m, source, want in cases:
             v = v5(verdict="speed_up", multiplier=m, rate_source=source)
             p = band.phrase(v, NOW)
-            self.assertEqual((words(p), p["narrow_pre"] + p["num"] + p["narrow"]), (want, narrow), (m, source))
-            self.assertIn(want.split(" faster")[0], band.sentence(v, NOW))
+            self.assertEqual((words(p), p["narrow_pre"] + p["num"] + p["narrow"]), (want, want), (m, source))
+            self.assertIn(want.lstrip("~").split(" faster")[0].lower(), band.sentence(v, NOW).lower())
 
     def test_slow_down_multipliers(self):
         # How much slower: 1 / the multiplier; an early estimate in halves.
-        cases = [(0.5, "lsq", "Go 2x slower", "2x slower"), (0.75, "lsq", "Go 1.3x slower", "1.3x slower"),
-                 (0.05, "lsq", "Pause until the reset", "Pause"),
-                 (0.6, "interpolated", "Go about 1.5x slower", "~1.5x slower"),
+        cases = [(0.5, "lsq", "2x slower", "Go 2x slower"), (0.75, "lsq", "1.3x slower", "Go 1.3x slower"),
+                 (0.05, "lsq", "Pause", "Pause"), (0.6, "interpolated", "~1.5x slower", "Go ~1.5x slower"),
                  (0.8, "interpolated", "Ease off", "Ease off")]
-        for m, source, want, narrow in cases:
+        for m, source, want, said in cases:
             v = v5(verdict="slow_down", multiplier=m, rate_source=source, projected=110)
-            p = band.phrase(v, NOW)
-            self.assertEqual((words(p), p["narrow_pre"] + p["num"] + p["narrow"]), (want, narrow), (m, source))
-            self.assertTrue(band.sentence(v, NOW).endswith(want + "."), band.sentence(v, NOW))
+            self.assertEqual(words(band.phrase(v, NOW)), want, (m, source))
+            self.assertTrue(band.sentence(v, NOW).endswith(said + "."), band.sentence(v, NOW))
+
+    def test_details_rows(self):
+        def rows(w):
+            return [(r["label"], r["value"], r["tone"]) for r in w["details"]]
+
+        h5, wk = band.windows(*STATES["runs out"], NOW)
+        self.assertEqual(rows(h5), [("Used", "70%", "text"), ("Pace", "2x slower", "error"),
+                                    ("At reset", "about 100%", "text"), ("Runs out", "15:40, 50 min early", "error"),
+                                    ("Resets", "16:30", "text"), ("Rate", "17%/h, 18%/h fits", "text")])
+        _, wk = band.windows(*STATES["unused"], NOW)
+        self.assertIn(("Will go unused", "40%", "success"), rows(wk))
+        self.assertEqual(rows(wk)[-1], ("Resets", "Fri 04:00", "text"))  # no rate for the week
+        h5, _ = band.windows(*STATES["maxed"], NOW)
+        self.assertEqual(rows(h5), [("Used", "100%", "text"), ("Limit", "reached", "error"), ("Resets", "16:30", "text")])
+        h5, _ = band.windows(*STATES["idle"], NOW)
+        self.assertEqual(rows(h5)[-1], ("Rate", "idle, 18%/h fits", "text"))
+        self.assertEqual(band.windows({"present": False}, {"present": False}, NOW)[0]["details"], [])
 
     def test_week_back_and_resets_name_the_day(self):
         v = vw(used=100, verdict="maxed", severity="alert")
@@ -123,8 +136,8 @@ class Words(unittest.TestCase):
                                          "Go 2x slower.")
         self.assertEqual(wk["sentence"], "Week: 48% used, resets Fri 04:00. On pace, about 96% by then.")
         _, wk = band.windows(*STATES["unused"], NOW)
-        self.assertEqual(wk["sentence"], "Week: 40% used, resets Fri 04:00. About 60% by then: 40% will go unused. "
-                                         "Use it.")
+        self.assertEqual(wk["sentence"], "Week: 40% used, resets Fri 04:00. Can go 2.5x faster, about 60% by then: "
+                                         "40% will go unused.")
         h5, _ = band.windows(*STATES["idle"], NOW)
         self.assertEqual(h5["sentence"], "5-hour: 64% used, resets 16:30. Idle: up to 18% an hour is safe.")
         h5, wk = band.windows({"present": False}, {"present": False}, NOW)
@@ -148,7 +161,7 @@ class Words(unittest.TestCase):
         # Review 18: with min_free 0 a leftover of 0.6 said "0% will go unused".
         v = vw(used=99.4, projected=99.4, expire=0.6, severity="opportunity", verdict="on_pace")
         self.assertEqual(band.bar_kind(v), "run")
-        self.assertIsNone(band.phrase(v, NOW))
+        self.assertEqual(words(band.phrase(v, NOW)), "On pace")
         self.assertNotIn("unused", band.sentence(v, NOW))
 
     def test_a_maxed_week_blocks_the_5_hours(self):
@@ -166,25 +179,26 @@ class Words(unittest.TestCase):
         reset = int(MON + 4 * D + 4 * H)
         v = vw(used=17, verdict="on_pace", multiplier=0.98, projected=100, dry_ts=reset - 50 * 60,
                severity="warn", intensity_source="window", E=0.83)
-        self.assertIsNone(band.phrase(v, NOW))
+        self.assertEqual(words(band.phrase(v, NOW)), "On pace")
         self.assertEqual(band.bar_kind(v), "rough")
         self.assertIn("On pace", band.sentence(v, NOW))
         h5 = v5(used=80, verdict="on_pace", cap_ts=int(MON + 16 * H + 25 * 60), severity="warn")  # 5 min early
-        self.assertIsNone(band.phrase(h5, NOW))
+        self.assertEqual(words(band.phrase(h5, NOW)), "On pace")
         h5 = v5(used=80, verdict="on_pace", cap_ts=int(MON + 16 * H), severity="warn")  # 30 min early
-        self.assertEqual(words(band.phrase(h5, NOW)), "May run out 16:00")
+        self.assertEqual(words(band.phrase(h5, NOW)), "Ease off")
+        self.assertIn("May run out at 16:00", band.sentence(h5, NOW))
 
     def test_early_in_the_week_the_window_average_is_rough(self):
         early = vw(used=17, verdict="slow_down", multiplier=0.7, projected=100, dry_ts=MON + 2 * D,
                    severity="alert", intensity_source="window", E=0.85)
         p = band.phrase(early, NOW)
-        self.assertEqual((words(p), p["tone"]), ("May run out Wed 00:00, go ~1.5x slower", "warning"))
+        self.assertEqual((words(p), p["tone"]), ("~1.5x slower", "warning"))
         later = dict(early, E=0.5)
         self.assertEqual(band.phrase(later, NOW)["tone"], "error")
 
     def test_a_milder_run_out_is_soft(self):
         h5, _ = band.windows(v5(verdict="on_pace", cap_ts=MON + 16 * H, severity="warn"), vw(), NOW)
-        self.assertEqual((h5["kind"], h5["soft"], h5["phrase"]["narrow_pre"]), ("dry", True, "Out "))
+        self.assertEqual((h5["kind"], h5["soft"], words(h5["phrase"])), ("dry", True, "Ease off"))
         h5, _ = band.windows(*STATES["runs out"], NOW)
         self.assertEqual((h5["kind"], h5["soft"]), ("dry", False))
 
@@ -218,7 +232,7 @@ class Level(unittest.TestCase):
         h5, _ = band.windows({"present": False, "ended_ts": MON - 2 * D}, vw(), NOW)
         self.assertTrue(h5["sentence"].startswith("5-hour: the last window ended Sat 00:00;"), h5["sentence"])
         self.assertEqual(render.plain(band.segments([h5, wk], config.load(os.devnull))),
-                         "5h ──────── 0% Not started · Week ━━━━╍╍╍╍ 48%  resets Fri")
+                         "5h ──────── 0% Not started · Week ━━━━╍╍╍╍ 48% On pace  resets Fri")
 
 
 class TerminalLine(unittest.TestCase):
@@ -230,24 +244,28 @@ class TerminalLine(unittest.TestCase):
         return render.plain(band.segments(band.windows(*STATES[state], NOW), cfg or self.cfg, width))
 
     def test_reference_lines(self):
-        self.assertEqual(self.line("on pace"), "5h ━━━━╍╍╍╍ 55%  resets 16:30 · Week ━━━━╍╍╍╍ 48%  resets Fri")
-        self.assertEqual(self.line("runs out", 100), "5h ━━━━━━╍╍ 70% Runs out 15:40, go 2x slower  resets 16:30 · "
-                                                     "Week ━━━━╍╍╍╍ 48%  resets Fri")
-        self.assertEqual(self.line("runs out"), "5h ━━━━━━╍╍ 70% Runs out 15:40, go 2x slower · Week ━━━━╍╍╍╍ 48%")
+        self.assertEqual(self.line("on pace"), "5h ━━━━╍╍╍╍ 55% On pace  resets 16:30 · Week ━━━━╍╍╍╍ 48% On pace  "
+                                               "resets Fri")
+        self.assertEqual(self.line("on pace", 60), "5h ━━━━╍╍╍╍ 55% On pace · Week ━━━━╍╍╍╍ 48% On pace")
+        self.assertEqual(self.line("runs out"), "5h ━━━━━━╍╍ 70% 2x slower  resets 16:30 · Week ━━━━╍╍╍╍ 48% On pace  "
+                                                "resets Fri")
         self.assertEqual(self.line("early", 60), "5h ━╍╍╍╍─── 8% ~2x faster · Week ━╍╍───── 2% 2.7x faster")
-        self.assertEqual(self.line("unused", 60), "5h ━╍╍───── 12% 1.7x faster · Week ━━━╍╍┈┈┈ 40% 40% unused")
-        self.assertEqual(self.line("unused", 50), "5h ━╍╍───── 12% · Week ━━━╍╍┈┈┈ 40% 40% unused")
+        # Short of room the green words go, the second window's first; what needs you stays.
+        self.assertEqual(self.line("unused", 50), "5h ━╍─── 12% 1.7x faster · Wk ━━╍┈┈ 40%")
         self.assertEqual(self.line("maxed", 40), "5h ━━━━━ 100% Back 16:30 · Wk ━━━╍╍ 52%")
-        self.assertEqual(self.line("runs out", 40), "5h ━━━━╍ 70% Out 15:40 · Week ━━╍╍╍ 48%")
-        self.assertEqual(self.line("half"), "5h ━━━━╍╍╍╍ 55%  resets 16:30 · Week waiting")
+        self.assertEqual(self.line("runs out", 40), "5h ━━━━╍ 70% 2x slower · Week ━━╍╍╍ 48%")
+        self.assertEqual(self.line("week dry", 40), "5h ━━━╍╍ 55% · Wk ━━━━╍ 80% 2.5x slower")
+        self.assertEqual(self.line("half"), "5h ━━━━╍╍╍╍ 55% On pace  resets 16:30 · Week waiting")
 
     def test_tones(self):
         segs = band.segments(band.windows(*STATES["runs out"], NOW), self.cfg)
         tones = dict((t, tone) for t, tone in segs)
-        self.assertEqual(tones[" Runs out 15:40, go 2x slower"], "error")
-        self.assertEqual(tones["48%"], "inactive")  # the calm window dims beside one that needs you
+        self.assertEqual(tones[" 2x slower"], "error")
+        self.assertEqual(tones["48% On pace  resets Fri"], "inactive")  # dims beside one that needs you
         self.assertEqual(tones["70%"], "text")
-        self.assertIn("\033[1;31m Runs out 15:40", render.to_ansi(segs, True))
+        self.assertIn("\033[1;31m 2x slower", render.to_ansi(segs, True))
+        tones = dict((t, tone) for t, tone in band.segments(band.windows(*STATES["unused"], NOW), self.cfg))
+        self.assertEqual(tones[" 1.7x faster"], "success")
 
     def test_every_width_fits_and_keeps_what_needs_you(self):
         for symbols in ("unicode", "ascii"):
@@ -261,7 +279,7 @@ class TerminalLine(unittest.TestCase):
                         self.assertTrue(all(ord(c) < 128 for c in line), line)
                     if width >= 40 and state in ("runs out", "maxed", "week dry"):
                         h5, wk = band.windows(*STATES[state], NOW)
-                        p = (h5 if h5["phrase"] else wk)["phrase"]
+                        p = (h5 if h5["phrase"]["attention"] else wk)["phrase"]
                         self.assertTrue(p["pre"] + p["num"] in line or p["narrow_pre"] + p["num"] in line,
                                         (state, width, line))
 

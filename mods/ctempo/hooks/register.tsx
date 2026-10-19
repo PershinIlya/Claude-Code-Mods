@@ -12,7 +12,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-code'
 
-import type { Phrase, View, Win } from '../types'
+import type { Detail, Phrase, View, Win } from '../types'
 
 const view = atom({ plugin: 'ctempo', key: 'view' } as const, null)
 const details = atom({ plugin: 'ctempo', key: 'details' } as const, false)
@@ -251,6 +251,10 @@ function isPhrase(x: unknown): x is Phrase {
   )
 }
 
+const isRow = (r: unknown): r is Detail =>
+  typeof r === 'object' && r !== null && isStr((r as Detail).label) && isStr((r as Detail).value) &&
+  isStr((r as Detail).tone)
+
 // The CLI's windows, when every one is whole; else the text line is drawn.
 function windowsOf(x: unknown): Win[] | null {
   if (!Array.isArray(x) || x.length !== 2) return null
@@ -262,7 +266,9 @@ function windowsOf(x: unknown): Win[] | null {
       (w.phrase === null || isPhrase(w.phrase)) && isStr(w.sentence)
     )
   })
-  return ok ? (x as Win[]) : null
+  if (!ok) return null
+  // Details rows from an older CLI, or broken ones, are left out, not the band.
+  return (x as Win[]).map((w) => ({ ...w, details: Array.isArray(w.details) ? w.details.filter(isRow) : [] }))
 }
 
 async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] | null) {
@@ -532,36 +538,75 @@ export const register: Register = (on) => {
       const L = layout(e.props.bodyColumns)
       const waiting = wins.every((w) => w.pct === null)
       const focus = wins.some((w) => w.phrase?.attention)
-      // Grey words ("Can go 2.7x faster") show wherever they fit: with the
-      // large bars always; with the small ones for one window (the one with
-      // a number), and not beside a window that needs you.
-      const calm = wins.find((w) => w.phrase?.calm && w.phrase.num) ?? wins.find((w) => w.phrase?.calm)
+      const both = wins.filter((w) => w.phrase?.attention).length > 1
+      // Every window says its pace ("1.4x faster", "On pace", "2x slower").
+      // With the small bars, below 72 cells, only one window that does not
+      // need you keeps its words (green before grey, the 5 hours first), and
+      // none beside one that does; below 44 no grey words at all.
+      const quiet = wins.filter((w) => w.phrase && !w.phrase.attention)
+      const kept = quiet.find((w) => !w.phrase?.calm) ?? quiet[0]
       const said = (w: Win) => {
         const p = w.phrase
-        if (!p || !p.calm || L.W === 64) return p
-        return !focus && !L.bare && w === calm ? p : null
+        if (!p || p.attention || L.W === 64) return p
+        return !focus && !(L.bare && p.calm) && w === kept ? p : null
       }
-      // Narrow, grey words are short ("2.7x faster"). Words that need you
-      // keep their tail ("Runs out 15:40, go 2x slower") from 80 cells when
-      // they are the only such words, and their short lead ("Out
-      // 15:40") only with the small bars, below 72.
-      const both = wins.filter((w) => w.phrase?.attention).length > 1
-      const words = (p: Phrase) =>
-        L.halves || (e.props.bodyColumns >= 80 && p.attention && !both)
-          ? [p.pre, p.num, p.post]
-          : [L.W === 64 && !p.calm ? p.pre : (p.narrow_pre ?? p.pre), p.num, p.narrow]
-      // Narrow, the Details button makes room for words that need it: 2
-      // windows that need you, or one long phrase ("May run out Sun 22:45";
-      // below 56 cells, "Back Fri 04:00"). Below 56, 2 such phrases fit only
-      // without the bars. Measured in Chromium at 7 px a cell, 40 to 140.
+      // The short lead ("Back 16:30", "Over 80% target") below the halves.
+      const words = (p: Phrase) => (L.halves ? [p.pre, p.num, p.post] : [p.narrow_pre ?? p.pre, p.num, p.narrow])
+      // Below 56 cells, 2 windows that need you fit only without the bars
+      // (measured in Chromium at 7 px a cell, 40 to 140).
       const squeezed = e.props.bodyColumns < 56
-      const crowded =
-        !L.halves &&
-        (both ||
-          wins.some((w) => w.phrase?.attention && words(w.phrase).join('').length > (squeezed ? 12 : 14)))
-      const button = !waiting && !L.tiny && !crowded
+      const button = !waiting
       const open = (await read($, details)) && button
       const toggle = () => update($, details, (v) => !v)
+      // Details: the CLI's rows (band.details, the same as the menu bar's
+      // menu) as a table, a column per window; narrower than 56 cells, one
+      // window under the other.
+      const LW = 16
+      const labels: string[] = []
+      for (const w of wins) for (const r of w.details ?? []) if (!labels.includes(r.label)) labels.push(r.label)
+      const cell = (key: string, width: number, text: string, color: string, weight?: 'medium') => (
+        <Box key={key} width={width} flexShrink={0}>
+          <Text size="footnote" tabular wrap="truncate-end" color={color} weight={weight ?? 'regular'}>
+            {text || ' '}
+          </Text>
+        </Box>
+      )
+      const value = (w: Win, label: string, width: number) => {
+        const r = (w.details ?? []).find((d) => d.label === label)
+        return cell(`v-${w.id}-${label}`, width, r?.value ?? '', r ? (r.tone === 'text' ? 'text' : r.tone) : 'inactive')
+      }
+      const title = (w: Win) => (w.id === 'h5' ? '5 hours' : 'Week')
+      const cols = e.props.bodyColumns
+      const CW = Math.max(12, Math.min(30, Math.floor((cols - LW) / 2)))
+      const table =
+        cols >= 56 ? (
+          <Box flexDirection="column">
+            <Box key="t-head" flexDirection="row">
+              {cell('h-label', LW, '', 'inactive')}
+              {wins.map((w) => cell(`h-${w.id}`, CW, title(w), 'inactive', 'medium'))}
+            </Box>
+            {labels.map((label) => (
+              <Box key={`t-${label}`} flexDirection="row">
+                {cell(`l-${label}`, LW, label, 'inactive')}
+                {wins.map((w) => value(w, label, CW))}
+              </Box>
+            ))}
+          </Box>
+        ) : (
+          <Box flexDirection="column" rowGap="xs">
+            {wins.map((w) => (
+              <Box key={`s-${w.id}`} flexDirection="column">
+                {cell(`sh-${w.id}`, cols, title(w), 'inactive', 'medium')}
+                {(w.details ?? []).map((r) => (
+                  <Box key={`s-${w.id}-${r.label}`} flexDirection="row">
+                    {cell(`sl-${w.id}-${r.label}`, LW, r.label, 'inactive')}
+                    {value(w, r.label, Math.max(8, cols - LW))}
+                  </Box>
+                ))}
+              </Box>
+            ))}
+          </Box>
+        )
       const row = (
         <Box flexDirection="row" alignItems="center" columnGap="sm">
           <Box
@@ -576,6 +621,7 @@ export const register: Register = (on) => {
               const dim = focus && !att
               const p = said(w)
               const [pre, num, post] = p ? words(p) : ['', '', '']
+              const plain = p?.tone === 'inactive'
               return (
                 <Box
                   key={`ctb-${w.id}`}
@@ -610,15 +656,10 @@ export const register: Register = (on) => {
                   {p ? (
                     // A little more air between the percent and the words than inside them.
                     <Box marginLeft={squeezed ? undefined : 'xs'} flexShrink={1}>
-                      <Text
-                        size="footnote"
-                        wrap="truncate-end"
-                        color={p.tone}
-                        weight={p.tone === 'inactive' ? 'regular' : 'medium'}
-                      >
+                      <Text size="footnote" wrap="truncate-end" color={p.tone} weight={plain ? 'regular' : 'medium'}>
                         {pre}
                         {num ? (
-                          <Text weight="semibold" tabular color={p.tone === 'inactive' ? 'text' : p.tone}>
+                          <Text weight="semibold" tabular color={p.tone}>
                             {num}
                           </Text>
                         ) : null}
@@ -626,7 +667,7 @@ export const register: Register = (on) => {
                       </Text>
                     </Box>
                   ) : null}
-                  {L.halves && w.reset && w.pct !== null && w.kind !== 'maxed' && (!p || words(p).join('').length <= 24) ? (
+                  {L.halves && w.reset && w.pct !== null && w.kind !== 'maxed' ? (
                     <Box marginLeft="sm">
                       <Text size="footnote" color="inactive" tabular>
                         {`resets ${w.reset}`}
@@ -649,13 +690,11 @@ export const register: Register = (on) => {
         </Box>
       )
       ours = open ? (
-        <Box flexDirection="column">
+        <Box flexDirection="column" rowGap="xs">
           {row}
+          {table}
           <Text size="footnote" color="inactive">
-            {wins[0]?.sentence ?? ''}
-          </Text>
-          <Text size="footnote" color="inactive">
-            {[wins[1]?.sentence ?? '', age(current.updated_ts, current.now)].filter(Boolean).join(' ')}
+            {age(current.updated_ts, current.now) || ' '}
           </Text>
         </Box>
       ) : (

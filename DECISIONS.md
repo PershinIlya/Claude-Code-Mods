@@ -726,6 +726,22 @@ ends, the band read "waiting" until the first message of the day; it now
 reads "5h 0% Not started", since the next window opens only with that
 message.
 
+**D-34. One pace for both windows; Details as a table.** On Windows the
+band read "5h 28% 59% will go unused · Week 31% 1.4x faster": 2 kinds of
+words for 2 windows, and "59%" beside "28%" read as what is left now. The
+person prefers the multiplier, in color. Now each window says its pace, the
+same kind for both: "1.4x faster" (green), "On pace" (grey), "2x slower"
+(red; yellow while rough or mild), "Back at 16:30" when reached. Quota that
+will go unused and the run-out time moved to Details, which was 2 sentences
+run together and, on narrow bands, gone (a long phrase took the button's
+room). Details is now a table, a column per window: Used, Pace, At reset,
+Will go unused, Runs out, Resets, Rate, from the CLI (`band.details`), and
+the menu bar's menu shows the same rows under each bar (Menlo columns), so
+the Mac and Windows read alike; the button is always there. The terminal
+line fits by dropping the resets, then grey words, then green ones (the
+second window's first); the words that need you stay. Notifications read
+the run-out time and the unused quota from fields of their own.
+
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
 

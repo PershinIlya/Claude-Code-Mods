@@ -55,9 +55,9 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
             continue
         part = "%d%%" % w["pct"]
         p = w.get("phrase")
-        if p and p["attention"]:
-            if p["tone"] != "success":  # green says it by color; its words are in the menu
-                part += " " + p["narrow_pre"] + p["num"] + p["narrow"]
+        if p and p["attention"]:  # the words that need you; green ("1.4x faster") says it by color
+            part += " " + p["narrow_pre"] + p["num"] + p["narrow"]
+        if p and (p["attention"] or p["tone"] == "success"):
             tones.append(p["tone"])
         parts.append(part)
     worst = max(tones, key=RANK.index) if tones else None
@@ -72,7 +72,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         img = "image=%s,%s width=120 height=14" % (menuart.bar(w, 120, 14, False), menuart.bar(w, 120, 14, True))
         head = "%s   %s" % (name, "waiting" if w["pct"] is None else "%d%%" % w["pct"])
         out.append("%s | %s size=13 tooltip=%s" % (head, img, w["sentence"].replace("|", "/")))
-        out.append("%s | size=11 color=%s" % (summary(w), TONE.get((w.get("phrase") or {}).get("tone"), DIM)))
+        out.extend(detail_lines(w))
     out.append("---")
     times = []
     if updated is not None:
@@ -89,20 +89,19 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     return out
 
 
-# Between a window's words and its reset in the menu: 2 em spaces, a gap
-# wider than the words' own spaces (SwiftBar keeps inner spaces as they are).
-GAP = "\u2003\u2003"
+LABEL_W = len("Will go unused") + 2
 
 
-def summary(w):
-    """The second line of a window in the menu: its words, and the reset."""
-    if w["pct"] is None:
-        return w["sentence"]
-    p = w.get("phrase")
-    words = (p["pre"] + p["num"] + p["post"]) if p else ("Limit reached" if w["kind"] == "maxed" else "On pace")
-    if w["kind"] == "maxed" or not w.get("reset"):
-        return words
-    return "%s%sresets %s" % (words, GAP, w["reset"])
+def detail_lines(w):
+    """A window's rows under its bar, the rows of the Desktop band's Details
+    (band.details): label and value in columns (Menlo), each row in its
+    tone; plain numbers dim, so the pace and what needs you stand out."""
+    rows = w.get("details") or []
+    if not rows:
+        return ["%s | size=11 color=%s" % (w["sentence"].replace("|", "/"), DIM)]
+    width = max([LABEL_W] + [len(r["label"]) + 2 for r in rows])  # one column for both windows
+    return ["%s%s | font=Menlo size=11 trim=false color=%s" % (
+        r["label"].ljust(width), r["value"].replace("|", "/"), TONE.get(r["tone"], DIM)) for r in rows]
 
 
 def text_lines(ws, updated, now, cfg, checked=None, note=None):
@@ -204,17 +203,17 @@ def events(ws):
     and kind: a limit that runs out before its reset (not the milder "may"),
     one that is reached, and quota that will go unused."""
     out = []
+    when = lambda t: ("at " + t) if " " not in t else t  # noqa: E731  ("at 16:30", "Fri 04:00")
     for w in ws:
-        p = w.get("phrase")
-        if not p or not p["attention"] or w.get("reset_ts") is None:
+        if w.get("pct") is None or w.get("reset_ts") is None:
             continue
         name = "5-hour" if w["id"] == "h5" else "Weekly"
         if w["kind"] == "maxed":
-            title = "%s limit reached, back %s" % (name, ("at " + p["num"]) if " " not in p["num"] else p["num"])
-        elif w["kind"] == "dry" and not w.get("soft"):
-            title = "%s limit runs out %s" % (name, ("at " + p["num"]) if " " not in p["num"] else p["num"])
-        elif w["kind"] == "expire":
-            title = "%s: %s will go unused" % (name, p["num"])
+            title = "%s limit reached, back %s" % (name, when((w.get("phrase") or {}).get("num") or w["reset"]))
+        elif w["kind"] == "dry" and not w.get("soft") and w.get("runs_out"):
+            title = "%s limit runs out %s" % (name, when(w["runs_out"]))
+        elif w["kind"] == "expire" and w.get("unused"):
+            title = "%s: %d%% will go unused" % (name, w["unused"])
         else:
             continue
         out.append(("notified:%s:%s:%s" % (w["id"], w["reset_ts"], w["kind"]), title, w["sentence"]))
