@@ -42,11 +42,14 @@ One row per window: its name, a small bar, the percent, and its pace.
 - **Resets** follow when the band is wide. In a narrower window they move to
   Details; with the smallest bars only one window that does not need you
   keeps its words.
-- **Details** (the button, or `d` when the band has the focus) opens a small
-  table, a column per window: Used, Pace, At reset (where it lands at this
-  pace), Will go unused, Runs out (when, and how long before the reset),
-  Resets, Rate (the 5 hours: what you spend an hour and what fits), and how
-  old the last reading is. The menu bar's menu shows the same rows.
+- **Details** (the button, or `d` when the band has the focus) opens a card
+  per window, side by side (one under the other in a narrow window): its
+  name, its percent large and its pace in color on top, then a row per
+  fact, the label on the left and the value on the right: At reset (where
+  it lands at this pace), Runs out (when, and how long before the reset),
+  Will go unused, Resets, Rate (the 5 hours: what you spend an hour and what
+  fits); and how old the last reading is. The menu bar's menu shows the
+  same rows.
 
 The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
 unused (`#`, `=`, `.` with `display.symbols: "ascii"`), in color unless
@@ -459,7 +462,7 @@ start, the imports, and each phase of a render.
 ```sh
 python3 -m unittest discover -s tests -t .     # 497 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 68 tests
+claude plugin test mods/ctempo                 # 67 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

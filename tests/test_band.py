@@ -136,7 +136,7 @@ class Words(unittest.TestCase):
         # Review: an ended 5 hours does not open "with your next message" while the week is at its limit.
         h5, _ = band.windows({"present": False, "ended_ts": MON + 3 * H}, vw(used=100, verdict="maxed"), NOW)
         self.assertEqual((h5["phrase"], rows(h5)[1:]), (None, [("Pace", "blocked by the week", "error"),
-                                                               ("Next window", "after Fri 04:00", "text")]))
+                                                               ("Opens", "after Fri 04:00", "text")]))
 
     def test_week_back_and_resets_name_the_day(self):
         v = vw(used=100, verdict="maxed", severity="alert")

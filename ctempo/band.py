@@ -315,7 +315,7 @@ def window(v, now):
         # The window ended and no new one is seen yet: it opens with the next message.
         out.update(kind="idle", pct=0, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
                    phrase=_p("Not started", "", "", "inactive", False, calm=True), sentence=sentence(v, now),
-                   details=[_row("Used", "0%"), _row("Next window", "with your next message")])
+                   details=[_row("Used", "0%"), _row("Opens", "with your next message")])
     else:
         out.update(pct=None, used=0.0, projected=None, reset=None, reset_ts=None, soft=False,
                    phrase=None, sentence=sentence(v, now), details=[_row("Used", "waiting for a reading", "inactive")])
@@ -328,7 +328,7 @@ def windows(v5, vw, now):
     if vw.get("present") and vw["verdict"] == "maxed" and not v5.get("present") and v5.get("ended_ts"):
         # No new 5 hours while the week is at its limit: not "with your next message".
         a.update(phrase=None, details=[_row("Used", "0%"), _row("Pace", "blocked by the week", "error"),
-                                       _row("Next window", "after " + render.dhm(vw["reset_ts"]))],
+                                       _row("Opens", "after " + render.dhm(vw["reset_ts"]))],
                  sentence="5-hour: no window open. Blocked by the weekly limit until %s." % render.dhm(vw["reset_ts"]))
     if vw.get("present") and vw["verdict"] == "maxed" and v5.get("present") and v5["verdict"] != "maxed":
         # The week's limit blocks the 5 hours too: no forecast, no "faster".

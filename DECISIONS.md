@@ -769,6 +769,18 @@ on hours-old readings (grey now) and the text style lost its green; an ended
 5 hours said it opens with the next message while the week blocked it; and
 stale words in the docs.
 
+**D-35. Details as cards.** The person found Details' table hard to read
+on Windows: rows ran together and it was not clear which label a number
+belonged to. 3 designs, drawn from the mod's own elements (Box borders and
+padding, Text sizes) in Chromium: a card per window, plain sentences with
+bold numbers, and the table banded. The cards read best (the banded table
+overlapped its heads at 56 cells): each window a rounded card, its name,
+its percent in the heading size and its pace in color on top, then a row
+per fact with the label on the left and the value on the right, so each
+number stays with its row; side by side from 72 cells, one under the other
+below, no word cut from 44 to 115 cells. Used and Pace are the card's head,
+not rows. "Next window" became "Opens", short enough for a narrow card.
+
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
 

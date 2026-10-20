@@ -252,7 +252,10 @@ function isPhrase(x: unknown): x is Phrase {
 }
 
 // The order of Details' rows (band.details); a label the mod does not know goes last.
-const ORDER = ['Used', 'Pace', 'Limit', 'At reset', 'Runs out', 'Will go unused', 'Next window', 'Resets', 'Rate']
+const ORDER = ['Used', 'Pace', 'Limit', 'At reset', 'Runs out', 'Will go unused', 'Opens', 'Resets', 'Rate']
+// Rows a card shows in its head: the percent and the pace.
+const HEAD = ['Used', 'Pace', 'Limit']
+const rank = (label: string) => (ORDER.indexOf(label) + ORDER.length + 1) % (ORDER.length + 1)
 
 const isRow = (r: unknown): r is Detail =>
   typeof r === 'object' && r !== null && isStr((r as Detail).label) && isStr((r as Detail).value) &&
@@ -563,63 +566,73 @@ export const register: Register = (on) => {
       const short = squeezed || (both && L.W === 44)
       const open = (await read($, details)) && button
       const toggle = () => update($, details, (v) => !v)
-      // Details: the CLI's rows (band.details, the same as the menu bar's
-      // menu) as a table, a column per window; narrower than 72 cells, one
-      // window under the other (a run-out row, "Sun 22:45, 4 days 5 h
-      // early", needs 28 cells).
-      const LW = 16
-      // The rows in the CLI's order whichever window has them; a window with
-      // none (an older CLI) shows its sentence instead.
+      // Details: a card per window, side by side from 72 cells, one under the
+      // other below: its name, its percent large and its pace in color, then
+      // the CLI's other rows (band.details, the menu bar's too), the label on
+      // the left and the value on the right, so each number stays with its row.
       const rows = (w: Win): Detail[] =>
         w.details?.length ? w.details : [{ label: 'Summary', value: w.sentence, tone: 'inactive' }]
-      const labels: string[] = []
-      for (const w of wins) for (const r of rows(w)) if (!labels.includes(r.label)) labels.push(r.label)
-      const rank = (label: string) => (ORDER.indexOf(label) + ORDER.length + 1) % (ORDER.length + 1)
-      labels.sort((a, b) => rank(a) - rank(b))
-      const cell = (key: string, width: number, text: string, color: string, weight?: 'medium') => (
-        <Box key={key} width={width} flexShrink={0}>
-          <Text size="footnote" tabular wrap="truncate-end" color={color} weight={weight ?? 'regular'}>
-            {text || ' '}
-          </Text>
-        </Box>
-      )
-      const value = (w: Win, label: string, width: number) => {
-        const r = rows(w).find((d) => d.label === label)
-        return cell(`v-${w.id}-${label}`, width, r?.value ?? '', r ? (r.tone === 'text' ? 'text' : r.tone) : 'inactive')
-      }
+      const shown = (w: Win) =>
+        rows(w)
+          .filter((r) => !HEAD.includes(r.label))
+          .sort((a, b) => rank(a.label) - rank(b.label))
       const title = (w: Win) => (w.id === 'h5' ? '5 hours' : 'Week')
-      const cols = e.props.bodyColumns
-      // 2 cells between the columns, so values never run into each other.
-      const CW = Math.max(12, Math.min(34, Math.floor((cols - LW) / 2) - 2))
-      const table =
-        cols >= 72 ? (
-          <Box flexDirection="column">
-            <Box key="t-head" flexDirection="row" columnGap="md">
-              {cell('h-label', LW, '', 'inactive')}
-              {wins.map((w) => cell(`h-${w.id}`, CW, title(w), 'inactive', 'medium'))}
-            </Box>
-            {labels.map((label) => (
-              <Box key={`t-${label}`} flexDirection="row" columnGap="md">
-                {cell(`l-${label}`, LW, label, 'inactive')}
-                {wins.map((w) => value(w, label, CW))}
+      // The pace as the band says it; without words (a maxed week blocks the
+      // 5 hours), the CLI's Pace row.
+      const pace = (w: Win) => {
+        if (w.phrase) return { text: w.phrase.pre + w.phrase.num + w.phrase.post, tone: w.phrase.tone }
+        const r = rows(w).find((d) => d.label === 'Pace')
+        return r ? { text: r.value, tone: r.tone } : null
+      }
+      const side = e.props.bodyColumns >= 72
+      const card = (w: Win) => {
+        const pc = pace(w)
+        return (
+          <Box
+            key={`card-${w.id}`}
+            flexDirection="column"
+            flexGrow={1}
+            flexShrink={1}
+            width={side ? '50%' : undefined}
+            borderStyle="round"
+            borderDimColor
+            paddingX="md"
+            paddingY="sm"
+            rowGap="xs"
+          >
+            <Box key={`ch-${w.id}`} flexDirection="row" justifyContent="space-between" alignItems="center" columnGap="md">
+              <Box flexDirection="row" alignItems="center" columnGap="sm">
+                <Text size="footnote" color="inactive" weight="medium">
+                  {title(w)}
+                </Text>
+                <Text size="heading" weight="semibold" tabular>
+                  {w.pct === null ? 'waiting' : `${w.pct}%`}
+                </Text>
               </Box>
-            ))}
-          </Box>
-        ) : (
-          <Box flexDirection="column" rowGap="xs">
-            {wins.map((w) => (
-              <Box key={`s-${w.id}`} flexDirection="column">
-                {cell(`sh-${w.id}`, cols, title(w), 'inactive', 'medium')}
-                {rows(w).map((r) => (
-                  <Box key={`s-${w.id}-${r.label}`} flexDirection="row">
-                    {cell(`sl-${w.id}-${r.label}`, LW, r.label, 'inactive')}
-                    {value(w, r.label, Math.max(8, cols - LW))}
-                  </Box>
-                ))}
+              {pc ? (
+                <Text size="footnote" weight="medium" color={pc.tone} wrap="truncate-end">
+                  {pc.text}
+                </Text>
+              ) : null}
+            </Box>
+            {shown(w).map((r) => (
+              <Box key={`cr-${w.id}-${r.label}`} flexDirection="row" justifyContent="space-between" columnGap="md">
+                <Text size="footnote" color="inactive">
+                  {r.label}
+                </Text>
+                <Text size="footnote" tabular wrap="truncate-end" color={r.tone === 'text' ? 'text' : r.tone}>
+                  {r.value}
+                </Text>
               </Box>
             ))}
           </Box>
         )
+      }
+      const table = (
+        <Box flexDirection={side ? 'row' : 'column'} columnGap="md" rowGap="sm">
+          {wins.map(card)}
+        </Box>
+      )
       const row = (
         <Box flexDirection="row" alignItems="center" columnGap="sm">
           <Box
@@ -704,7 +717,7 @@ export const register: Register = (on) => {
         </Box>
       )
       ours = open ? (
-        <Box flexDirection="column" rowGap="xs">
+        <Box flexDirection="column" rowGap="sm">
           {row}
           {table}
           <Text size="footnote" color="inactive">

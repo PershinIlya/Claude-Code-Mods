@@ -686,46 +686,44 @@ test('the width thresholds', async () => {
   expect(layout(43)).toEqual({ halves: false, W: 44, tiny: true, bare: true })
 })
 
-test('Details opens a table, a column per window, and says how old the reading is', async ($, on) => {
+test('Details opens a card per window: name, percent and pace on top, then label and value rows', async ($, on) => {
   const windows = [win({ id: 'h5', kind: 'dry', pct: 70, used: 70, phrase: SLOWER, details: ROWS }), win({ id: 'wk', phrase: FASTER, details: WEEK_ROWS })]
   const { ui } = await drawn($, on, windows)
   await ui.press({ key: 'details' })
-  for (const label of ['Used', 'Pace', 'Runs out', 'Will go unused', 'Resets']) {
-    expect((await ui.findAll({ type: 'Text', text: label })).length).toBe(1) // one row each, shared
-  }
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree.split('"borderStyle":"round"').length - 1).toBe(2) // a card each
   expect(await ui.find({ type: 'Text', text: '5 hours' })).toBeDefined()
+  expect((await ui.findAll({ type: 'Text', text: '70%' })).some((t) => t.props.size === 'heading')).toBe(true)
+  // Used and Pace are the card's head, not rows.
+  expect(await ui.find({ type: 'Text', text: 'Used' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'Pace' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '15:40, 50 min early' })).toMatchObject({ props: { color: 'error' } })
   expect(await ui.find({ type: 'Text', text: 'Fri 04:00' })).toMatchObject({ props: { color: 'text' } })
+  expect((await ui.findAll({ type: 'Text', text: 'Resets' })).length).toBe(2) // a row in each card
   expect(await ui.find({ type: 'Text', text: /^Updated 3 min ago/ })).toBeDefined()
   expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined() // the same label: the row never shifts
-  const narrow = await $.ui.mount(sized('desktop', 71)) // one window under the other
-  expect((await narrow.findAll({ type: 'Text', text: 'Used' })).length).toBe(2)
+  expect(tree).toContain('"width":"50%"') // side by side
+  const narrow = await $.ui.mount(sized('desktop', 71)) // one under the other
+  expect(JSON.stringify(await narrow.drawn())).not.toContain('"width":"50%"')
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()
 })
 
-test('Details rows keep the CLI order whichever window has them; an older CLI shows its sentences', async ($, on) => {
-  const short: Detail[] = [{ label: 'Used', value: '20%', tone: 'text' }, { label: 'Resets', value: '16:30', tone: 'text' }]
-  const { ui } = await drawn($, on, [win({ id: 'h5', details: short }), win({ id: 'wk', details: WEEK_ROWS })])
+test('a card keeps the CLI order of rows; an older CLI shows its sentence', async ($, on) => {
+  const mixed: Detail[] = [{ label: 'Resets', value: '16:30', tone: 'text' }, { label: 'At reset', value: 'about 90%', tone: 'text' }]
+  const { ui } = await drawn($, on, [win({ id: 'h5', details: mixed }), win({ id: 'wk' })])
   await ui.press({ key: 'details' })
   const order = JSON.stringify(await ui.drawn())
-  // "Pace" and "Will go unused" (the week's only) come before "Resets", not after the 5 hours' last row.
-  expect(order.indexOf('"Pace"')).toBeLessThan(order.indexOf('"Resets"'))
-  expect(order.indexOf('"Will go unused"')).toBeLessThan(order.indexOf('"Resets"'))
-})
-
-test('an older CLI without Details rows shows each sentence there', async ($, on) => {
-  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk' })])
-  await ui.press({ key: 'details' })
-  expect(await ui.find({ type: 'Text', text: 'Summary' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^5-hour: 55% used/ })).toBeDefined()
+  expect(order.indexOf('"At reset"')).toBeLessThan(order.indexOf('"Resets"'))
+  expect(await ui.find({ type: 'Text', text: 'Summary' })).toBeDefined() // the week: no rows from this CLI
+  expect(await ui.find({ type: 'Text', text: /^Week: 48% used/ })).toBeDefined()
 })
 
 test('details rows that do not read are left out, not the band', async ($, on) => {
-  const bad = [{ label: 'Used', value: 5 }, null, { label: 'Pace', value: 'On pace', tone: 'inactive' }] as unknown as Detail[]
+  const bad = [{ label: 'Used', value: 5 }, null, { label: 'Resets', value: '16:30', tone: 'text' }] as unknown as Detail[]
   const { ui } = await drawn($, on, [win({ id: 'h5', details: bad }), win({ id: 'wk' })])
   await ui.press({ key: 'details' })
-  expect(await ui.find({ type: 'Text', text: 'Pace' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Resets' })).toBeDefined()
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
 })
 
