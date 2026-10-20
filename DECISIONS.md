@@ -743,7 +743,9 @@ the widest line, from 6.7 points a Menlo character, at least 250, at most
 380, the bar taking what the label in Menlo 12, one length for both, leaves;
 the plugin hides SwiftBar's own submenu, whose arrow kept a column of about
 40 points empty at the right of every line, and its "Updated", which
-repeats ours; Option-click shows them); the button is always there, "⋯" below 56
+repeats ours; Option-click shows them; SwiftBar reads those settings only
+when it starts, so the first try showed no change until a restart; the bar
+keeps its last 10 points clear, as its green dots ran into the label); the button is always there, "⋯" below 56
 cells or when 2 windows need you with the small bars (gone only at 40 cells
 with 2 such windows), below 52 cells only the words that need you show, and the table puts one
 window under the other below 72 cells (a run-out row, "Sun 22:45, 4 days

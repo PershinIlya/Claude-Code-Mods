@@ -86,7 +86,8 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     width = bar_width([line for _, rows in sections for line in rows] + foot)
     bar = max(BAR_LEAST, width - int(math.ceil(len(head(ws[0])) * HEAD_PT + IMAGE_GAP_PT)))
     for w, rows in sections:
-        img = "image=%s,%s width=%d height=14" % (menuart.bar(w, bar, 14, False), menuart.bar(w, bar, 14, True), bar)
+        img = "image=%s,%s width=%d height=14" % (menuart.bar(w, bar, 14, False, BAR_PAD),
+                                                 menuart.bar(w, bar, 14, True, BAR_PAD), bar)
         out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, w["sentence"].replace("|", "/")))
         out.extend(rows)
     out.append("---")
@@ -100,6 +101,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
 # lines); the space between an image and its text in a menu.
 MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 6
 BAR_MIN, BAR_MAX, BAR_LEAST = 250, 380, 120
+BAR_PAD = 10  # clear points at the bar's right end, so it never runs into its label
 
 
 def head(w):
@@ -370,7 +372,9 @@ def install(folder):
     state = inst.load_state()
     state["menubar"] = path
     inst.save_state(state)
-    print("Wrote %s: SwiftBar shows it within a minute (or choose Refresh All in its menu)." % path)
+    print("Wrote %s: SwiftBar shows it within a minute. SwiftBar reads a plugin's settings (which of its own "
+          "items to hide) only when it starts: after an update, restart it once: killall SwiftBar; open -a SwiftBar"
+          % path)
     return 0
 
 

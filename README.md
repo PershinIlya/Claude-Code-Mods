@@ -98,7 +98,10 @@ sections), then the rows of the Desktop band's Details (Used, Pace, At
 reset, Will go unused, Runs out, Resets, Rate) in columns; then how old the
 readings are. The full sentence is the bar's tooltip. SwiftBar's own items
 (its submenu, which takes a column on the right of every line, and its
-"Updated") are hidden: Option-click the menu bar item to show them. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
+"Updated") are hidden: Option-click the menu bar item to show them. SwiftBar
+reads that when it starts, so after an update that changes the plugin, run
+`ctempo menubar --install` and restart SwiftBar once
+(`killall SwiftBar; open -a SwiftBar`). `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
 records nothing itself: the readings come from Claude Code sessions on this
 Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
@@ -454,7 +457,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 496 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 497 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 68 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

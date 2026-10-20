@@ -62,11 +62,12 @@ def _draw(c, w, x, y, width, h, dark, dots=True):
         box(x, max(u, x + h), hex_color(p["t"], 0.7) if kind == "idle" else hex_color(p["a"]))
 
 
-def bar(w, width, height, dark):
-    """A window's bar, `width` x `height` points, as base64 PNG."""
+def bar(w, width, height, dark, pad=0):
+    """A window's bar, `width` x `height` points, as base64 PNG; `pad` points
+    on the right stay clear, room before the text beside it."""
     bar_h = 5.0
     c = Canvas(width * S, height * S)
-    _draw(c, w, 0.5, (height - bar_h) / 2.0, width - 1.5, bar_h, dark)
+    _draw(c, w, 0.5, (height - bar_h) / 2.0, width - 1.5 - pad, bar_h, dark)
     return base64.b64encode(c.png()).decode("ascii")
 
 

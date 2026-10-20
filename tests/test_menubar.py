@@ -209,6 +209,19 @@ class Pictures(TempHome):
                 idat = data[data.index(b"IDAT") + 4:data.index(b"IEND") - 8]
                 self.assertEqual(len(zlib.decompress(idat)), 28 * (1 + 240 * 4))
 
+    def test_the_bar_leaves_room_before_its_label(self):
+        from ctempo import menuart
+        from ctempo.png import Canvas
+
+        w = band.windows(*STATES["unused"], NOW)[0]  # green dots run to the bar's end
+        drawn = {}
+        real = Canvas.png
+        with mock.patch.object(Canvas, "png", lambda c, dpi=144: drawn.setdefault("c", c) and real(c, dpi)):
+            menuart.bar(w, 200, 14, False, menubar.BAR_PAD)
+        c = drawn["c"]
+        clear = [c.px[y * c.w + x][3] for y in range(c.h) for x in range(c.w - 2 * menubar.BAR_PAD, c.w)]
+        self.assertEqual(max(clear), 0.0)  # the last 10 points are empty
+
     def test_each_kind_draws_its_own_colors(self):
         from ctempo import menuart
         from ctempo.png import Canvas
