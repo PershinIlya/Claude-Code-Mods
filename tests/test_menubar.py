@@ -23,13 +23,14 @@ class Lines(TempHome):
         out = self.out("on pace")
         self.assertRegex(out[0], r"^55% · 48% \| image=[A-Za-z0-9+/=]+,[A-Za-z0-9+/=]+ width=24 height=18$")
         self.assertEqual(out[1], "---")
-        # Each window: its bar across the menu (a line of its own, a divider),
-        # its name and percent, then the rows of the Desktop band's Details.
-        self.assertRegex(out[2], r"^ \| image=\S+ width=260 height=14 tooltip=5-hour: 55% used")
-        self.assertEqual(out[3], "5-hour   55% | size=13")
+        # Each window: a line across the menu (its bar, then its name and
+        # percent in Menlo, one length for both), then its Details rows.
+        self.assertRegex(out[2], r"^5-hour   55% \| image=\S+ width=157 height=14 font=Menlo size=12 trim=false "
+                                 r"tooltip=5-hour: 55% used")
+        self.assertRegex(out[9], r"^Week     48% \| image=\S+ width=157 ")
         menlo = " | font=Menlo size=11 trim=false color="
-        self.assertEqual(out[4], "Used            55%" + menlo + menubar.DIM)
-        self.assertEqual(out[5], "Pace            On pace" + menlo + menubar.DIM)
+        self.assertEqual(out[3], "Used            55%" + menlo + menubar.DIM)
+        self.assertEqual(out[4], "Pace            On pace" + menlo + menubar.DIM)
         self.assertIn("Resets          16:30" + menlo + menubar.DIM, out)
         self.assertIn("Rate            17%/h, 18%/h fits" + menlo + menubar.DIM, out)
         self.assertIn("Resets          Fri 04:00" + menlo + menubar.DIM, out)
@@ -84,14 +85,14 @@ class Lines(TempHome):
 
 
 class BarWidth(TempHome):
-    def test_the_bars_are_as_wide_as_the_widest_line(self):
+    def test_the_windows_lines_are_as_wide_as_the_widest_line(self):
         self.assertEqual(menubar.bar_width(["Used  5% | font=Menlo size=11"]), menubar.BAR_MIN)
         row = "Runs out        Sun 22:45, 4 days 5 h early | font=Menlo size=11"  # 43 Menlo characters
         self.assertEqual(menubar.bar_width([row]), 289)
         self.assertEqual(menubar.bar_width(["x" * 200 + " | size=11"]), menubar.BAR_MAX)
         out = menubar.lines(band.windows(*STATES["week dry"], NOW), NOW - 60, NOW, self.cfg)
-        widths = {line.split(" width=")[1].split()[0] for line in out if line.startswith(" | image=")}
-        self.assertEqual(widths, {"289"})  # both bars, one width: the run-out row is the widest
+        widths = {line.split(" width=")[1].split()[0] for line in out if " | image=" in line and "font=Menlo" in line}
+        self.assertEqual(widths, {"196"})  # 289 for the line, less 12 Menlo characters and the gap
 
 
 class Show(TempHome):
@@ -125,6 +126,11 @@ class Plugin(TempHome):
         path = os.path.join(folder, menubar.PLUGIN)
         self.assertTrue(os.access(path, os.X_OK) or os.name == "nt")
         self.assertEqual(install.load_state()["menubar"], path)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        # SwiftBar's own submenu takes a column on the right of every line; its "Updated" repeats ours.
+        self.assertIn("# <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>", text)
+        self.assertIn("# <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>", text)
         if os.name != "nt":  # SwiftBar is macOS; the script is sh
             env = {k: v for k, v in os.environ.items() if k != "CTEMPO_HOME"}
             p = subprocess.run(["sh", path], capture_output=True, text=True, env=env, timeout=60)
@@ -184,7 +190,7 @@ class Notify(TempHome):
 
     def test_a_lone_waiting_window_reads_waiting(self):
         out = menubar.lines(band.windows(*STATES["half"], NOW), NOW - 60, NOW, self.cfg)
-        self.assertIn("Week   waiting | size=13", out)
+        self.assertTrue(any(line.startswith("Week    wait | image=") for line in out), out)
 
 
 class Pictures(TempHome):

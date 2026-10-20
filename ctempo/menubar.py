@@ -7,10 +7,10 @@ runs `ctempo menubar`, which reads the store and prints
 
   [two small bars] 22% · 18%             (5 hours on top; green with room to spare,
   ---                                       red or yellow words when a window needs you)
-  [bar across the menu]                    (each window's bar as a picture, as the
-  5-hour   22%                              Desktop band draws it, a divider between
-  Used            22%                       the 2 sections, then the rows of its
-  Pace            1.4x faster               Details: band.details)
+  [bar ━━━━━━━━━━━━━]  5-hour   22%        (each window's bar as a picture, as the
+  Used            22%                       Desktop band draws it, and its name, a
+  Pace            1.4x faster               line across the menu dividing the 2
+  ...                                       sections; then the rows of its Details)
   ...
   Updated 2 min ago
 
@@ -80,15 +80,14 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     if waiting:
         out.append("Waiting for the first reading: start a Claude Code session | size=12")
     sections = [(w, detail_lines(w)) for w in ([] if waiting else ws)]
-    # Each window's bar spans the menu, a divider between its 2 sections: as
-    # wide as the widest line (the menu is that wide), a line of its own.
+    # Each window's line, its bar then its name and percent, spans the menu,
+    # a divider between the 2 sections: the bar takes what the widest line
+    # leaves; the labels are Menlo and one length, so both lines end alike.
     width = bar_width([line for _, rows in sections for line in rows] + foot)
+    bar = max(BAR_LEAST, width - int(math.ceil(len(head(ws[0])) * HEAD_PT + IMAGE_GAP_PT)))
     for w, rows in sections:
-        name = "5-hour" if w["id"] == "h5" else "Week"
-        img = "image=%s,%s width=%d height=14" % (menuart.bar(w, width, 14, False), menuart.bar(w, width, 14, True),
-                                                 width)
-        out.append(" | %s tooltip=%s" % (img, w["sentence"].replace("|", "/")))
-        out.append("%s   %s | size=13" % (name, "waiting" if w["pct"] is None else "%d%%" % w["pct"]))
+        img = "image=%s,%s width=%d height=14" % (menuart.bar(w, bar, 14, False), menuart.bar(w, bar, 14, True), bar)
+        out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, w["sentence"].replace("|", "/")))
         out.extend(rows)
     out.append("---")
     out.extend(foot)
@@ -96,16 +95,24 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     return out
 
 
-# Points per character: Menlo 11 (0.602 em, with a little to spare) and the
-# system font at 11 (wider than its average, so the bar is never short).
-MENLO_PT, TEXT_PT = 6.7, 6.2
-BAR_MIN, BAR_MAX = 260, 380
+# Points per character: Menlo 11 (0.602 em, with a little to spare), the
+# system font at 11 (wider than its average) and Menlo 12 (the windows'
+# lines); the space between an image and its text in a menu.
+MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 6
+BAR_MIN, BAR_MAX, BAR_LEAST = 250, 380, 120
+
+
+def head(w):
+    """A window's name and percent, one length for both windows ("5-hour   20%",
+    "Week     37%"), so their lines end at the same point."""
+    name = "5-hour" if w["id"] == "h5" else "Week"
+    return name.ljust(7) + ("wait" if w["pct"] is None else "%d%%" % w["pct"]).rjust(5)
 
 
 def bar_width(lines):
-    """The menu's width in points, from its widest line: Menlo rows and small
-    text. Too wide only widens the menu to the bar; too narrow would leave
-    a gap, so the estimate errs wide."""
+    """The width in points the windows' lines span, from the menu's widest
+    other line: Menlo rows and small text. Too wide only widens the menu to
+    these lines; too narrow would leave the rows longer, so it errs wide."""
     widest = BAR_MIN
     for line in lines:
         text, _, params = line.partition(" | ")
@@ -308,6 +315,10 @@ def script(python, args, entry, home):
         "# <swiftbar.hideAbout>true</swiftbar.hideAbout>",
         "# <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>",
         "# <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>",
+        # The menu says when it was updated; SwiftBar's own submenu takes a column on
+        # the right of every line. Option-click shows both.
+        "# <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>",
+        "# <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>",
         "export CTEMPO_HOME=%s" % q(home),
         "exec %s menubar" % " ".join(q(a) for a in [python] + list(args) + [entry]),
     ]) + "\n"

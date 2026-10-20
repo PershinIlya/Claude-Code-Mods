@@ -92,11 +92,13 @@ ctempo menubar --install          # writes ctempo.1m.sh into that folder
 The menu bar then shows two small bars, the 5 hours on top and the week below,
 with `22% · 18%` beside them: green when there is room to spare, red or yellow
 with the words when a window needs you (`70% 2x slower · 48%`). A click shows
-2 sections, one per window: its bar as the Desktop band draws it, across the
-whole menu (a divider between them), its name and percent, and the rows of
-the Desktop band's Details (Used, Pace, At reset, Will go unused, Runs out,
-Resets, Rate) in columns; then how old the readings are. The full sentence
-is the bar's tooltip. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
+2 sections, one per window: a line across the whole menu with its bar, as
+the Desktop band draws it, and its name and percent (a divider between the
+sections), then the rows of the Desktop band's Details (Used, Pace, At
+reset, Will go unused, Runs out, Resets, Rate) in columns; then how old the
+readings are. The full sentence is the bar's tooltip. SwiftBar's own items
+(its submenu, which takes a column on the right of every line, and its
+"Updated") are hidden: Option-click the menu bar item to show them. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
 records nothing itself: the readings come from Claude Code sessions on this
 Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
