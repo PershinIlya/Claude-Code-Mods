@@ -92,10 +92,11 @@ ctempo menubar --install          # writes ctempo.1m.sh into that folder
 The menu bar then shows two small bars, the 5 hours on top and the week below,
 with `22% · 18%` beside them: green when there is room to spare, red or yellow
 with the words when a window needs you (`70% 2x slower · 48%`). A click shows
-each window's bar as the Desktop band draws it and, under it, the rows of the
-Desktop band's Details (Used, Pace, At reset, Will go unused, Runs out,
-Resets, Rate) in columns, and how old the readings are; the full sentence is
-the bar's tooltip. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
+2 sections, one per window: its bar as the Desktop band draws it, across the
+whole menu (a divider between them), its name and percent, and the rows of
+the Desktop band's Details (Used, Pace, At reset, Will go unused, Runs out,
+Resets, Rate) in columns; then how old the readings are. The full sentence
+is the bar's tooltip. `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
 records nothing itself: the readings come from Claude Code sessions on this
 Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
@@ -451,7 +452,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 495 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 496 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 68 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

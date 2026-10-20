@@ -23,11 +23,13 @@ class Lines(TempHome):
         out = self.out("on pace")
         self.assertRegex(out[0], r"^55% · 48% \| image=[A-Za-z0-9+/=]+,[A-Za-z0-9+/=]+ width=24 height=18$")
         self.assertEqual(out[1], "---")
-        self.assertRegex(out[2], r"^5-hour   55% \| image=\S+ width=120 height=14 size=13 tooltip=5-hour: 55% used")
-        # Under each bar, the rows of the Desktop band's Details, in columns.
+        # Each window: its bar across the menu (a line of its own, a divider),
+        # its name and percent, then the rows of the Desktop band's Details.
+        self.assertRegex(out[2], r"^ \| image=\S+ width=260 height=14 tooltip=5-hour: 55% used")
+        self.assertEqual(out[3], "5-hour   55% | size=13")
         menlo = " | font=Menlo size=11 trim=false color="
-        self.assertEqual(out[3], "Used            55%" + menlo + menubar.DIM)
-        self.assertEqual(out[4], "Pace            On pace" + menlo + menubar.DIM)
+        self.assertEqual(out[4], "Used            55%" + menlo + menubar.DIM)
+        self.assertEqual(out[5], "Pace            On pace" + menlo + menubar.DIM)
         self.assertIn("Resets          16:30" + menlo + menubar.DIM, out)
         self.assertIn("Rate            17%/h, 18%/h fits" + menlo + menubar.DIM, out)
         self.assertIn("Resets          Fri 04:00" + menlo + menubar.DIM, out)
@@ -79,6 +81,17 @@ class Lines(TempHome):
         for state in STATES:
             for line in self.out(state):
                 self.assertLessEqual(line.count(" | "), 1, line)
+
+
+class BarWidth(TempHome):
+    def test_the_bars_are_as_wide_as_the_widest_line(self):
+        self.assertEqual(menubar.bar_width(["Used  5% | font=Menlo size=11"]), menubar.BAR_MIN)
+        row = "Runs out        Sun 22:45, 4 days 5 h early | font=Menlo size=11"  # 43 Menlo characters
+        self.assertEqual(menubar.bar_width([row]), 289)
+        self.assertEqual(menubar.bar_width(["x" * 200 + " | size=11"]), menubar.BAR_MAX)
+        out = menubar.lines(band.windows(*STATES["week dry"], NOW), NOW - 60, NOW, self.cfg)
+        widths = {line.split(" width=")[1].split()[0] for line in out if line.startswith(" | image=")}
+        self.assertEqual(widths, {"289"})  # both bars, one width: the run-out row is the widest
 
 
 class Show(TempHome):
@@ -171,7 +184,7 @@ class Notify(TempHome):
 
     def test_a_lone_waiting_window_reads_waiting(self):
         out = menubar.lines(band.windows(*STATES["half"], NOW), NOW - 60, NOW, self.cfg)
-        self.assertTrue(any(line.startswith("Week   waiting | image=") for line in out), out)
+        self.assertIn("Week   waiting | size=13", out)
 
 
 class Pictures(TempHome):

@@ -7,9 +7,10 @@ runs `ctempo menubar`, which reads the store and prints
 
   [two small bars] 22% · 18%             (5 hours on top; green with room to spare,
   ---                                       red or yellow words when a window needs you)
-  [bar] 5-hour   22%                       (each window's bar as a picture, as the
-        Used            22%                 Desktop band draws it, and the rows of its
-        Pace            1.4x faster         Details: band.details)
+  [bar across the menu]                    (each window's bar as a picture, as the
+  5-hour   22%                              Desktop band draws it, a divider between
+  Used            22%                       the 2 sections, then the rows of its
+  Pace            1.4x faster               Details: band.details)
   ...
   Updated 2 min ago
 
@@ -17,6 +18,7 @@ It records nothing: the numbers are the ones Claude Code sessions on this Mac
 (the status line, the Desktop mod) last stored, and "Updated" says how old.
 """
 
+import math
 import os
 import shlex
 import subprocess
@@ -62,29 +64,53 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     color = title_color(ws, stale or waiting)
     pic = "image=%s,%s width=24 height=18" % (menuart.icon(ws, False), menuart.icon(ws, True))
     title = ("" if waiting else " · ".join(parts)) + " | " + pic + (" color=" + color if color else "")
-    out = [title, "---"]
-    if waiting:
-        out.append("Waiting for the first reading: start a Claude Code session | size=12")
-    for w in ws if not waiting else []:
-        name = "5-hour" if w["id"] == "h5" else "Week"
-        img = "image=%s,%s width=120 height=14" % (menuart.bar(w, 120, 14, False), menuart.bar(w, 120, 14, True))
-        head = "%s   %s" % (name, "waiting" if w["pct"] is None else "%d%%" % w["pct"])
-        out.append("%s | %s size=13 tooltip=%s" % (head, img, w["sentence"].replace("|", "/")))
-        out.extend(detail_lines(w))
-    out.append("---")
+    foot = []
     times = []
     if updated is not None:
         times.append(age(now - updated))
     if checked is not None:
         times.append("checked " + age(now - checked)[8:])
     if times:
-        out.append("%s | size=11 color=%s" % (", ".join(times), DIM))
+        foot.append("%s | size=11 color=%s" % (", ".join(times), DIM))
     if note:
-        out.append("%s | size=11 color=%s" % (note, TONE["warning"]))
+        foot.append("%s | size=11 color=%s" % (note, TONE["warning"]))
     if stale and not waiting and checked is None:
-        out.append("Readings come from Claude Code sessions on this Mac | size=11 color=%s" % DIM)
+        foot.append("Readings come from Claude Code sessions on this Mac | size=11 color=%s" % DIM)
+    out = [title, "---"]
+    if waiting:
+        out.append("Waiting for the first reading: start a Claude Code session | size=12")
+    sections = [(w, detail_lines(w)) for w in ([] if waiting else ws)]
+    # Each window's bar spans the menu, a divider between its 2 sections: as
+    # wide as the widest line (the menu is that wide), a line of its own.
+    width = bar_width([line for _, rows in sections for line in rows] + foot)
+    for w, rows in sections:
+        name = "5-hour" if w["id"] == "h5" else "Week"
+        img = "image=%s,%s width=%d height=14" % (menuart.bar(w, width, 14, False), menuart.bar(w, width, 14, True),
+                                                 width)
+        out.append(" | %s tooltip=%s" % (img, w["sentence"].replace("|", "/")))
+        out.append("%s   %s | size=13" % (name, "waiting" if w["pct"] is None else "%d%%" % w["pct"]))
+        out.extend(rows)
+    out.append("---")
+    out.extend(foot)
     out.append("Refresh | refresh=true")
     return out
+
+
+# Points per character: Menlo 11 (0.602 em, with a little to spare) and the
+# system font at 11 (wider than its average, so the bar is never short).
+MENLO_PT, TEXT_PT = 6.7, 6.2
+BAR_MIN, BAR_MAX = 260, 380
+
+
+def bar_width(lines):
+    """The menu's width in points, from its widest line: Menlo rows and small
+    text. Too wide only widens the menu to the bar; too narrow would leave
+    a gap, so the estimate errs wide."""
+    widest = BAR_MIN
+    for line in lines:
+        text, _, params = line.partition(" | ")
+        widest = max(widest, len(text) * (MENLO_PT if "font=Menlo" in params else TEXT_PT))
+    return int(min(BAR_MAX, math.ceil(widest)))
 
 
 LABEL_W = len("Will go unused") + 2

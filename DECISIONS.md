@@ -737,7 +737,9 @@ run together and, on narrow bands, gone (a long phrase took the button's
 room). Details is now a table, a column per window: Used, Pace, At reset,
 Will go unused, Runs out, Resets, Rate, from the CLI (`band.details`), and
 the menu bar's menu shows the same rows under each bar (Menlo columns), so
-the Mac and Windows read alike; the button is always there, "⋯" below 56
+the Mac and Windows read alike (each bar a line of its own across the whole
+menu, a divider between the 2 sections: as wide as the widest line, from
+6.7 points a Menlo character, at least 260, at most 380); the button is always there, "⋯" below 56
 cells or when 2 windows need you with the small bars (gone only at 40 cells
 with 2 such windows), below 52 cells only the words that need you show, and the table puts one
 window under the other below 72 cells (a run-out row, "Sun 22:45, 4 days
