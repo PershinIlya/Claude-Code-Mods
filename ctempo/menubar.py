@@ -7,7 +7,7 @@ runs `ctempo menubar`, which reads the store and prints
 
   [two small bars] 22% · 18%             (5 hours on top; green with room to spare,
   ---                                       red or yellow words when a window needs you)
-  [bar ━━━━━━━━━━━━━]  5-hour   22%        (each window's bar as a picture, as the
+  [bar ━━━━━━━━━━━━━━━━━━]  5h 22%        (each window's bar as a picture, as the
   Used            22%                       Desktop band draws it, and its name, a
   Pace            1.4x faster               line across the menu dividing the 2
   ...                                       sections; then the rows of its Details)
@@ -80,15 +80,17 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     if waiting:
         out.append("Waiting for the first reading: start a Claude Code session | size=12")
     sections = [(w, detail_lines(w)) for w in ([] if waiting else ws)]
-    # Each window's line, its bar then its name and percent, spans the menu,
-    # a divider between the 2 sections: the bar takes what the widest line
-    # leaves; the labels are Menlo and one length, so both lines end alike.
+    # Each window's line, its bar then its short name and percent, spans the
+    # menu, a divider between the 2 sections: the bar takes what the widest
+    # line leaves after its label (Menlo, so its width is known and both
+    # lines end at the same point).
     width = bar_width([line for _, rows in sections for line in rows] + foot)
-    bar = max(BAR_LEAST, width - int(math.ceil(len(head(ws[0])) * HEAD_PT + IMAGE_GAP_PT)))
     for w, rows in sections:
+        bar = max(BAR_LEAST, width - int(math.ceil(len(head(w)) * HEAD_PT + IMAGE_GAP_PT)))
         img = "image=%s,%s width=%d height=14" % (menuart.bar(w, bar, 14, False, BAR_PAD),
                                                  menuart.bar(w, bar, 14, True, BAR_PAD), bar)
-        out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, w["sentence"].replace("|", "/")))
+        out.append("%s | %s font=Menlo size=12 trim=false color=%s tooltip=%s" % (
+            head(w), img, DIM, w["sentence"].replace("|", "/")))
         out.extend(rows)
     out.append("---")
     out.extend(foot)
@@ -101,15 +103,13 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
 # lines); the space between an image and its text in a menu.
 MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 7  # the gap as measured on the person's Mac
 BAR_MIN, BAR_MAX, BAR_LEAST = 250, 380, 120
-BAR_PAD = 4  # clear points at the bar's right end: with the image's gap, 11 before the label
+BAR_PAD = 2  # clear points at the bar's right end: with the image's gap, 9 before the label
 
 
 def head(w):
-    """A window's name and percent, close, in 2 columns of one length for
-    both windows ("5-hour  75%", "Week    45%"), so the percents line up and
-    both lines end at the same point."""
-    name = "5-hour" if w["id"] == "h5" else "Week"
-    return name.ljust(6) + " " + ("wait" if w["pct"] is None else "%d%%" % w["pct"]).rjust(4)
+    """A window's short name and percent, as the title has them: "5h 83%",
+    "Wk 46%"."""
+    return ("5h" if w["id"] == "h5" else "Wk") + " " + ("wait" if w["pct"] is None else "%d%%" % w["pct"])
 
 
 def bar_width(lines):

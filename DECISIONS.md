@@ -745,9 +745,10 @@ the plugin hides SwiftBar's own submenu, whose arrow kept a column of about
 40 points empty at the right of every line, and its "Updated", which
 repeats ours; Option-click shows them; SwiftBar reads those settings only
 when it starts, so the first try showed no change until a restart; the
-label is 2 close columns, "5-hour  75%" and "Week    45%", and the bar keeps
-4 points clear before it, 11 with the image's own gap, measured on the
-person's Mac; macOS leaves about 10 points after the text of every line, so
+label is short, as the title has it, "5h 83%" and "Wk 46%" (in Menlo, so
+each line's bar is as long as its label leaves and both end alike), and the
+bar keeps 2 points clear before it, 9 with the image's own gap (7, measured
+on the person's Mac); macOS leaves about 10 points after the text of every line, so
 the line ends that much short of the separators); the button is always there, "⋯" below 56
 cells or when 2 windows need you with the small bars (gone only at 40 cells
 with 2 such windows), below 52 cells only the words that need you show, and the table puts one
