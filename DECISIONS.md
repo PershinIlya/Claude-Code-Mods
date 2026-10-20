@@ -748,7 +748,8 @@ when it starts, so the first try showed no change until a restart; the
 label is short, as the title has it, "5h 83%" and "Wk 46%" (in Menlo, so
 each line's bar is as long as its label leaves and both end alike), and the
 bar keeps 2 points clear before it, 9 with the image's own gap (7, measured
-on the person's Mac); macOS leaves about 10 points after the text of every line, so
+on the person's Mac); the label keeps the menu's own grey: with a color= on
+that line SwiftBar drew the text and dropped the bar; macOS leaves about 10 points after the text of every line, so
 the line ends that much short of the separators); the button is always there, "⋯" below 56
 cells or when 2 windows need you with the small bars (gone only at 40 cells
 with 2 such windows), below 52 cells only the words that need you show, and the table puts one

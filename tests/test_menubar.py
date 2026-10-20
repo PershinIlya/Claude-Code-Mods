@@ -25,8 +25,10 @@ class Lines(TempHome):
         self.assertEqual(out[1], "---")
         # Each window: a line across the menu (its bar, then its name and
         # percent in Menlo, one length for both), then its Details rows.
-        self.assertRegex(out[2], r"^5h 55% \| image=\S+ width=199 height=14 font=Menlo size=12 trim=false color=\S+ "
+        self.assertRegex(out[2], r"^5h 55% \| image=\S+ width=199 height=14 font=Menlo size=12 trim=false "
                                  r"tooltip=5-hour: 55% used")
+        # With color= on a menu line, SwiftBar drew its text and dropped its image.
+        self.assertFalse([line for line in out[1:] if "image=" in line and "color=" in line])
         self.assertRegex(out[9], r"^Wk 48% \| image=\S+ width=199 ")
         menlo = " | font=Menlo size=11 trim=false color="
         self.assertEqual(out[3], "Used            55%" + menlo + menubar.DIM)

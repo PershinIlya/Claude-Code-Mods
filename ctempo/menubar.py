@@ -89,8 +89,9 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         bar = max(BAR_LEAST, width - int(math.ceil(len(head(w)) * HEAD_PT + IMAGE_GAP_PT)))
         img = "image=%s,%s width=%d height=14" % (menuart.bar(w, bar, 14, False, BAR_PAD),
                                                  menuart.bar(w, bar, 14, True, BAR_PAD), bar)
-        out.append("%s | %s font=Menlo size=12 trim=false color=%s tooltip=%s" % (
-            head(w), img, DIM, w["sentence"].replace("|", "/")))
+        # No color= on this line: with it, SwiftBar drew the text and dropped
+        # the image (the person's Mac); the menu's own grey is kept.
+        out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, w["sentence"].replace("|", "/")))
         out.extend(rows)
     out.append("---")
     out.extend(foot)
