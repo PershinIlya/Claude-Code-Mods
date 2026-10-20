@@ -99,16 +99,17 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
 # Points per character: Menlo 11 (0.602 em, with a little to spare), the
 # system font at 11 (wider than its average) and Menlo 12 (the windows'
 # lines); the space between an image and its text in a menu.
-MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 6
+MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 7  # the gap as measured on the person's Mac
 BAR_MIN, BAR_MAX, BAR_LEAST = 250, 380, 120
-BAR_PAD = 10  # clear points at the bar's right end, so it never runs into its label
+BAR_PAD = 4  # clear points at the bar's right end: with the image's gap, 11 before the label
 
 
 def head(w):
-    """A window's name and percent, one length for both windows ("5-hour   20%",
-    "Week     37%"), so their lines end at the same point."""
+    """A window's name and percent, close, in 2 columns of one length for
+    both windows ("5-hour  75%", "Week    45%"), so the percents line up and
+    both lines end at the same point."""
     name = "5-hour" if w["id"] == "h5" else "Week"
-    return name.ljust(7) + ("wait" if w["pct"] is None else "%d%%" % w["pct"]).rjust(5)
+    return name.ljust(6) + " " + ("wait" if w["pct"] is None else "%d%%" % w["pct"]).rjust(4)
 
 
 def bar_width(lines):

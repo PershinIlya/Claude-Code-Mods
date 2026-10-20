@@ -25,9 +25,9 @@ class Lines(TempHome):
         self.assertEqual(out[1], "---")
         # Each window: a line across the menu (its bar, then its name and
         # percent in Menlo, one length for both), then its Details rows.
-        self.assertRegex(out[2], r"^5-hour   55% \| image=\S+ width=157 height=14 font=Menlo size=12 trim=false "
+        self.assertRegex(out[2], r"^5-hour  55% \| image=\S+ width=163 height=14 font=Menlo size=12 trim=false "
                                  r"tooltip=5-hour: 55% used")
-        self.assertRegex(out[9], r"^Week     48% \| image=\S+ width=157 ")
+        self.assertRegex(out[9], r"^Week    48% \| image=\S+ width=163 ")
         menlo = " | font=Menlo size=11 trim=false color="
         self.assertEqual(out[3], "Used            55%" + menlo + menubar.DIM)
         self.assertEqual(out[4], "Pace            On pace" + menlo + menubar.DIM)
@@ -92,7 +92,7 @@ class BarWidth(TempHome):
         self.assertEqual(menubar.bar_width(["x" * 200 + " | size=11"]), menubar.BAR_MAX)
         out = menubar.lines(band.windows(*STATES["week dry"], NOW), NOW - 60, NOW, self.cfg)
         widths = {line.split(" width=")[1].split()[0] for line in out if " | image=" in line and "font=Menlo" in line}
-        self.assertEqual(widths, {"196"})  # 289 for the line, less 12 Menlo characters and the gap
+        self.assertEqual(widths, {"202"})  # 289 for the line, less 11 Menlo characters and the gap
 
 
 class Show(TempHome):
@@ -190,7 +190,7 @@ class Notify(TempHome):
 
     def test_a_lone_waiting_window_reads_waiting(self):
         out = menubar.lines(band.windows(*STATES["half"], NOW), NOW - 60, NOW, self.cfg)
-        self.assertTrue(any(line.startswith("Week    wait | image=") for line in out), out)
+        self.assertTrue(any(line.startswith("Week   wait | image=") for line in out), out)
 
 
 class Pictures(TempHome):
