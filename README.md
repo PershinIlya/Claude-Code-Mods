@@ -53,12 +53,15 @@ One row per window: its name, a small bar, the percent, and its pace.
 - **The chart** in each card, under its head, shows the window from its
   start to its reset: what was used (the line over a pale area, a dot per
   reading while there are few), now (a hairline), the forecast to the reset
-  (dashed; red when it runs out, yellow when it may), and the forecasts made
-  earlier in the window in grey, an hour ago for the 5 hours, a day and 2
-  days ago for the week, so you can see by eye how well the forecast holds.
-  The week's forecast follows your usual hours (flat at night); while the
-  5-hour rate is an early estimate, a pale fan shows where it may land. The
-  grid marks hours (5 hours) or midnights (the week) (D-36).
+  (dashed, in the pace's color when it needs you: red when it runs out or
+  the week blocks it, yellow when it may run out or passes your target),
+  and the forecasts made earlier in the window in grey, an hour ago for the
+  5 hours, a day and 2 days ago for the week, so you can see by eye how
+  well the forecast holds. The week's forecast follows your usual hours
+  (slower at night; a straight line until ctempo has learned them); while
+  the 5-hour rate is an early estimate, a pale fan spans the rate 40% lower
+  to 40% higher. The grid marks hours (5 hours) or the days (the week)
+  (D-36).
 
 The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
 unused (`#`, `=`, `.` with `display.symbols: "ascii"`), in color unless
@@ -470,9 +473,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 522 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 530 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 71 tests
+claude plugin test mods/ctempo                 # 72 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

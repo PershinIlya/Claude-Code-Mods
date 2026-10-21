@@ -266,7 +266,7 @@ export function chartOf(x: unknown): Chart | null {
   const ok =
     typeof c === 'object' && c !== null && isNum(c.t0) && isNum(c.t1) && c.t1 > c.t0 && isNum(c.now) &&
     isPoints(c.actual) && c.actual.length > 0 && isPoints(c.forecast) &&
-    (c.fan === null || (Array.isArray(c.fan) && c.fan.length === 2 && c.fan.every(isNum))) &&
+    (c.fan === null || (Array.isArray(c.fan) && c.fan.length === 2 && c.fan.every((p) => isPoints(p) && p.length > 0))) &&
     Array.isArray(c.ghosts) && c.ghosts.every(isPoints) && Array.isArray(c.grid) && c.grid.every(isNum) &&
     Array.isArray(c.labels) && c.labels.every((l) => Array.isArray(l) && isNum(l[0]) && isStr(l[1]))
   return ok ? c : null
@@ -418,11 +418,13 @@ const STYLE =
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// The chart's style, scoped to its root like the bars': the text and the
-// grid grey, Claude's orange, red for a forecast that reaches 100 early.
+// The chart's style, scoped to its root like the bars': the text, the grid
+// and now grey, Claude's orange, the forecast red or yellow in the pace's
+// color. Mid-tones only, as the bars': an image follows the system's scheme,
+// not the app's, so each mark reads on a light card and a dark one (D-30).
 const CHART_STYLE =
-  '<style>.ctc{--t:#8a867c;--k:#141413;--a:#d97757;--r:#d0564c;--y:#c08a1e}' +
-  '@media(prefers-color-scheme:dark){.ctc{--t:#a3a19a;--k:#ecebe5;--r:#e5695e;--y:#e0b252}}' +
+  '<style>.ctc{--t:#8a867c;--a:#d97757;--r:#d0564c;--y:#c08a1e}' +
+  '@media(prefers-color-scheme:dark){.ctc{--t:#a3a19a;--r:#e5695e;--y:#e0b252}}' +
   '.ctc .g{stroke:var(--t);stroke-width:1;opacity:.2}.ctc .lim{stroke:var(--t);stroke-width:.8;stroke-dasharray:2 3;opacity:.6}' +
   '.ctc .ar{fill:var(--a);opacity:.13}.ctc .ac{fill:none;stroke:var(--a);stroke-width:1.8;stroke-linejoin:round}' +
   '.ctc .dt{fill:var(--a)}.ctc .fn{fill:var(--a);opacity:.1}' +
@@ -430,17 +432,22 @@ const CHART_STYLE =
   '.ctc .fx{fill:none;stroke:var(--r);stroke-width:1.6;stroke-dasharray:4 3}' +
   '.ctc .fy{fill:none;stroke:var(--y);stroke-width:1.6;stroke-dasharray:4 3}' +
   '.ctc .gh{fill:none;stroke:var(--t);stroke-width:1;stroke-dasharray:3 3;opacity:.6}' +
-  '.ctc .nw{stroke:var(--k);stroke-width:.8;opacity:.35}.ctc .end{fill:none;stroke:var(--a);stroke-width:1.2}' +
+  '.ctc .nw{stroke:var(--t);stroke-width:.8;opacity:.75}.ctc .end{fill:none;stroke:var(--a);stroke-width:1.2}' +
+  '.ctc .ex{stroke:var(--r)}.ctc .ey{stroke:var(--y)}' +
   '.ctc text{font:9px -apple-system,"Segoe UI",system-ui,sans-serif;fill:var(--t)}</style>'
 
 export const CHART_H = 76
+// A label's character at 9 px, with some to spare (the system font's widest
+// day names, "Wed", run about 5.5 px a character).
+const LABEL_PX = 6
 
 // A window's chart, W px wide (chart.py): what was used (a line over a pale
 // area, a dot per reading while there are few), the forecast to the reset
-// (dashed, in the pace's color when it needs you: red, or yellow when it
-// only may run out), an early 5-hour estimate's fan, the forecasts made
-// earlier (grey, dashed), the grid and its hours or days, the limit
-// (dotted) and now (a hairline).
+// (dashed, in the pace's color when it needs you: red when it runs out or
+// is blocked, yellow when it may or passes the target), an early 5-hour
+// estimate's fan, the forecasts made earlier (grey, dashed), the grid and
+// its hours or days (one with no room after the one before is left out, as
+// in the menu bar), the limit (dotted) and now (a hairline).
 export function chartSvg(c: Chart, W: number, alt: string, tone?: string): string {
   const H = CHART_H
   const pad = { l: 1, r: 4, t: 6, b: 14 }
@@ -462,21 +469,28 @@ export function chartSvg(c: Chart, W: number, alt: string, tone?: string): strin
   out.push(`<path class='ac' d='${d(a)}'/>`)
   if (a.length <= 30) for (const p of a.slice(1)) out.push(`<circle class='dt' cx='${sx(p[0])}' cy='${sy(p[1])}' r='1.4'/>`)
   const f = c.forecast
-  if (c.fan && f.length) {
-    const end = f[f.length - 1] as [number, number]
-    out.push(`<path class='fn' d='M${sx(f[0]![0])},${sy(f[0]![1])}L${sx(end[0])},${sy(c.fan[0])}L${sx(end[0])},${sy(c.fan[1])}Z'/>`)
+  if (c.fan) {
+    // Between the slower line and the faster one, back along it.
+    const [lo, hi] = c.fan
+    out.push(`<path class='fn' d='${d(lo)}${d([...hi].reverse()).replace('M', 'L')}Z'/>`)
   }
   if (f.length) {
     const end = f[f.length - 1] as [number, number]
-    out.push(`<path class='${tone === 'error' ? 'fx' : tone === 'warning' ? 'fy' : 'fc'}' d='${d(f)}'/>`)
-    out.push(`<circle class='end' cx='${r1(sx(end[0]) - 1.5)}' cy='${sy(end[1])}' r='2.2'/>`)
+    const k = tone === 'error' ? 'x' : tone === 'warning' ? 'y' : ''
+    out.push(`<path class='${k ? `f${k}` : 'fc'}' d='${d(f)}'/>`)
+    out.push(`<circle class='end${k ? ` e${k}` : ''}' cx='${r1(sx(end[0]) - 1.5)}' cy='${sy(end[1])}' r='2.2'/>`)
   }
   out.push(`<line class='nw' x1='${sx(c.now)}' y1='${pad.t}' x2='${sx(c.now)}' y2='${base}'/>`)
   out.push(`<circle class='dt' cx='${sx(last[0])}' cy='${sy(last[1])}' r='2.4'/>`)
+  let right = -Infinity
   for (const [t, label] of c.labels) {
     const x = sx(t)
-    const anchor = x < 8 ? 'start' : x > W - 10 ? 'end' : 'middle'
-    out.push(`<text x='${x}' y='${H - 2}' text-anchor='${anchor}'>${esc(label)}</text>`)
+    const w = label.length * LABEL_PX
+    const anchor = x - w / 2 < pad.l ? 'start' : x + w / 2 > W - 1 ? 'end' : 'middle'
+    const left = anchor === 'start' ? pad.l : anchor === 'end' ? W - 1 - w : x - w / 2
+    if (left < right + 3) continue
+    right = left + w
+    out.push(`<text x='${anchor === 'start' ? pad.l : anchor === 'end' ? W - 1 : x}' y='${H - 2}' text-anchor='${anchor}'>${esc(label)}</text>`)
   }
   out.push('</svg>')
   return out.join('')

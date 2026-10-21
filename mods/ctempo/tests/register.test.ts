@@ -773,8 +773,9 @@ test('a chart that does not read is none', () => {
   expect(chartOf({ ...CHART, actual: [] })).toBeNull()
   expect(chartOf({ ...CHART, actual: [[1, 'x']] })).toBeNull()
   expect(chartOf({ ...CHART, fan: [1] })).toBeNull()
+  expect(chartOf({ ...CHART, fan: [[], []] })).toBeNull()
   expect(chartOf({ ...CHART, labels: [[1, 2]] })).toBeNull()
-  expect(chartOf({ ...CHART, fan: [60, 90] })).not.toBeNull()
+  expect(chartOf({ ...CHART, fan: [CHART.forecast, CHART.forecast] })).not.toBeNull()
 })
 
 test('the chart draws what was used, the forecast in the pace color, earlier forecasts and the grid', () => {
@@ -791,15 +792,29 @@ test('the chart draws what was used, the forecast in the pace color, earlier for
   expect(svg).toMatch(/<text x='[\d.]+' y='74' text-anchor='middle'>12<\/text>/)
   expect(chartSvg(CHART, 300, 'a', 'error')).toMatch(/<path class='fx'/)
   expect(chartSvg(CHART, 300, 'a', 'warning')).toMatch(/<path class='fy'/)
-  expect(chartSvg({ ...CHART, fan: [80, 100] }, 300, 'a')).toMatch(/<path class='fn'/)
+  // The fan: from the slower line out and back along the faster one.
+  const lo: [number, number][] = [[CHART.now, 70], [CHART.t1, 90]]
+  const hi: [number, number][] = [[CHART.now, 70], [CHART.t0 + 4 * 3600, 100], [CHART.t1, 100]]
+  expect(chartSvg({ ...CHART, fan: [lo, hi] }, 300, 'a')).toMatch(/<path class='fn' d='M187.8,22.8L296,11.6L296,6L237,6L187.8,22.8Z'\/>/)
+  // The end ring in the forecast's color; now a mid-tone grey, never black or white.
+  expect(chartSvg(CHART, 300, 'a', 'error')).toContain("<circle class='end ex'")
+  expect(svg).toContain("<circle class='end'")
+  expect(svg).not.toMatch(/#141413|#ecebe5/)
   // A dot per reading while there are few.
   expect(svg.match(/<circle class='dt'/g)?.length).toBe(3)
   const many = { ...CHART, actual: Array.from({ length: 40 }, (_, i) => [T0 + i * 60, i] as [number, number]) }
   expect(chartSvg(many, 300, 'a').match(/<circle class='dt'/g)?.length).toBe(1)
   // Labels at the edges stay inside.
   const edge = chartSvg({ ...CHART, labels: [[CHART.t0, '11'], [CHART.t1, '16']] }, 300, 'a')
-  expect(edge).toContain("text-anchor='start'>11<")
-  expect(edge).toContain("text-anchor='end'>16<")
+  expect(edge).toContain("<text x='1' y='74' text-anchor='start'>11<")
+  expect(edge).toContain("<text x='299' y='74' text-anchor='end'>16<")
+})
+
+test('a chart label with no room after the one before is left out, as in the menu bar', () => {
+  // A narrow card (220 px): a day's name 2 hours after another's has no room.
+  const week = { ...CHART, t1: CHART.t0 + 7 * 86400, labels: [[CHART.t0 + 4 * 3600, 'Tue'], [CHART.t0 + 6 * 3600, 'Wed'], [CHART.t0 + 30 * 3600, 'Thu']] as [number, string][] }
+  const svg = chartSvg(week, 220, 'a')
+  expect(svg.match(/<text [^>]*>[A-Za-z]+</g)?.map((t) => t.slice(-4, -1))).toEqual(['Tue', 'Thu'])
 })
 
 test('waiting for the first reading', async ($, on) => {

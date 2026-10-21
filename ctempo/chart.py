@@ -5,14 +5,16 @@ earlier, to see by eye how the model does.
   actual    the level path (pace.level_path): fresh readings, linear between
             them, from the window's start
   forecast  from now to the reset: the 5 hours at the fitted rate (a line),
-            the week at its intensity along the hour-of-week profile (flat at
-            night, steeper in the hours you usually work); capped at 100
-  fan       the 5 hours while the rate is still an early estimate: where the
-            reset level may land, low and high
+            the week at its intensity along the hour-of-week profile (slower
+            at night, down to the profile's floor, steeper in the hours you
+            usually work); capped at 100
+  fan       the 5 hours while the rate is still an early estimate: the lines
+            at that rate FAN lower and FAN higher, each capped at 100
   ghosts    forecasts made earlier in this window (an hour ago for the 5
             hours, a day and 2 days ago for the week), drawn from snapshots
             `snapshot` keeps as the status line and the band run
-  grid      local hours (5 hours) or midnights (week); labels: "17", "Fri"
+  grid      local hours (5 hours) or the starts of local days (week);
+            labels: "17", "Fri"
 
 Times are epoch seconds, levels percents; the series are thinned to at most
 POINTS points, so the band's JSON stays small.
@@ -29,9 +31,12 @@ SNAP_EVERY = {FIVE_HOUR: 15 * 60, SEVEN_DAY: 2 * 3600}
 KEEP = 60
 # The forecasts drawn as ghosts: made this long ago (within a third of it).
 GHOSTS = {FIVE_HOUR: (3600,), SEVEN_DAY: (86400, 2 * 86400)}
-FAN = 0.4  # the spread of an early 5-hour estimate, a share of what is still to come
+FAN = 0.4  # the spread of an early 5-hour estimate: its rate this share lower and higher
 HOUR = profile.HOUR
 WEEK = 7 * 86400
+# A day at the week's edge shorter than this goes unnamed: its name would
+# crowd the next day's in a narrow chart.
+NAMED_DAY = 16 * HOUR
 
 
 def _key(window):
@@ -48,7 +53,8 @@ def _slope(v):
 
 def snapshot(store, v, now):
     """Keep the window's forecast, at most one every SNAP_EVERY, for ghosts
-    later. A new window instance starts the list over."""
+    later: [time, level, slope, where it lands uncapped]. A new window
+    instance starts the list over."""
     if not v.get("present") or v.get("verdict") in ("maxed", "unknown") or _slope(v) is None:
         return False
     key = _key(v["window"])
@@ -56,7 +62,8 @@ def snapshot(store, v, now):
     log = kept.get("log", []) if kept.get("wid") == v["window_id"] else []
     if log and now - log[-1][0] < SNAP_EVERY[v["window"]]:
         return False
-    log.append([int(now), round(v["used"], 2), round(_slope(v), 6)])
+    end = v.get("projected_raw")
+    log.append([int(now), round(v["used"], 2), round(_slope(v), 6), round(v["used"] if end is None else end, 2)])
     store.meta_set(key, {"wid": v["window_id"], "log": log[-KEEP:]})
     return True
 
@@ -110,30 +117,72 @@ def _forecast(v, w, used, slope, t0, t1):
     return _walk(w, used, slope, t0, t1)
 
 
+def _ghost(v, w, snap, t1):
+    """A forecast made earlier, from its snapshot. The week's is walked along
+    today's profile (it is learned as you go), its slope set so it lands
+    where that forecast said; the 5 hours' line needs no profile."""
+    ts, used, slope = snap[0], snap[1], snap[2]
+    if v["window"] == SEVEN_DAY and len(snap) > 3:
+        share = profile.share_between(w, ts, t1)
+        if share > 0:
+            slope = max(0.0, snap[3] - used) / share
+    return _forecast(v, w, used, slope, ts, t1)
+
+
+def _at(points, t):
+    """The level of a path [[t, u]] at t: linear between points, flat past its ends."""
+    if t <= points[0][0]:
+        return points[0][1]
+    for (t0, u0), (t1, u1) in zip(points, points[1:]):
+        if t <= t1:
+            return u0 if t1 <= t0 else u0 + (u1 - u0) * (t - t0) / (t1 - t0)
+    return points[-1][1]
+
+
+def _fan(used, rate, t0, t1):
+    """[low, high]: the lines at the rate FAN lower and higher, or None when
+    they hardly differ (idle, or both at 100 at about the same time)."""
+    if not rate:
+        return None
+    lo, hi = _line(used, rate * (1 - FAN), t0, t1), _line(used, rate * (1 + FAN), t0, t1)
+    if not lo or max(_at(hi, t) - _at(lo, t) for t, _ in lo + hi) < 1.0:
+        return None
+    return [[[int(t), round(u, 2)] for t, u in lo], [[int(t), round(u, 2)] for t, u in hi]]
+
+
+def _days(t0, t1):
+    """The starts of local days in (t0, t1): the first hour of each new date,
+    midnight, or 01:00 where a DST change skips midnight. An hour at a time,
+    so a 23 or 25 hour day is no special case."""
+    out, h, day = [], int(profile.hour_start(t0)), clock.localtime(t0).tm_yday
+    for _ in range(int((t1 - t0) / HOUR) + 3):
+        h = int(profile.hour_start(h + HOUR + 60))  # the next hour's start, always ahead
+        if h >= t1 - 60:
+            break
+        if clock.localtime(h).tm_yday != day:
+            out.append(h)
+            day = clock.localtime(h).tm_yday
+    return out
+
+
 def _ticks(window, t0, t1):
     """(grid, labels): local hours with their hour (5 hours), or local
     midnights with the day's name at the middle of each day (week)."""
     if window == FIVE_HOUR:
         grid, t = [], int(profile.hour_start(t0)) + HOUR
-        while t < t1 - 60:
+        for _ in range(12):
+            if t >= t1 - 60:
+                break
             grid.append(t)
             t = int(profile.hour_start(t + HOUR + 60))
         # The ends too when they fall on the hour (a window opens at its first message).
         ends = [t for t in (t0, t1) if clock.localtime(t).tm_min == 0]
         labels = [[t, clock.strftime("%H", t)] for t in sorted(grid + ends)]
         return grid, labels
-    grid, t = [], t0
-    while True:
-        lt = clock.localtime(t)
-        nxt = int(t) - lt.tm_hour * 3600 - lt.tm_min * 60 - lt.tm_sec + 86400 + 3 * 3600  # past a DST shift
-        lt = clock.localtime(nxt)
-        midnight = nxt - lt.tm_hour * 3600 - lt.tm_min * 60 - lt.tm_sec
-        if midnight >= t1 - 60:
-            break
-        grid.append(midnight)
-        t = midnight + 60
-    edges = [t0] + grid + [t1]
-    labels = [[(a + b) // 2, clock.strftime("%a", (a + b) // 2)] for a, b in zip(edges, edges[1:]) if b - a >= 6 * HOUR]
+    grid = _days(t0, t1)
+    edges = [int(t0)] + grid + [int(t1)]
+    labels = [[(a + b) // 2, clock.strftime("%a", (a + b) // 2)] for a, b in zip(edges, edges[1:])
+              if b - a >= NAMED_DAY]
     return grid, labels
 
 
@@ -158,20 +207,18 @@ def build(store, v, now):
         forecast = _forecast(v, w, used, _slope(v), now, t1)
     fan = None
     if window == FIVE_HOUR and forecast and v.get("rate_source") == "interpolated":
-        to_come = forecast[-1][1] - used
-        lo, hi = max(used, forecast[-1][1] - FAN * to_come), min(100.0, forecast[-1][1] + FAN * to_come)
-        if hi - lo >= 1.0:  # an idle or capped estimate has no spread to draw
-            fan = [round(lo, 2), round(hi, 2)]
+        fan = _fan(used, _slope(v), now, t1)
     ghosts = []
     kept = store.meta_get(_key(window)) or {}
     log = kept.get("log", []) if kept.get("wid") == wid else []
     for ago in GHOSTS[window]:
+        # The one closest to `ago` before now, within a third of it.
         near = [s for s in log if t0 <= s[0] <= now - ago * 2 / 3 and abs(s[0] - (now - ago)) <= ago / 3]
         if near:
-            ts, u, slope = min(near, key=lambda s: abs(s[0] - (now - ago)))
-            g = _forecast(v, w, u, slope, ts, t1)
+            snap = min(near, key=lambda s: abs(s[0] - (now - ago)))
+            g = _ghost(v, w, snap, t1)
             if g:
-                ghosts.append([[int(t), round(y, 2)] for t, y in _thin(g, ts, t1, 60)])
+                ghosts.append([[int(t), round(y, 2)] for t, y in _thin(g, snap[0], t1, 60)])
     grid, labels = _ticks(window, t0, t1)
     return {
         "t0": int(t0), "t1": int(t1), "now": int(now),

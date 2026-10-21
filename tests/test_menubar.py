@@ -26,7 +26,7 @@ class Lines(TempHome):
         # Each window: a line across the menu (its bar, then its name and
         # percent in Menlo, one length for both), then its Details rows.
         self.assertRegex(out[2], r"^5h 55% \| image=\S+ width=199 height=14 font=Menlo size=12 trim=false "
-                                 r"tooltip=5-hour: 55% used")
+                                 r"tooltip=\"5-hour: 55% used")
         # With color= on a menu line, SwiftBar drew its text and dropped its image.
         self.assertFalse([line for line in out[1:] if "image=" in line and "color=" in line])
         self.assertRegex(out[9], r"^Wk 48% \| image=\S+ width=199 ")

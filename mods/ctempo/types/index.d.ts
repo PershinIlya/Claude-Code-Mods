@@ -33,7 +33,8 @@ export type Chart = {
   now: number
   actual: [number, number][]
   forecast: [number, number][]
-  fan: [number, number] | null
+  // An early 5-hour estimate: the lines at its rate 40% lower and higher.
+  fan: [[number, number][], [number, number][]] | null
   ghosts: [number, number][][]
   grid: number[]
   labels: [number, string][]

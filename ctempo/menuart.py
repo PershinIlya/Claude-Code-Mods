@@ -113,11 +113,9 @@ def chart(c, width, height, dark, tone=None):
     if len(a) > 1:
         cv.fill_between(a[0][0], a[-1][0], lambda x: _at(a, x), lambda x: base, hex_color(p["a"], 0.14))
     f = pts(c["forecast"])
-    if c.get("fan") and f:
-        (x0, y0), x1 = f[0], f[-1][0]
-        lo, hi = Y(c["fan"][0]), Y(c["fan"][1])
-        k = lambda x, y: y0 + (y - y0) * (x - x0) / max(1e-9, x1 - x0)  # noqa: E731
-        cv.fill_between(x0, x1, lambda x: k(x, hi), lambda x: k(x, lo), hex_color(p["a"], 0.12))
+    if c.get("fan"):  # between the slower and the faster line (the faster on top)
+        lo, hi = pts(c["fan"][0]), pts(c["fan"][1])
+        cv.fill_between(lo[0][0], lo[-1][0], lambda x: _at(hi, x), lambda x: _at(lo, x), hex_color(p["a"], 0.12))
     now = X(c["now"])
     cv.polyline([(now, top), (now, base)], 1.0, hex_color(p["k"], 0.35))
     if len(a) > 1:

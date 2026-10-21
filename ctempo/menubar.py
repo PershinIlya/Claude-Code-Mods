@@ -93,7 +93,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
                                                  menuart.bar(w, bar, 14, True, BAR_PAD), bar)
         # No color= on this line: with it, SwiftBar drew the text and dropped
         # the image (the person's Mac); the menu's own grey is kept.
-        out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, w["sentence"].replace("|", "/")))
+        out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, quoted(w["sentence"])))
         if charts and w.get("chart"):
             out.extend(chart_lines(w, width))
         out.extend(rows)
@@ -130,6 +130,14 @@ def bar_width(lines):
     return int(min(BAR_MAX, math.ceil(widest)))
 
 
+def quoted(text):
+    """A parameter value with spaces, as SwiftBar reads it: in double quotes
+    (unquoted, it ends at the first space). Its versions end a quoted value
+    at either quote and keep a backslash, so none is left inside."""
+    text = text.replace("|", "/").replace("\\", "/").replace('"', "\u201d").replace("'", "\u2019")
+    return '"%s"' % text
+
+
 def tone(w):
     """The pace's tone, as the card says it: the band's words, else the Pace row."""
     if w.get("phrase"):
@@ -147,7 +155,7 @@ def chart_lines(w, width):
     tip = "What was used (the line), the forecast to the reset (dashed) and the forecasts made %s (grey)" % ago
     out = [" | image=%s,%s width=%d height=%d tooltip=%s" % (
         menuart.chart(c, width, CHART_H, False, tone(w)), menuart.chart(c, width, CHART_H, True, tone(w)),
-        width, CHART_H, tip)]
+        width, CHART_H, quoted(tip))]
     text = menuart.labels(c, width, LABEL_PT)
     if text.strip():
         out.append("%s | font=Menlo size=%d trim=false color=%s" % (text, LABEL_SIZE, DIM))
@@ -258,9 +266,11 @@ def show(cfg):
         else:
             try:
                 v5, vw, _ = views(st, cfg, now)
-                from . import chart
+                bar = cfg.get("menubar", {})
+                if bar.get("style", "bars") == "bars" and bar.get("charts", True):
+                    from . import chart
 
-                chart.attach(st, v5, vw, now)
+                    chart.attach(st, v5, vw, now)
                 checked = st.meta_get("usage_cmd_ok_at") if every else None
                 ws, updated = band.windows(v5, vw, now), band.updated(v5, vw)
                 if cfg.get("menubar", {}).get("notify", True):

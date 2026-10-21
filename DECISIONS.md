@@ -786,31 +786,51 @@ not rows. "Next window" became "Opens", short enough for a narrow card.
 of the window, the forecast to its reset, and a way to see by eye how good
 the model is. From 3 mockups they chose a chart in each Details card and one
 under each bar in the menu bar's menu (chart.py builds it once for both):
-what was used (the level path of D-12, fresh readings only, linear between
+what was used (the level path of D-11, fresh readings only, linear between
 them, from the window's start at 0; not the path's own guess past the last
 step), the forecast from now to the reset (the 5 hours a line at the fitted
-rate, the week a walk along the hour-of-week profile at its intensity, so it
-is flat at night; both end where `At reset` says, capped at 100), a fan while
-the 5-hour rate is still an early estimate (40% of what is still to come,
-either way), and earlier forecasts as grey ghosts: an hour ago for the 5
-hours, a day and 2 days ago for the week. The ghosts come from snapshots the
-status line keeps when it records (`meta` "forecasts:<window>": the level and
-the slope, one per 15 minutes or 2 hours, the last 60, started over with each
-window instance); a forecast is redrawn from its snapshot, so nothing else is
-stored. The forecast takes the pace's color when it needs you (red, yellow
-when it only may run out). A maxed week flattens the 5-hour forecast: nothing
-more can be spent until it resets. The grid is local hours (the 5 hours) or
-midnights with the day's name (the week). US peak hours are not drawn: since
-May 6, 2026 Anthropic no longer spends Claude Code's 5-hour limits faster in
-them (they did from March 26, weekdays 5 to 11 am PT), and for chats it is
-not said; a band for a rule that may not apply would mislead. On the Desktop
-the chart is an SVG image with no size, so the card's slot sets it. SwiftBar
-shows pictures, not drawings, and ctempo has no fonts: the menu's chart is a
-PNG (png.Canvas: anti-aliased lines, dashes, rings, fills) as wide as the
-bar's line, its labels a line of Menlo 10 under it, each centered under its
-grid line (a label with no room is left out, not moved). Its line carries no
-`color=` (D-34). `"menubar": {"charts": false}` leaves them out of the menu.
-A chart that fails to build is none; the band stays.
+rate, the week a walk along the hour-of-week profile at its intensity, so
+it is slower at night, down to the profile's floor, and a straight line
+while the profile is still uniform; both end where `At reset` says, capped
+at 100), a fan while the 5-hour rate is still an early estimate (the lines
+at that rate 40% lower and 40% higher, each capped at 100, so the forecast
+always runs inside it, also where it runs out early), and earlier forecasts
+as grey ghosts: an hour ago for the 5 hours, a day and 2 days ago for the
+week, each the snapshot closest to that age within a third of it. The
+ghosts come from snapshots the status line keeps when it records (`meta`
+"forecasts:<window>": the time, the level, the slope and where it lands
+uncapped, one per 15 minutes or 2 hours, the last 60, started over with each
+window instance), so no forecast's points are stored. The 5 hours' ghost is
+its line again; the week's is walked along today's profile (learned as you
+go, it moves a little each hour) with its slope set so it lands where that
+forecast said, so its end is what was forecast and only its shape is
+today's. The forecast takes the pace's color when it needs you (red when it
+runs out or a maxed week blocks the 5 hours, yellow when it may run out or
+passes a target below 100). A maxed week flattens the 5-hour forecast:
+nothing more can be spent until it resets. The grid is local hours (the 5
+hours) or the start of each local day (the week), found an hour at a time
+so a 23 or 25 hour day and a DST change that skips midnight (the day then
+starts at 01:00) need no arithmetic of their own (the first version
+computed midnight as 24 hours on and looped for good in the week of a
+spring change); a day's name sits at its middle, and a day at the week's
+edge shorter than 16 hours goes unnamed, so a whole day's name always has
+room. US peak hours are not drawn: since May 6, 2026 Anthropic no longer
+spends Claude Code's 5-hour limits faster in them (they did from March 26,
+weekdays 5 to 11 am PT), and for chats it is not said; a band for a rule
+that may not apply would mislead. On the Desktop the chart is an SVG image
+with no size, so the card's slot sets it; its marks are mid-tones, as the
+bars' (D-30), since the image follows the system's scheme and not the
+app's. SwiftBar shows pictures, not drawings, and ctempo has no fonts: the
+menu's chart is a PNG (png.Canvas: anti-aliased lines, dashes, rings,
+fills) as wide as the bar's line, its labels a line of Menlo 10 under it,
+each centered under its hour or the middle of its day, kept inside at the
+edges; a label with no room after the one before is left out, on the
+Desktop too. The chart's line carries no `color=` (D-34). SwiftBar reads an
+unquoted parameter only to the first space, so tooltips are quoted, with no
+quote or backslash inside (one SwiftBar version ends a quoted value at
+either quote). `"menubar": {"charts": false}` (or the text style) leaves the
+charts out of the menu and skips building them. A chart that fails to build
+is none; the band stays.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
