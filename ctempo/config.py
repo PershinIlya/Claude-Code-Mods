@@ -96,7 +96,9 @@ DEFAULTS = {
     # notify: a macOS notification when a limit will run out or is reached,
     # or quota will go unused (once per window).
     # style: "bars" draws the bars as pictures, "text" as plain text.
-    "menubar": {"notify": True, "style": "bars"},
+    # charts: with "bars", a chart under each window's bar (what was used,
+    # the forecast to the reset, forecasts made earlier).
+    "menubar": {"notify": True, "style": "bars", "charts": True},
     "retention_days": 365,
     "write_min_interval_s": 60,
     "db_timeout_ms": 250,

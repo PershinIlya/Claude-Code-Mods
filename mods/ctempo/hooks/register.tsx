@@ -12,7 +12,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-code'
 
-import type { Detail, Phrase, View, Win } from '../types'
+import type { Chart, Detail, Phrase, View, Win } from '../types'
 
 const view = atom({ plugin: 'ctempo', key: 'view' } as const, null)
 const details = atom({ plugin: 'ctempo', key: 'details' } as const, false)
@@ -257,6 +257,21 @@ const ORDER = ['Used', 'Pace', 'Limit', 'At reset', 'Runs out', 'Will go unused'
 const HEAD = ['Used', 'Pace', 'Limit']
 const rank = (label: string) => (ORDER.indexOf(label) + ORDER.length + 1) % (ORDER.length + 1)
 
+const isPoints = (x: unknown): x is [number, number][] =>
+  Array.isArray(x) && x.every((p) => Array.isArray(p) && p.length === 2 && isNum(p[0]) && isNum(p[1]))
+
+// A chart from the CLI that draws; anything else, no chart (an older CLI has none).
+export function chartOf(x: unknown): Chart | null {
+  const c = x as Chart
+  const ok =
+    typeof c === 'object' && c !== null && isNum(c.t0) && isNum(c.t1) && c.t1 > c.t0 && isNum(c.now) &&
+    isPoints(c.actual) && c.actual.length > 0 && isPoints(c.forecast) &&
+    (c.fan === null || (Array.isArray(c.fan) && c.fan.length === 2 && c.fan.every(isNum))) &&
+    Array.isArray(c.ghosts) && c.ghosts.every(isPoints) && Array.isArray(c.grid) && c.grid.every(isNum) &&
+    Array.isArray(c.labels) && c.labels.every((l) => Array.isArray(l) && isNum(l[0]) && isStr(l[1]))
+  return ok ? c : null
+}
+
 const isRow = (r: unknown): r is Detail =>
   typeof r === 'object' && r !== null && isStr((r as Detail).label) && isStr((r as Detail).value) &&
   isStr((r as Detail).tone)
@@ -274,7 +289,11 @@ function windowsOf(x: unknown): Win[] | null {
   })
   if (!ok) return null
   // Details rows from an older CLI, or broken ones, are left out, not the band.
-  return (x as Win[]).map((w) => ({ ...w, details: Array.isArray(w.details) ? w.details.filter(isRow) : [] }))
+  return (x as Win[]).map((w) => ({
+    ...w,
+    details: Array.isArray(w.details) ? w.details.filter(isRow) : [],
+    chart: chartOf(w.chart),
+  }))
 }
 
 async function runOnce($: EngineInterface, limits: readonly SessionRateLimit[] | null) {
@@ -398,6 +417,70 @@ const STYLE =
   '.ctb-s .ctb-bw{stroke:var(--r)}.ctb-s .ctb-bd{stroke:var(--g);stroke-dasharray:0 3.5}</style>'
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+// The chart's style, scoped to its root like the bars': the text and the
+// grid grey, Claude's orange, red for a forecast that reaches 100 early.
+const CHART_STYLE =
+  '<style>.ctc{--t:#8a867c;--k:#141413;--a:#d97757;--r:#d0564c;--y:#c08a1e}' +
+  '@media(prefers-color-scheme:dark){.ctc{--t:#a3a19a;--k:#ecebe5;--r:#e5695e;--y:#e0b252}}' +
+  '.ctc .g{stroke:var(--t);stroke-width:1;opacity:.2}.ctc .lim{stroke:var(--t);stroke-width:.8;stroke-dasharray:2 3;opacity:.6}' +
+  '.ctc .ar{fill:var(--a);opacity:.13}.ctc .ac{fill:none;stroke:var(--a);stroke-width:1.8;stroke-linejoin:round}' +
+  '.ctc .dt{fill:var(--a)}.ctc .fn{fill:var(--a);opacity:.1}' +
+  '.ctc .fc{fill:none;stroke:var(--a);stroke-width:1.6;stroke-dasharray:4 3;opacity:.75}' +
+  '.ctc .fx{fill:none;stroke:var(--r);stroke-width:1.6;stroke-dasharray:4 3}' +
+  '.ctc .fy{fill:none;stroke:var(--y);stroke-width:1.6;stroke-dasharray:4 3}' +
+  '.ctc .gh{fill:none;stroke:var(--t);stroke-width:1;stroke-dasharray:3 3;opacity:.6}' +
+  '.ctc .nw{stroke:var(--k);stroke-width:.8;opacity:.35}.ctc .end{fill:none;stroke:var(--a);stroke-width:1.2}' +
+  '.ctc text{font:9px -apple-system,"Segoe UI",system-ui,sans-serif;fill:var(--t)}</style>'
+
+export const CHART_H = 76
+
+// A window's chart, W px wide (chart.py): what was used (a line over a pale
+// area, a dot per reading while there are few), the forecast to the reset
+// (dashed, in the pace's color when it needs you: red, or yellow when it
+// only may run out), an early 5-hour estimate's fan, the forecasts made
+// earlier (grey, dashed), the grid and its hours or days, the limit
+// (dotted) and now (a hairline).
+export function chartSvg(c: Chart, W: number, alt: string, tone?: string): string {
+  const H = CHART_H
+  const pad = { l: 1, r: 4, t: 6, b: 14 }
+  const sx = (t: number) => r1(pad.l + ((t - c.t0) / (c.t1 - c.t0)) * (W - pad.l - pad.r))
+  const sy = (u: number) => r1(pad.t + (1 - Math.min(100, Math.max(0, u)) / 100) * (H - pad.t - pad.b))
+  const d = (pts: [number, number][]) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p[0])},${sy(p[1])}`).join('')
+  const base = sy(0)
+  const out = [
+    `<svg xmlns='http://www.w3.org/2000/svg' class='ctc' width='${W}' height='${H}' viewBox='0 0 ${W} ${H}'>`,
+    CHART_STYLE,
+    `<title>${esc(alt)}</title>`,
+  ]
+  for (const t of c.grid) out.push(`<line class='g' x1='${sx(t)}' y1='${pad.t}' x2='${sx(t)}' y2='${base}'/>`)
+  out.push(`<line class='lim' x1='${pad.l}' y1='${sy(100)}' x2='${W - pad.r}' y2='${sy(100)}'/>`)
+  for (const g of c.ghosts) out.push(`<path class='gh' d='${d(g)}'/>`)
+  const a = c.actual
+  const last = a[a.length - 1] as [number, number]
+  out.push(`<path class='ar' d='${d(a)}L${sx(last[0])},${base}L${sx(a[0]![0])},${base}Z'/>`)
+  out.push(`<path class='ac' d='${d(a)}'/>`)
+  if (a.length <= 30) for (const p of a.slice(1)) out.push(`<circle class='dt' cx='${sx(p[0])}' cy='${sy(p[1])}' r='1.4'/>`)
+  const f = c.forecast
+  if (c.fan && f.length) {
+    const end = f[f.length - 1] as [number, number]
+    out.push(`<path class='fn' d='M${sx(f[0]![0])},${sy(f[0]![1])}L${sx(end[0])},${sy(c.fan[0])}L${sx(end[0])},${sy(c.fan[1])}Z'/>`)
+  }
+  if (f.length) {
+    const end = f[f.length - 1] as [number, number]
+    out.push(`<path class='${tone === 'error' ? 'fx' : tone === 'warning' ? 'fy' : 'fc'}' d='${d(f)}'/>`)
+    out.push(`<circle class='end' cx='${r1(sx(end[0]) - 1.5)}' cy='${sy(end[1])}' r='2.2'/>`)
+  }
+  out.push(`<line class='nw' x1='${sx(c.now)}' y1='${pad.t}' x2='${sx(c.now)}' y2='${base}'/>`)
+  out.push(`<circle class='dt' cx='${sx(last[0])}' cy='${sy(last[1])}' r='2.4'/>`)
+  for (const [t, label] of c.labels) {
+    const x = sx(t)
+    const anchor = x < 8 ? 'start' : x > W - 10 ? 'end' : 'middle'
+    out.push(`<text x='${x}' y='${H - 2}' text-anchor='${anchor}'>${esc(label)}</text>`)
+  }
+  out.push('</svg>')
+  return out.join('')
+}
 const r1 = (n: number) => Math.round(n * 10) / 10
 
 // 5 hex digits of FNV-1a: a gradient id of its own per bar.
@@ -585,8 +668,12 @@ export const register: Register = (on) => {
         return r ? { text: r.value, tone: r.tone } : null
       }
       const side = e.props.bodyColumns >= 72
+      // The chart fills the card's inside (7 px a cell, less the border and
+      // the padding); drawn wider than its slot, the surface scales it down.
+      const cw = Math.max(120, (side ? Math.floor((e.props.bodyColumns * 7 - 12) / 2) : e.props.bodyColumns * 7) - 26)
       const card = (w: Win) => {
         const pc = pace(w)
+        const about = `${title(w)}: what was used over the window and the forecast to its reset`
         return (
           <Box
             key={`card-${w.id}`}
@@ -615,6 +702,7 @@ export const register: Register = (on) => {
                 </Text>
               ) : null}
             </Box>
+            {w.chart ? <Svg key={`cc-${w.id}`} source={chartSvg(w.chart, cw, about, pc?.tone)} alt={about} /> : null}
             {shown(w).map((r) => (
               <Box key={`cr-${w.id}-${r.label}`} flexDirection="row" justifyContent="space-between" columnGap="md">
                 <Text size="footnote" color="inactive">

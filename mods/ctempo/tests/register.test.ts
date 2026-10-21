@@ -1,8 +1,8 @@
 import type { ProcessRunResult, RenderSurface, SessionRateLimit } from 'claude-code'
 import { expect, type MountTarget, mock, type TestBody, test } from 'claude-code/testing'
 
-import { age, barSvg, fromGitBash, layout, resolveHome, toPayload } from '../hooks/register'
-import type { Detail, Phrase, Win } from '../types'
+import { age, barSvg, chartOf, chartSvg, fromGitBash, layout, resolveHome, toPayload } from '../hooks/register'
+import type { Chart, Detail, Phrase, Win } from '../types'
 
 type StubOn = Parameters<TestBody>[1]
 type Run = { argv: readonly string[]; init?: { stdin?: string; timeoutMs?: number; env?: Record<string, string> } }
@@ -725,6 +725,81 @@ test('details rows that do not read are left out, not the band', async ($, on) =
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: 'Resets' })).toBeDefined()
   expect(await ui.find({ type: 'Svg' })).toBeDefined()
+})
+
+// The 5 hours from 11:30 to 16:30 (chart.build), now 14:40.
+const T0 = 1_791_976_200
+const CHART: Chart = {
+  t0: T0,
+  t1: T0 + 5 * 3600,
+  now: T0 + 3 * 3600 + 600,
+  actual: [[T0, 0], [T0 + 3600, 20], [T0 + 3 * 3600 + 600, 70]],
+  forecast: [[T0 + 3 * 3600 + 600, 70], [T0 + 4 * 3600, 100], [T0 + 5 * 3600, 100]],
+  fan: null,
+  ghosts: [[[T0 + 2 * 3600, 40], [T0 + 5 * 3600, 90]]],
+  grid: [T0 + 1800, T0 + 5400, T0 + 9000, T0 + 12600, T0 + 16200],
+  labels: [[T0 + 1800, '12'], [T0 + 5400, '13'], [T0 + 9000, '14'], [T0 + 12600, '15'], [T0 + 16200, '16']],
+}
+
+test('Details draws a chart in each card, under its head', async ($, on) => {
+  const windows = [win({ id: 'h5', details: ROWS, chart: CHART }), win({ id: 'wk', details: WEEK_ROWS, chart: CHART })]
+  const { ui } = await drawn($, on, windows)
+  expect((await ui.findAll({ type: 'Svg' })).length).toBe(2) // the bars; the charts are in Details
+  await ui.press({ key: 'details' })
+  const charts = (await ui.findAll({ type: 'Svg' })).filter((x) => String(x.props.source).includes("class='ctc'"))
+  expect(charts.length).toBe(2)
+  // No size: the card's slot sets it, the picture scales down to it.
+  expect(charts[0]?.props.width).toBeUndefined()
+  expect(charts[0]?.props.isInteractive).toBeUndefined()
+  expect(String(charts[0]?.props.alt)).toBe('5 hours: what was used over the window and the forecast to its reset')
+  expect(String(charts[1]?.props.alt)).toMatch(/^Week: /)
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree.indexOf("class='ctc'")).toBeGreaterThan(tree.indexOf('"5 hours"'))
+  expect(tree.indexOf("class='ctc'")).toBeLessThan(tree.indexOf('"Runs out"'))
+})
+
+test('a broken chart, or none from an older CLI, leaves the card without one', async ($, on) => {
+  const broken = { ...CHART, actual: [], t1: CHART.t0 } as Chart
+  const { ui } = await drawn($, on, [win({ id: 'h5', details: ROWS, chart: broken }), win({ id: 'wk' })])
+  await ui.press({ key: 'details' })
+  expect((await ui.findAll({ type: 'Svg' })).some((x) => String(x.props.source).includes("class='ctc'"))).toBe(false)
+  expect(await ui.find({ type: 'Text', text: 'Runs out' })).toBeDefined()
+})
+
+test('a chart that does not read is none', () => {
+  expect(chartOf(CHART)).toBe(CHART)
+  expect(chartOf(undefined)).toBeNull()
+  expect(chartOf({ ...CHART, t1: CHART.t0 })).toBeNull()
+  expect(chartOf({ ...CHART, actual: [] })).toBeNull()
+  expect(chartOf({ ...CHART, actual: [[1, 'x']] })).toBeNull()
+  expect(chartOf({ ...CHART, fan: [1] })).toBeNull()
+  expect(chartOf({ ...CHART, labels: [[1, 2]] })).toBeNull()
+  expect(chartOf({ ...CHART, fan: [60, 90] })).not.toBeNull()
+})
+
+test('the chart draws what was used, the forecast in the pace color, earlier forecasts and the grid', () => {
+  const svg = chartSvg(CHART, 300, 'alt <x>')
+  expect(svg).toMatch(/^<svg xmlns='http:\/\/www.w3.org\/2000\/svg' class='ctc' width='300' height='76'/)
+  expect(svg).toContain('<title>alt &lt;x&gt;</title>')
+  expect(svg.match(/<line class='g'/g)?.length).toBe(5)
+  expect(svg).toMatch(/<path class='ar' d='M1,62L.*L1,62Z'/) // the area, from the start at 0
+  expect(svg).toMatch(/<path class='ac'/)
+  expect(svg).toMatch(/<path class='gh'/)
+  expect(svg).toMatch(/<path class='fc'/)
+  expect(svg).not.toMatch(/class='fn'/)
+  expect(svg.match(/<text /g)?.length).toBe(5)
+  expect(svg).toMatch(/<text x='[\d.]+' y='74' text-anchor='middle'>12<\/text>/)
+  expect(chartSvg(CHART, 300, 'a', 'error')).toMatch(/<path class='fx'/)
+  expect(chartSvg(CHART, 300, 'a', 'warning')).toMatch(/<path class='fy'/)
+  expect(chartSvg({ ...CHART, fan: [80, 100] }, 300, 'a')).toMatch(/<path class='fn'/)
+  // A dot per reading while there are few.
+  expect(svg.match(/<circle class='dt'/g)?.length).toBe(3)
+  const many = { ...CHART, actual: Array.from({ length: 40 }, (_, i) => [T0 + i * 60, i] as [number, number]) }
+  expect(chartSvg(many, 300, 'a').match(/<circle class='dt'/g)?.length).toBe(1)
+  // Labels at the edges stay inside.
+  const edge = chartSvg({ ...CHART, labels: [[CHART.t0, '11'], [CHART.t1, '16']] }, 300, 'a')
+  expect(edge).toContain("text-anchor='start'>11<")
+  expect(edge).toContain("text-anchor='end'>16<")
 })
 
 test('waiting for the first reading', async ($, on) => {

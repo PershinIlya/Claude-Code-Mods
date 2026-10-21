@@ -58,6 +58,11 @@ VERDICT_TEXT = {
 
 
 # -- now -------------------------------------------------------------------------------
+def public(v):
+    """A view without the keys only its chart reads (_weights, _path_k)."""
+    return {k: x for k, x in v.items() if not k.startswith("_")}
+
+
 def cmd_now(args, cfg):
     now = time.time()
     st = _open()
@@ -72,8 +77,8 @@ def cmd_now(args, cfg):
         age = now - last if last else None
         ppw = weekly.exchange_rate(st, now)[0]
         if args.json:
-            print(json.dumps({"now": now, "data_age_s": age, "five_hour": v5, "seven_day": vw, "exchange_rate": ppw},
-                             indent=2, default=str))
+            print(json.dumps({"now": now, "data_age_s": age, "five_hour": public(v5), "seven_day": public(vw),
+                              "exchange_rate": ppw}, indent=2, default=str))
             return 0
         from . import band
 

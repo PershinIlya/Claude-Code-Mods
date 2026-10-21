@@ -782,6 +782,36 @@ number stays with its row; side by side from 72 cells, one under the other
 below, no word cut from 44 to 115 cells. Used and Pace are the card's head,
 not rows. "Next window" became "Opens", short enough for a narrow card.
 
+**D-36. Charts.** The person asked for a chart beside the bars: the history
+of the window, the forecast to its reset, and a way to see by eye how good
+the model is. From 3 mockups they chose a chart in each Details card and one
+under each bar in the menu bar's menu (chart.py builds it once for both):
+what was used (the level path of D-12, fresh readings only, linear between
+them, from the window's start at 0; not the path's own guess past the last
+step), the forecast from now to the reset (the 5 hours a line at the fitted
+rate, the week a walk along the hour-of-week profile at its intensity, so it
+is flat at night; both end where `At reset` says, capped at 100), a fan while
+the 5-hour rate is still an early estimate (40% of what is still to come,
+either way), and earlier forecasts as grey ghosts: an hour ago for the 5
+hours, a day and 2 days ago for the week. The ghosts come from snapshots the
+status line keeps when it records (`meta` "forecasts:<window>": the level and
+the slope, one per 15 minutes or 2 hours, the last 60, started over with each
+window instance); a forecast is redrawn from its snapshot, so nothing else is
+stored. The forecast takes the pace's color when it needs you (red, yellow
+when it only may run out). A maxed week flattens the 5-hour forecast: nothing
+more can be spent until it resets. The grid is local hours (the 5 hours) or
+midnights with the day's name (the week). US peak hours are not drawn: since
+May 6, 2026 Anthropic no longer spends Claude Code's 5-hour limits faster in
+them (they did from March 26, weekdays 5 to 11 am PT), and for chats it is
+not said; a band for a rule that may not apply would mislead. On the Desktop
+the chart is an SVG image with no size, so the card's slot sets it. SwiftBar
+shows pictures, not drawings, and ctempo has no fonts: the menu's chart is a
+PNG (png.Canvas: anti-aliased lines, dashes, rings, fills) as wide as the
+bar's line, its labels a line of Menlo 10 under it, each centered under its
+grid line (a label with no room is left out, not moved). Its line carries no
+`color=` (D-34). `"menubar": {"charts": false}` leaves them out of the menu.
+A chart that fails to build is none; the band stays.
+
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
 

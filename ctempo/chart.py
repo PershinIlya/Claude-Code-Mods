@@ -1,0 +1,196 @@
+"""A window's chart for Details (the Desktop band) and the menu bar: what
+was used over the window, the forecast to its reset, and forecasts made
+earlier, to see by eye how the model does.
+
+  actual    the level path (pace.level_path): fresh readings, linear between
+            them, from the window's start
+  forecast  from now to the reset: the 5 hours at the fitted rate (a line),
+            the week at its intensity along the hour-of-week profile (flat at
+            night, steeper in the hours you usually work); capped at 100
+  fan       the 5 hours while the rate is still an early estimate: where the
+            reset level may land, low and high
+  ghosts    forecasts made earlier in this window (an hour ago for the 5
+            hours, a day and 2 days ago for the week), drawn from snapshots
+            `snapshot` keeps as the status line and the band run
+  grid      local hours (5 hours) or midnights (week); labels: "17", "Fri"
+
+Times are epoch seconds, levels percents; the series are thinned to at most
+POINTS points, so the band's JSON stays small.
+"""
+
+from . import clock, profile
+from .config import FIVE_HOUR, SEVEN_DAY
+from .pace import level_path
+from .store import FIRST
+
+POINTS = 120
+# One snapshot of the forecast per this many seconds, per window, the last KEEP kept.
+SNAP_EVERY = {FIVE_HOUR: 15 * 60, SEVEN_DAY: 2 * 3600}
+KEEP = 60
+# The forecasts drawn as ghosts: made this long ago (within a third of it).
+GHOSTS = {FIVE_HOUR: (3600,), SEVEN_DAY: (86400, 2 * 86400)}
+FAN = 0.4  # the spread of an early 5-hour estimate, a share of what is still to come
+HOUR = profile.HOUR
+WEEK = 7 * 86400
+
+
+def _key(window):
+    return "forecasts:" + window
+
+
+def _slope(v):
+    """What a snapshot keeps to redraw its forecast: percent an hour (5 hours)
+    or percent per share of the week's expected spend (the week)."""
+    if v["window"] == FIVE_HOUR:
+        return v.get("rate")
+    return v.get("_path_k")
+
+
+def snapshot(store, v, now):
+    """Keep the window's forecast, at most one every SNAP_EVERY, for ghosts
+    later. A new window instance starts the list over."""
+    if not v.get("present") or v.get("verdict") in ("maxed", "unknown") or _slope(v) is None:
+        return False
+    key = _key(v["window"])
+    kept = store.meta_get(key) or {}
+    log = kept.get("log", []) if kept.get("wid") == v["window_id"] else []
+    if log and now - log[-1][0] < SNAP_EVERY[v["window"]]:
+        return False
+    log.append([int(now), round(v["used"], 2), round(_slope(v), 6)])
+    store.meta_set(key, {"wid": v["window_id"], "log": log[-KEEP:]})
+    return True
+
+
+def _thin(points, t0, t1, n=POINTS):
+    """At most n points, the last of each of n time bins, the first and last kept."""
+    if len(points) <= n:
+        return points
+    step = (t1 - t0) / float(n) or 1.0
+    out, last_bin = [], None
+    for p in points:
+        b = int((p[0] - t0) / step)
+        if out and b == last_bin:
+            out[-1] = p
+        else:
+            out.append(p)
+        last_bin = b
+    if out[0] != points[0]:
+        out.insert(0, points[0])
+    return out
+
+
+def _line(used, rate, t0, t1):
+    """The 5 hours' forecast: a line at `rate` percent an hour, flat at 100."""
+    if rate is None or t1 <= t0:
+        return []
+    end = used + rate * (t1 - t0) / HOUR
+    if end <= 100.0 or used >= 100.0:
+        return [[t0, used], [t1, min(end, 100.0) if used < 100.0 else used]]
+    cap = t0 + (100.0 - used) / rate * HOUR
+    return [[t0, used], [cap, 100.0], [t1, 100.0]]
+
+
+def _walk(w, used, k, t0, t1):
+    """The week's forecast: hour by hour along the profile, k percent per share."""
+    if k is None or t1 <= t0:
+        return []
+    out, u = [[t0, used]], used
+    for s, e, _, b in profile.segments(t0, t1):
+        u = min(100.0, u + k * w[b] * (e - s) / HOUR)
+        out.append([e, u])
+        if u >= 100.0:
+            out.append([t1, 100.0])
+            break
+    return out
+
+
+def _forecast(v, w, used, slope, t0, t1):
+    if v["window"] == FIVE_HOUR:
+        return _line(used, slope, t0, t1)
+    return _walk(w, used, slope, t0, t1)
+
+
+def _ticks(window, t0, t1):
+    """(grid, labels): local hours with their hour (5 hours), or local
+    midnights with the day's name at the middle of each day (week)."""
+    if window == FIVE_HOUR:
+        grid, t = [], int(profile.hour_start(t0)) + HOUR
+        while t < t1 - 60:
+            grid.append(t)
+            t = int(profile.hour_start(t + HOUR + 60))
+        # The ends too when they fall on the hour (a window opens at its first message).
+        ends = [t for t in (t0, t1) if clock.localtime(t).tm_min == 0]
+        labels = [[t, clock.strftime("%H", t)] for t in sorted(grid + ends)]
+        return grid, labels
+    grid, t = [], t0
+    while True:
+        lt = clock.localtime(t)
+        nxt = int(t) - lt.tm_hour * 3600 - lt.tm_min * 60 - lt.tm_sec + 86400 + 3 * 3600  # past a DST shift
+        lt = clock.localtime(nxt)
+        midnight = nxt - lt.tm_hour * 3600 - lt.tm_min * 60 - lt.tm_sec
+        if midnight >= t1 - 60:
+            break
+        grid.append(midnight)
+        t = midnight + 60
+    edges = [t0] + grid + [t1]
+    labels = [[(a + b) // 2, clock.strftime("%a", (a + b) // 2)] for a, b in zip(edges, edges[1:]) if b - a >= 6 * HOUR]
+    return grid, labels
+
+
+def build(store, v, now):
+    """The window's chart, or None without a window to draw."""
+    if not v.get("present"):
+        return None
+    window, wid = v["window"], v["window_id"]
+    t1 = v["reset_ts"]
+    t0 = t1 - (WEEK if window == SEVEN_DAY else 5 * HOUR)
+    used = v["used"]
+    fresh = store.fresh_levels(wid)
+    first = store.fresh_levels(wid, FIRST)
+    path = level_path(fresh, v["start_ts"], used, now, first)
+    # The readings and the start; not the path's own guess past the last step.
+    actual = [[int(t), round(u, 2)] for t, u, guess in path if t0 <= t <= now and (not guess or t == path[0][0])]
+    if not actual or actual[-1][0] < now:
+        actual.append([int(now), round(used, 2)])
+    w = v.get("_weights")
+    forecast = []
+    if v["verdict"] not in ("maxed", "unknown"):
+        forecast = _forecast(v, w, used, _slope(v), now, t1)
+    fan = None
+    if window == FIVE_HOUR and forecast and v.get("rate_source") == "interpolated":
+        to_come = forecast[-1][1] - used
+        lo, hi = max(used, forecast[-1][1] - FAN * to_come), min(100.0, forecast[-1][1] + FAN * to_come)
+        if hi - lo >= 1.0:  # an idle or capped estimate has no spread to draw
+            fan = [round(lo, 2), round(hi, 2)]
+    ghosts = []
+    kept = store.meta_get(_key(window)) or {}
+    log = kept.get("log", []) if kept.get("wid") == wid else []
+    for ago in GHOSTS[window]:
+        near = [s for s in log if t0 <= s[0] <= now - ago * 2 / 3 and abs(s[0] - (now - ago)) <= ago / 3]
+        if near:
+            ts, u, slope = min(near, key=lambda s: abs(s[0] - (now - ago)))
+            g = _forecast(v, w, u, slope, ts, t1)
+            if g:
+                ghosts.append([[int(t), round(y, 2)] for t, y in _thin(g, ts, t1, 60)])
+    grid, labels = _ticks(window, t0, t1)
+    return {
+        "t0": int(t0), "t1": int(t1), "now": int(now),
+        "actual": _thin(actual, t0, now),
+        "forecast": [[int(t), round(u, 2)] for t, u in _thin(forecast, now, t1, 60)],
+        "fan": fan, "ghosts": ghosts, "grid": [int(g) for g in grid], "labels": labels,
+    }
+
+
+def attach(store, v5, vw, now):
+    """Build both windows' charts into their views (v["chart"])."""
+    for v in (v5, vw):
+        try:
+            v["chart"] = build(store, v, now)
+        except Exception:  # a chart is never worth the band
+            v["chart"] = None
+    c = v5.get("chart")
+    if c and vw.get("verdict") == "maxed" and c["forecast"]:
+        # A maxed week blocks the 5 hours: nothing more until the reset.
+        u = round(v5["used"], 2)
+        c["forecast"] = [[c["now"], u], [c["t1"], u]]
+        c["fan"] = None

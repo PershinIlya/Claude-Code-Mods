@@ -298,7 +298,7 @@ def window(v, now):
             pct=floor_pct(used), used=round(used, 2),
             projected=None if proj is None else round(max(proj, used), 2),
             reset=day(v["reset_ts"], now), reset_ts=v["reset_ts"],
-            phrase=phrase(v, now), sentence=sentence(v, now), details=details(v, now),
+            phrase=phrase(v, now), sentence=sentence(v, now), details=details(v, now), chart=v.get("chart"),
             # For notifications: when it runs out, the quota worth using that will go unused.
             runs_out=at(_out(v), now) if _out(v) else None,
             unused=floor_pct(_unused(v) or 0) if _harvest(v) else None,

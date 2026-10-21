@@ -96,6 +96,16 @@ def compute(raw, cfg, opts, now, line_of=None):
             prof = maybe_learn(st, prof, now, cfg)
         v5 = pace.five_hour(st, now, cfg, shown.get(config.FIVE_HOUR))
         vw = weekly.weekly(st, now, cfg, shown.get(config.SEVEN_DAY), prof)
+        from . import chart
+
+        if opts["record"]:
+            try:  # a forecast now and then, for the charts' earlier forecasts
+                for v in (v5, vw):
+                    chart.snapshot(st, v, now)
+            except sqlite3.OperationalError as e:
+                log_error(e, "snapshot")
+        if opts.get("format") == "json":  # the band draws the charts
+            chart.attach(st, v5, vw, now)
         if opts["record"] and line_of is not None:
             rl = payload.get("rate_limits") if isinstance(payload, dict) else None
             note_render(st, now, opts["source"], line_of(v5, vw), rl)

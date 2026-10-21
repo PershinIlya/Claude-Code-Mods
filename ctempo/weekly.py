@@ -193,6 +193,8 @@ def weekly(store, now, cfg, reading=None, prof=None):
     mult = max(0.0, tgt - used) / remaining_spend if remaining_spend > 1e-9 else None
     v.update(projected=min(100.0, raw), projected_raw=raw, dry_ts=dry, multiplier=mult,
              expire=max(0.0, 100.0 - min(100.0, raw)), unused_at_reset=max(0.0, 100.0 - min(100.0, raw)))
+    # For the chart (chart.py): the profile and the walk's percent per share.
+    v["_weights"], v["_path_k"] = w, intensity * tgt / total
     if used >= 100.0:
         v["verdict"] = "maxed"
     elif source == "recent" and actual <= 0:

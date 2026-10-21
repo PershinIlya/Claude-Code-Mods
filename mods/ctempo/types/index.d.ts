@@ -26,6 +26,19 @@ export type Phrase = {
 // A row of Details, the same as the menu bar's menu (band.details).
 export type Detail = { label: string; value: string; tone: string }
 
+// A window's chart for its Details card (chart.py): epoch seconds, percents.
+export type Chart = {
+  t0: number
+  t1: number
+  now: number
+  actual: [number, number][]
+  forecast: [number, number][]
+  fan: [number, number] | null
+  ghosts: [number, number][][]
+  grid: number[]
+  labels: [number, string][]
+}
+
 // One window of the band (band.window).
 export type Win = {
   id: 'h5' | 'wk'
@@ -42,6 +55,7 @@ export type Win = {
   phrase: Phrase | null
   sentence: string
   details?: Detail[]
+  chart?: Chart | null
 }
 
 // What `ctempo statusline --format json` prints, plus the mod's own error.

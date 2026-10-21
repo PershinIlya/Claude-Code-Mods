@@ -50,6 +50,15 @@ One row per window: its name, a small bar, the percent, and its pace.
   Will go unused, Resets, Rate (the 5 hours: what you spend an hour and what
   fits); and how old the last reading is. The menu bar's menu shows the
   same rows.
+- **The chart** in each card, under its head, shows the window from its
+  start to its reset: what was used (the line over a pale area, a dot per
+  reading while there are few), now (a hairline), the forecast to the reset
+  (dashed; red when it runs out, yellow when it may), and the forecasts made
+  earlier in the window in grey, an hour ago for the 5 hours, a day and 2
+  days ago for the week, so you can see by eye how well the forecast holds.
+  The week's forecast follows your usual hours (flat at night); while the
+  5-hour rate is an early estimate, a pale fan shows where it may land. The
+  grid marks hours (5 hours) or midnights (the week) (D-36).
 
 The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
 unused (`#`, `=`, `.` with `display.symbols: "ascii"`), in color unless
@@ -97,9 +106,10 @@ with `22% · 18%` beside them: green when there is room to spare, red or yellow
 with the words when a window needs you (`70% 2x slower · 48%`). A click shows
 2 sections, one per window: a line across the whole menu with its bar, as
 the Desktop band draws it, and its short name and percent, `5h 83%` (a
-divider between the sections), then the rows of the Desktop band's Details (Used, Pace, At
+divider between the sections), its chart, as in the Desktop band's Details,
+with its hours or days under it, then the rows of Details (Used, Pace, At
 reset, Will go unused, Runs out, Resets, Rate) in columns; then how old the
-readings are. The full sentence is the bar's tooltip. SwiftBar's own items
+readings are. `"menubar": {"charts": false}` leaves the charts out. The full sentence is the bar's tooltip. SwiftBar's own items
 (its submenu, which takes a column on the right of every line, and its
 "Updated") are hidden: Option-click the menu bar item to show them. SwiftBar
 reads that when it starts, so after an update that changes the plugin, run
@@ -417,7 +427,7 @@ default):
 | `mod.refresh_s` | 60 | how often the mod refreshes the band when no reading moved (15 to 3600) |
 | `compose.timeout_ms` | 1500 (3000 on Windows) | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 5000 for a slow PowerShell or Git Bash script |
 | `fetch_usage_min` | 0 | every this many minutes the menu bar or a Desktop band runs `claude -p "/usage"` for the account's levels; 0 never (`ctempo fetch --every N`) |
-| `menubar.notify`, `menubar.style` | true, `bars` | macOS notifications; `text` for the plain text menu |
+| `menubar.notify`, `menubar.style`, `menubar.charts` | true, `bars`, true | macOS notifications; `text` for the plain text menu; a chart under each bar |
 | `retention_days` | 365 | history kept |
 
 `CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
@@ -460,9 +470,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 497 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 522 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 67 tests
+claude plugin test mods/ctempo                 # 71 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 
@@ -508,7 +518,9 @@ a check that the Windows section says what the code does).
 ```
 bin/ctempo                 launcher (python -I -S safe)
 ctempo/                    the core: store, ingest, pace, weekly, profile, band
-                           (what the band and the line say), render,
+                           (what the band and the line say), chart (the
+                           charts' data), menubar, menuart and png (the
+                           menu bar's pictures), render,
                            statusline, commands, install, transcripts, clock
                            (local time), winshell (Windows shells and commands)
 mods/ctempo/               the Desktop mod (TypeScript, thin)

@@ -8,9 +8,10 @@ runs `ctempo menubar`, which reads the store and prints
   [two small bars] 22% · 18%             (5 hours on top; green with room to spare,
   ---                                       red or yellow words when a window needs you)
   [bar ━━━━━━━━━━━━━━━━━━]  5h 22%        (each window's bar as a picture, as the
-  Used            22%                       Desktop band draws it, and its name, a
-  Pace            1.4x faster               line across the menu dividing the 2
-  ...                                       sections; then the rows of its Details)
+  [chart ____....----~~~~~~]                Desktop band draws it, and its name, a
+   12      13      14      15                line across the menu dividing the 2
+  Pace            1.4x faster               sections; its chart, as in Details, and
+  ...                                       its hours or days; then its Details rows)
   ...
   Updated 2 min ago
 
@@ -80,6 +81,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     if waiting:
         out.append("Waiting for the first reading: start a Claude Code session | size=12")
     sections = [(w, detail_lines(w)) for w in ([] if waiting else ws)]
+    charts = cfg.get("menubar", {}).get("charts", True)
     # Each window's line, its bar then its short name and percent, spans the
     # menu, a divider between the 2 sections: the bar takes what the widest
     # line leaves after its label (Menlo, so its width is known and both
@@ -92,6 +94,8 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         # No color= on this line: with it, SwiftBar drew the text and dropped
         # the image (the person's Mac); the menu's own grey is kept.
         out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, w["sentence"].replace("|", "/")))
+        if charts and w.get("chart"):
+            out.extend(chart_lines(w, width))
         out.extend(rows)
     out.append("---")
     out.extend(foot)
@@ -105,6 +109,8 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
 MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 7  # the gap as measured on the person's Mac
 BAR_MIN, BAR_MAX, BAR_LEAST = 250, 380, 120
 BAR_PAD = 2  # clear points at the bar's right end: with the image's gap, 9 before the label
+CHART_H = 40  # the chart's height in points; its labels in Menlo 10 (0.602 em a character)
+LABEL_SIZE, LABEL_PT = 10, 6.02
 
 
 def head(w):
@@ -122,6 +128,30 @@ def bar_width(lines):
         text, _, params = line.partition(" | ")
         widest = max(widest, len(text) * (MENLO_PT if "font=Menlo" in params else TEXT_PT))
     return int(min(BAR_MAX, math.ceil(widest)))
+
+
+def tone(w):
+    """The pace's tone, as the card says it: the band's words, else the Pace row."""
+    if w.get("phrase"):
+        return w["phrase"]["tone"]
+    return next((r["tone"] for r in w.get("details") or [] if r["label"] == "Pace"), None)
+
+
+def chart_lines(w, width):
+    """A window's chart, as wide as its bar's line (no color=, which drops a
+    picture), and its hours or days under it, each under its grid line."""
+    from . import menuart
+
+    c = w["chart"]
+    ago = "an hour ago" if w["id"] == "h5" else "a day and 2 days ago"
+    tip = "What was used (the line), the forecast to the reset (dashed) and the forecasts made %s (grey)" % ago
+    out = [" | image=%s,%s width=%d height=%d tooltip=%s" % (
+        menuart.chart(c, width, CHART_H, False, tone(w)), menuart.chart(c, width, CHART_H, True, tone(w)),
+        width, CHART_H, tip)]
+    text = menuart.labels(c, width, LABEL_PT)
+    if text.strip():
+        out.append("%s | font=Menlo size=%d trim=false color=%s" % (text, LABEL_SIZE, DIM))
+    return out
 
 
 LABEL_W = len("Will go unused") + 2
@@ -228,6 +258,9 @@ def show(cfg):
         else:
             try:
                 v5, vw, _ = views(st, cfg, now)
+                from . import chart
+
+                chart.attach(st, v5, vw, now)
                 checked = st.meta_get("usage_cmd_ok_at") if every else None
                 ws, updated = band.windows(v5, vw, now), band.updated(v5, vw)
                 if cfg.get("menubar", {}).get("notify", True):
