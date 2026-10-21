@@ -14,7 +14,8 @@ earlier, to see by eye how the model does.
             hours, a day and 2 days ago for the week), drawn from snapshots
             `snapshot` keeps as the status line and the band run
   grid      local hours (5 hours) or the starts of local days (week);
-            labels: "17", "Fri"
+            labels: "17", "Fri", in the order to place them (whole days
+            before the week's edge days), each where no earlier one is
 
 Times are epoch seconds, levels percents; the series are thinned to at most
 POINTS points, so the band's JSON stays small.
@@ -181,8 +182,10 @@ def _ticks(window, t0, t1):
         return grid, labels
     grid = _days(t0, t1)
     edges = [int(t0)] + grid + [int(t1)]
-    labels = [[(a + b) // 2, clock.strftime("%a", (a + b) // 2)] for a, b in zip(edges, edges[1:])
-              if b - a >= NAMED_DAY]
+    days = [[(a + b) // 2, clock.strftime("%a", (a + b) // 2), b - a] for a, b in zip(edges, edges[1:])
+            if b - a >= NAMED_DAY]
+    # Whole days first: a label is drawn only where none listed before it is.
+    labels = [d[:2] for d in days if d[2] >= 23 * HOUR - 60] + [d[:2] for d in days if d[2] < 23 * HOUR - 60]
     return grid, labels
 
 

@@ -141,13 +141,15 @@ def _at(pts, x):
 
 def labels(c, width, advance):
     """The chart's labels as one line of a monospaced font, `advance` points a
-    character: each centered under its x (at an edge, inside it); one with
-    no room a space after the one before is left out, not moved."""
-    out = ""
+    character: each centered under its x (at an edge, inside it), in the
+    order listed; one that would touch a label placed before it (a space
+    apart) is left out, not moved."""
+    placed, limit = [], int(width // advance)
     for t, text in c["labels"]:
-        col = int(round(_x(c, t, width) / advance - len(text) / 2.0))
-        col = max(0, min(col, int(width // advance) - len(text)))
-        if out and col < len(out) + 1:
-            continue
+        col = max(0, min(int(round(_x(c, t, width) / advance - len(text) / 2.0)), limit - len(text)))
+        if all(col + len(text) < c0 or c0 + len(t0) < col for c0, t0 in placed):
+            placed.append((col, text))
+    out = ""
+    for col, text in sorted(placed):
         out = out.ljust(col) + text
     return out

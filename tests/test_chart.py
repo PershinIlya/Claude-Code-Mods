@@ -84,9 +84,11 @@ class Ticks(unittest.TestCase):
     def test_midnights_and_day_names_for_the_week(self):
         grid, labels = chart._ticks(config.SEVEN_DAY, RW - 7 * D, RW)
         self.assertEqual(grid, [int(MON + d * D) for d in range(-2, 4 + 1)])
-        # Fri 04:00 to Sat 00:00 is a day's label; Fri 00:00 to 04:00 is too short for one.
-        self.assertEqual([t for _, t in labels], ["Fri", "Sat", "Sun", "Mon", "Tue", "Wed", "Thu"])
-        self.assertEqual(labels[3][0], int(MON + 12 * H))
+        # Fri 04:00 to Sat 00:00 is named, after the whole days; Fri 00:00 to
+        # 04:00 is too short for a name.
+        self.assertEqual([t for _, t in labels], ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"])
+        self.assertEqual(labels[2][0], int(MON + 12 * H))
+        self.assertEqual(labels[-1][0], int(RW - 7 * D + 10 * H))
 
 
 class Snapshots(TempHome):
@@ -173,10 +175,21 @@ class Build(TempHome):
         self.assertEqual((lo, hi), (line(0.6), line(1.4)))
         self.assertLess(lo[-1][1], c["forecast"][-1][1])
         self.assertGreater(hi[-1][1], c["forecast"][-1][1])
-        # The forecast runs inside the fan, also where it reaches 100 early.
-        for t, u in c["forecast"]:
-            self.assertLessEqual(chart._at(lo, t) - 0.01, u)
-            self.assertLessEqual(u, chart._at(hi, t) + 0.01)
+
+    def test_a_forecast_that_runs_out_early_stays_inside_its_fan(self):
+        now = MON + 11 * H + 52 * 60
+        self.work(now, step=25.0)  # 50% in 2 readings: every line reaches 100 before 16:30
+        v5, _ = self.views(now)
+        self.assertEqual(v5["rate_source"], "interpolated")
+        c = chart.build(self.st, v5, now)
+        lo, hi = c["fan"]
+        self.assertEqual(len(c["forecast"]), 3)  # up to 100, then flat
+        for path in (lo, hi, c["forecast"]):
+            for t, _ in path:
+                u = chart._at(c["forecast"], t)
+                self.assertLessEqual(chart._at(lo, t) - 0.01, u, t)
+                self.assertLessEqual(u, chart._at(hi, t) + 0.01, t)
+        self.assertLess(hi[1][0], c["forecast"][1][0])  # the faster line runs out first
 
     def test_a_capped_estimate_fans_out_over_when_it_runs_out(self):
         # 50% used at 50%/h, 4 hours left: every line reaches 100, at different times.
@@ -207,6 +220,21 @@ class Build(TempHome):
         # Another window's snapshots are not this one's.
         self.snaps(config.FIVE_HOUR, [hour], wid + 1)
         self.assertEqual(chart.build(self.st, v5, now)["ghosts"], [])
+
+    def test_a_week_snapshot_from_the_first_version_still_draws(self):
+        # [time, level, slope], before snapshots kept where they land: walked with that slope.
+        now = MON + 14 * H
+        self.known("s1")
+        for k in range(1, 30):
+            self.feed(MON - 2 * D + k * 2 * H, five=None, week=(k, RW))
+        _, vw = self.views(now)
+        old, new = [int(now - D), 10.0, 40.0], [int(now - 2 * D), 3.0, 40.0, 60.0]
+        self.snaps(config.SEVEN_DAY, [new, old], vw["window_id"])
+        c = chart.build(self.st, vw, now)
+        walk = [[int(t), round(u, 2)] for t, u in chart._thin(chart._walk(vw["_weights"], 10.0, 40.0, old[0], RW),
+                                                                old[0], RW, 60)]
+        self.assertEqual(c["ghosts"][0], walk)
+        self.assertAlmostEqual(c["ghosts"][1][-1][1], 60.0, places=1)
 
     def test_the_week_has_ghosts_from_a_day_and_2_days_ago_that_land_where_they_said(self):
         now = MON + 14 * H
@@ -379,6 +407,19 @@ class MenuChart(TempHome):
         c = {"t0": t1 - 7 * 86400, "t1": t1, "grid": grid, "labels": labels}
         self.assertEqual(menuart.labels(c, menubar.BAR_MIN, menubar.LABEL_PT).split(),
                          ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"])
+
+    def test_a_named_edge_day_gives_way_to_a_whole_day(self):
+        # A Friday 06:00 reset names the 18 hours of the first Friday; in a
+        # narrow line it has no room beside Saturday, which keeps its name.
+        t1 = int(MON + 4 * D + 6 * H)
+        grid, labels = chart._ticks(config.SEVEN_DAY, t1 - 7 * 86400, t1)
+        # Whole days first, then the edge day.
+        self.assertEqual([t for _, t in labels], ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"])
+        self.assertEqual(labels[-1][0], t1 - 7 * 86400 + 9 * 3600)
+        c = {"t0": t1 - 7 * 86400, "t1": t1, "grid": grid, "labels": labels}
+        self.assertEqual(menuart.labels(c, 160, menubar.LABEL_PT).split()[0], "Sat")
+        self.assertEqual(menuart.labels(c, 300, menubar.LABEL_PT).split(),
+                         ["Fri", "Sat", "Sun", "Mon", "Tue", "Wed", "Thu"])
 
     def test_labels_that_do_not_fit_are_left_out(self):
         # 13 a minute after 12 has no room; 16 at the right edge ends there.

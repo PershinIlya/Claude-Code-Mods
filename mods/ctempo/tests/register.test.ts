@@ -815,6 +815,15 @@ test('a chart label with no room after the one before is left out, as in the men
   const week = { ...CHART, t1: CHART.t0 + 7 * 86400, labels: [[CHART.t0 + 4 * 3600, 'Tue'], [CHART.t0 + 6 * 3600, 'Wed'], [CHART.t0 + 30 * 3600, 'Thu']] as [number, string][] }
   const svg = chartSvg(week, 220, 'a')
   expect(svg.match(/<text [^>]*>[A-Za-z]+</g)?.map((t) => t.slice(-4, -1))).toEqual(['Tue', 'Thu'])
+  // A Friday 06:00 reset: the CLI lists the whole days, then the first
+  // Friday's 18 hours; at 160 px that name has no room beside Saturday's.
+  const whole = ['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu']
+  const labels = [...whole.map((n, i) => [CHART.t0 + 18 * 3600 + i * 86400 + 43200, n]), [CHART.t0 + 9 * 3600, 'Fri']]
+  const fri = { ...week, labels: labels as [number, string][] }
+  const names = (W: number) => chartSvg(fri, W, 'a').match(/<text [^>]*>[A-Za-z]+</g)?.map((t) => t.slice(-4, -1))
+  expect(names(160)?.[0]).toBe('Sat')
+  expect(names(160)).not.toContain('Fri')
+  expect(names(300)).toEqual([...whole, 'Fri'])
 })
 
 test('waiting for the first reading', async ($, on) => {

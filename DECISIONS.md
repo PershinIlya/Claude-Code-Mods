@@ -812,9 +812,12 @@ hours) or the start of each local day (the week), found an hour at a time
 so a 23 or 25 hour day and a DST change that skips midnight (the day then
 starts at 01:00) need no arithmetic of their own (the first version
 computed midnight as 24 hours on and looped for good in the week of a
-spring change); a day's name sits at its middle, and a day at the week's
-edge shorter than 16 hours goes unnamed, so a whole day's name always has
-room. US peak hours are not drawn: since May 6, 2026 Anthropic no longer
+spring change); a day's name sits at its middle, a day at the week's edge
+shorter than 16 hours goes unnamed, and the CLI lists the whole days' names
+before the edge days': each name is drawn only where it touches none drawn
+before it, so an edge day gives way to a whole day, and every whole day
+keeps its name in the menu and in cards from 160 px (a narrower card
+leaves out every other one). US peak hours are not drawn: since May 6, 2026 Anthropic no longer
 spends Claude Code's 5-hour limits faster in them (they did from March 26,
 weekdays 5 to 11 am PT), and for chats it is not said; a band for a rule
 that may not apply would mislead. On the Desktop the chart is an SVG image
@@ -824,8 +827,8 @@ app's. SwiftBar shows pictures, not drawings, and ctempo has no fonts: the
 menu's chart is a PNG (png.Canvas: anti-aliased lines, dashes, rings,
 fills) as wide as the bar's line, its labels a line of Menlo 10 under it,
 each centered under its hour or the middle of its day, kept inside at the
-edges; a label with no room after the one before is left out, on the
-Desktop too. The chart's line carries no `color=` (D-34). SwiftBar reads an
+edges; a label that would touch one drawn before it is left out, not moved,
+on the Desktop too. The chart's line carries no `color=` (D-34). SwiftBar reads an
 unquoted parameter only to the first space, so tooltips are quoted, with no
 quote or backslash inside (one SwiftBar version ends a quoted value at
 either quote). `"menubar": {"charts": false}` (or the text style) leaves the

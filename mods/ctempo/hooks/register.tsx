@@ -446,8 +446,9 @@ const LABEL_PX = 6
 // (dashed, in the pace's color when it needs you: red when it runs out or
 // is blocked, yellow when it may or passes the target), an early 5-hour
 // estimate's fan, the forecasts made earlier (grey, dashed), the grid and
-// its hours or days (one with no room after the one before is left out, as
-// in the menu bar), the limit (dotted) and now (a hairline).
+// its hours or days (in the CLI's order, one that would touch one placed
+// before is left out, as in the menu bar), the limit (dotted) and now (a
+// hairline).
 export function chartSvg(c: Chart, W: number, alt: string, tone?: string): string {
   const H = CHART_H
   const pad = { l: 1, r: 4, t: 6, b: 14 }
@@ -482,14 +483,16 @@ export function chartSvg(c: Chart, W: number, alt: string, tone?: string): strin
   }
   out.push(`<line class='nw' x1='${sx(c.now)}' y1='${pad.t}' x2='${sx(c.now)}' y2='${base}'/>`)
   out.push(`<circle class='dt' cx='${sx(last[0])}' cy='${sy(last[1])}' r='2.4'/>`)
-  let right = -Infinity
+  // In the CLI's order (whole days before the week's edge days): a label
+  // that would touch one placed before it is left out, as in the menu bar.
+  const placed: [number, number][] = []
   for (const [t, label] of c.labels) {
     const x = sx(t)
     const w = label.length * LABEL_PX
     const anchor = x - w / 2 < pad.l ? 'start' : x + w / 2 > W - 1 ? 'end' : 'middle'
     const left = anchor === 'start' ? pad.l : anchor === 'end' ? W - 1 - w : x - w / 2
-    if (left < right + 3) continue
-    right = left + w
+    if (placed.some(([a, b]) => left < b + 3 && a < left + w + 3)) continue
+    placed.push([left, left + w])
     out.push(`<text x='${anchor === 'start' ? pad.l : anchor === 'end' ? W - 1 : x}' y='${H - 2}' text-anchor='${anchor}'>${esc(label)}</text>`)
   }
   out.push('</svg>')

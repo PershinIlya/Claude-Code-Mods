@@ -58,7 +58,8 @@ One row per window: its name, a small bar, the percent, and its pace.
   and the forecasts made earlier in the window in grey, an hour ago for the
   5 hours, a day and 2 days ago for the week, so you can see by eye how
   well the forecast holds. The week's forecast follows your usual hours
-  (slower at night; a straight line until ctempo has learned them); while
+  (slower at night; a straight line only while the profile is uniform:
+  no transcripts and nothing learned yet); while
   the 5-hour rate is an early estimate, a pale fan spans the rate 40% lower
   to 40% higher. The grid marks hours (5 hours) or the days (the week)
   (D-36).
@@ -473,7 +474,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 530 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 533 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 72 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
