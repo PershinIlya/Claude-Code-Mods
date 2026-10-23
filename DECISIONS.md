@@ -899,6 +899,16 @@ when it says something. The week's nights, a 9% tint that was all but
 invisible on a Windows screen, are now a 6% tint and a thin rounded strip
 under the axis at 45%, which reads on any screen.
 
+**D-39. The run-out mark.** On a flat chart a forecast that reaches 100
+before the reset just ran along the top, and when it got there was hard to
+see. When the band says it runs out (band._out: not within the margin of
+the reset, not an early estimate's guess, D-37), the chart carries `out`
+and `out_label` (the time as Details says it) and marks it in the pace's
+color: a dot on the limit, a dashed line down, the time beside it (to the
+right, or the left near the end), and the rest of the window, when nothing
+more can be spent, tinted at 9%. The menu bar's picture has the same mark
+without the time, which is the "Runs out" row just under it.
+
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
 

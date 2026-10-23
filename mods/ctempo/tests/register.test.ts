@@ -824,6 +824,19 @@ test('the chart draws what was used, the forecast in the pace color, earlier for
   expect(edge).toContain("<text x='299' y='62' text-anchor='end'>16<")
 })
 
+test('a run-out before the reset is marked: the rest tinted, a dashed line, a dot on the limit, its time', () => {
+  const svg = chartSvg({ ...CHART, out: CHART.t0 + 4 * 3600, out_label: '15:30' }, 300, 'a', 'error')
+  expect(svg).toContain("<rect class='oz rx' x='237' y='6' width='59' height='44'/>")
+  expect(svg).toContain("<line class='ol rx' x1='237' y1='6' x2='237' y2='50'/>")
+  expect(svg).toContain("<circle class='rx' cx='237' cy='6' r='2.4'/>")
+  expect(svg).toContain("<text class='ot rx' x='241' y='16' text-anchor='start'>15:30</text>")
+  // Yellow when it only may; the time on the left when there is no room right.
+  const may = chartSvg({ ...CHART, out: CHART.t1 - 600, out_label: '16:20' }, 300, 'a', 'warning')
+  expect(may).toMatch(/<text class='ot ry' x='[\d.]+' y='16' text-anchor='end'>16:20<\/text>/)
+  expect(chartSvg(CHART, 300, 'a', 'error')).not.toContain("class='oz")
+  expect(chartOf({ ...CHART, out: CHART.t1 + 1 })).toBeNull()
+})
+
 test("the week's nights are pale bands behind the lines", () => {
   const svg = chartSvg({ ...CHART, nights: [[CHART.t0, CHART.t0 + 1800], [CHART.t0 + 3 * 3600, CHART.t0 + 4 * 3600]] }, 300, 'a')
   expect(svg.match(/<rect class='nt'/g)?.length).toBe(2)

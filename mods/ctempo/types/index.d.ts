@@ -39,6 +39,9 @@ export type Chart = {
   ghosts: [number, number][][]
   // The week's night hours, as pale bands (an older CLI has none).
   nights?: [number, number][]
+  // When it runs out before the reset, and its time (an older CLI has none).
+  out?: number | null
+  out_label?: string | null
   grid: number[]
   labels: [number, string][]
 }

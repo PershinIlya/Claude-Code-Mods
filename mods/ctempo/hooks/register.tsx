@@ -269,6 +269,7 @@ export function chartOf(x: unknown): Chart | null {
     (c.fan === null || (Array.isArray(c.fan) && c.fan.length === 2 && c.fan.every((p) => isPoints(p) && p.length > 0))) &&
     Array.isArray(c.ghosts) && c.ghosts.every(isPoints) && Array.isArray(c.grid) && c.grid.every(isNum) &&
     (c.nights === undefined || isPoints(c.nights)) &&
+    (c.out == null || (isNum(c.out) && c.out > c.t0 && c.out < c.t1)) && (c.out_label == null || isStr(c.out_label)) &&
     Array.isArray(c.labels) && c.labels.every((l) => Array.isArray(l) && isNum(l[0]) && isStr(l[1]))
   return ok ? c : null
 }
@@ -437,6 +438,8 @@ const CHART_STYLE =
   '.ctc .gh{fill:none;stroke:var(--t);stroke-width:1;stroke-dasharray:3 3;opacity:.6}' +
   '.ctc .nw{stroke:var(--t);stroke-width:.8;opacity:.75}.ctc .end{fill:none;stroke:var(--a);stroke-width:1.2}' +
   '.ctc .ex{stroke:var(--r)}.ctc .ey{stroke:var(--y)}' +
+  '.ctc .rx{fill:var(--r);stroke:var(--r)}.ctc .ry{fill:var(--y);stroke:var(--y)}' +
+  '.ctc .oz{opacity:.09;stroke:none}.ctc .ol{stroke-width:1;stroke-dasharray:2.5 2}.ctc .ot{font-weight:600;stroke:none}' +
   '.ctc text{font:9px -apple-system,"Segoe UI",system-ui,sans-serif;fill:var(--t)}</style>'
 
 export const CHART_H = 64
@@ -492,6 +495,19 @@ export function chartSvg(c: Chart, W: number, alt: string, tone?: string): strin
     const k = tone === 'error' ? 'x' : tone === 'warning' ? 'y' : ''
     out.push(`<path class='${k ? `f${k}` : 'fc'}' d='${d(f)}'/>`)
     out.push(`<circle class='end${k ? ` e${k}` : ''}' cx='${r1(sx(end[0]) - 1.5)}' cy='${sy(end[1])}' r='2.2'/>`)
+  }
+  if (c.out != null) {
+    // It runs out before the reset: the rest of the window tinted, a dashed
+    // mark down from a dot on the limit, and its time beside it.
+    const h = tone === 'warning' ? 'ry' : 'rx'
+    const x = sx(c.out)
+    out.push(`<rect class='oz ${h}' x='${x}' y='${pad.t}' width='${r1(Math.max(0, W - pad.r - x))}' height='${r1(base - pad.t)}'/>`)
+    out.push(`<line class='ol ${h}' x1='${x}' y1='${pad.t}' x2='${x}' y2='${base}'/>`)
+    out.push(`<circle class='${h}' cx='${x}' cy='${pad.t}' r='2.4'/>`)
+    if (c.out_label) {
+      const room = W - pad.r - x > c.out_label.length * LABEL_PX + 6
+      out.push(`<text class='ot ${h}' x='${r1(room ? x + 4 : x - 4)}' y='${pad.t + 10}' text-anchor='${room ? 'start' : 'end'}'>${esc(c.out_label)}</text>`)
+    }
   }
   out.push(`<line class='nw' x1='${sx(c.now)}' y1='${pad.t}' x2='${sx(c.now)}' y2='${base}'/>`)
   out.push(`<circle class='dt' cx='${sx(last[0])}' cy='${sy(last[1])}' r='2.4'/>`)

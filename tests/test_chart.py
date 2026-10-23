@@ -274,6 +274,26 @@ class Build(TempHome):
         self.assertEqual(g[1][-1], [RW, 100.0])
         self.assertEqual(g[0][-1][0], RW)
 
+    def test_a_run_out_before_the_reset_is_marked(self):
+        # 50% at 30 %/h from 14:40 with 1 h 50 left: out at 16:20 (the reset 16:30
+        # is 10 min on: within the margin, no mark); 80% at 60 %/h: out at 15:00.
+        now = MON + 14 * H + 40 * 60
+        self.work(now, step=5.0, every=600, start=14 * H)
+        v5, _ = self.views(now)
+        c = chart.build(self.st, v5, now)
+        if v5.get("cap_ts") and R5 - v5["cap_ts"] > 600 and not v5.get("shaky"):
+            self.assertEqual(c["out"], int(v5["cap_ts"]))
+            from ctempo import band
+            self.assertEqual(c["out_label"], band.at(v5["cap_ts"], now))
+        else:
+            self.assertIsNone(c["out"])
+        # Built by hand: a firm run-out is marked, a shaky one or one at the reset is not.
+        v = dict(v5, cap_ts=now + 1800, shaky=False)
+        self.assertEqual(chart.build(self.st, v, now)["out"], int(now + 1800))
+        self.assertIsNone(chart.build(self.st, dict(v, shaky=True), now)["out"])
+        self.assertIsNone(chart.build(self.st, dict(v, cap_ts=R5 - 300), now)["out"])
+        self.assertIsNone(chart.build(self.st, dict(v, cap_ts=None), now)["out"])
+
     def test_a_maxed_week_flattens_the_5_hours(self):
         now = MON + 14 * H + 40 * 60
         self.work(now)
@@ -283,6 +303,7 @@ class Build(TempHome):
         f = v5["chart"]["forecast"]
         self.assertEqual(f, [[int(now), round(v5["used"], 2)], [R5, round(v5["used"], 2)]])
         self.assertIsNone(v5["chart"]["fan"])
+        self.assertIsNone(v5["chart"]["out"])  # nothing runs out: it cannot move
 
     def test_a_broken_chart_is_none_not_the_band(self):
         v5 = {"window": config.FIVE_HOUR, "present": True}  # no reset_ts

@@ -61,7 +61,9 @@ One row per window: its name, a small bar, the percent, and its pace.
   (dashed, in the pace's color when it needs you: red when it runs out or
   the week blocks it, yellow when it may run out or passes your target,
   inside a pale fan: how sure it is, wide early in the window and narrow
-  near its reset),
+  near its reset; when it runs out before the reset, that moment is marked
+  in the same color: a dot on the limit, a dashed line down, its time
+  beside it, and the rest of the window, blocked, faintly tinted),
   and the forecasts made earlier in the window in grey, an hour ago for the
   5 hours, a day and 2 days ago for the week, so you can see by eye how
   well the forecast holds. The week's forecast follows your usual hours
@@ -490,9 +492,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 536 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 537 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 74 tests
+claude plugin test mods/ctempo                 # 75 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

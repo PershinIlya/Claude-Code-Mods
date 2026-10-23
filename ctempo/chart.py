@@ -16,6 +16,9 @@ earlier, to see by eye how the model does.
             `snapshot` keeps as the status line and the band run
   nights    the week's night hours, outside the waking hours (the profile
             override's, else 8 to 23): [[start, end]], drawn as pale bands
+  out       when it runs out before the reset (as the band says it), and
+            out_label its time: a mark on the chart, the rest of the window
+            tinted
   grid      local hours (5 hours) or the starts of local days (week);
             labels: "17", "Fri", in the order to place them (whole days
             before the week's edge days), each where no earlier one is
@@ -194,6 +197,14 @@ def _ticks(window, t0, t1):
     return grid, labels
 
 
+def _when(ts, now):
+    """A run-out's time for its mark, as Details says it (band.at): 15:39, or
+    Thu 13:30 a day or more on."""
+    from .band import at
+
+    return at(ts, now)
+
+
 def _nights(t0, t1, wake):
     """[[start, end]] of the local hours outside the waking hours [h0, h1)
     in [t0, t1], an hour at a time, so DST days need no care."""
@@ -235,6 +246,11 @@ def build(store, v, now, wake=(8, 23)):
     if v["verdict"] not in ("maxed", "unknown"):
         forecast = _forecast(v, w, used, _slope(v), now, t1)
     fan = _fan(v, w, used, _slope(v), now, t1) if forecast else None
+    # When it runs out before the reset, as the band says it (band._out):
+    # not within the margin of the reset, nor an early estimate's guess.
+    out = v.get("cap_ts") if window == FIVE_HOUR else v.get("dry_ts")
+    margin = 10 * 60 if window == FIVE_HOUR else 6 * HOUR
+    out = int(out) if forecast and out and not v.get("shaky") and t1 - out > margin else None
     ghosts = []
     kept = store.meta_get(_key(window)) or {}
     log = kept.get("log", []) if kept.get("wid") == wid else []
@@ -253,6 +269,7 @@ def build(store, v, now, wake=(8, 23)):
         "forecast": [[int(t), round(u, 2)] for t, u in _thin(forecast, now, t1, 60)],
         "fan": fan, "ghosts": ghosts, "grid": [int(g) for g in grid], "labels": labels,
         "nights": _nights(t0, t1, wake) if window == SEVEN_DAY else [],
+        "out": out, "out_label": None if out is None else _when(out, now),
     }
 
 
@@ -271,3 +288,4 @@ def attach(store, v5, vw, now, cfg=None):
         u = round(v5["used"], 2)
         c["forecast"] = [[c["now"], u], [c["t1"], u]]
         c["fan"] = None
+        c["out"] = c["out_label"] = None

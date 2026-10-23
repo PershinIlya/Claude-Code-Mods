@@ -126,6 +126,12 @@ def chart(c, width, height, dark, tone=None):
     if len(a) <= 30:
         for x, y in a[1:]:
             cv.dot(x, y, 2.2, hex_color(p["a"]))
+    if c.get("out"):  # runs out before the reset: the rest tinted, a dashed mark, a dot at 100
+        hue = p["y"] if tone == "warning" else p["r"]
+        x = X(c["out"])
+        cv.fill_between(x, (width - PAD_R) * S, lambda _: top, lambda _: base, hex_color(hue, 0.1))
+        cv.polyline([(x, top), (x, base)], 1.6, hex_color(hue, 0.9), dash=(4, 3))
+        cv.dot(x, top, 3.2, hex_color(hue))
     if len(f) > 1:
         color = hex_color(p["r"]) if tone == "error" else hex_color(p["y"]) if tone == "warning" else hex_color(p["a"], 0.8)
         cv.polyline(f, 2.6, color, dash=(7, 5))
