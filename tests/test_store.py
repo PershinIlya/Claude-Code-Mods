@@ -99,11 +99,13 @@ class CloseOnWindows(unittest.TestCase):
             reader.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
             reader.execute("BEGIN")
             reader.execute("SELECT COUNT(*) FROM meta").fetchone()  # a snapshot another process holds
-            st = Store(path)
+            st = Store(path, timeout_ms=10000)  # waiting for the reader would take 10 s
             st.meta_set("big", "y" * 600000)
             t = time.monotonic()
             st.close()
-            self.assertLess(time.monotonic() - t, 0.2)  # never waits for the reader
+            # Never waits for the reader. A slow CI disk took 0.7 s to copy the WAL,
+            # so the bound is far from the copy and far below the 10 s wait.
+            self.assertLess(time.monotonic() - t, 5.0)
             self.assertGreater(os.path.getsize(path + "-wal"), 256 * 1024)
             reader.execute("COMMIT")
             reader.close()
