@@ -24,7 +24,8 @@ export type Phrase = {
 }
 
 // A row of Details, the same as the menu bar's menu (band.details).
-export type Detail = { label: string; value: string; tone: string }
+// `note`: a second, quieter fact on the same row (in `note_tone`, grey by default).
+export type Detail = { label: string; value: string; tone: string; note?: string; note_tone?: string }
 
 // A window's chart for its Details card (chart.py): epoch seconds, percents.
 export type Chart = {

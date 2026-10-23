@@ -1,7 +1,7 @@
 import type { ProcessRunResult, RenderSurface, SessionRateLimit } from 'claude-code'
 import { expect, type MountTarget, mock, type TestBody, test } from 'claude-code/testing'
 
-import { age, barSvg, chartOf, chartSvg, fromGitBash, layout, resolveHome, toPayload } from '../hooks/register'
+import { age, barSvg, chartOf, chartSvg, stale, fromGitBash, layout, resolveHome, toPayload } from '../hooks/register'
 import type { Chart, Detail, Phrase, Win } from '../types'
 
 type StubOn = Parameters<TestBody>[1]
@@ -700,13 +700,25 @@ test('Details opens a card per window: name, percent and pace on top, then label
   expect(await ui.find({ type: 'Text', text: '15:40, 50 min early' })).toMatchObject({ props: { color: 'error' } })
   expect(await ui.find({ type: 'Text', text: 'Fri 04:00' })).toMatchObject({ props: { color: 'text' } })
   expect((await ui.findAll({ type: 'Text', text: 'Resets' })).length).toBe(2) // a row in each card
-  expect(await ui.find({ type: 'Text', text: /^Updated 3 min ago/ })).toBeDefined()
+  // 3 minutes old: no line for it (only from 5 minutes, stale()).
+  expect(await ui.find({ type: 'Text', text: /^Updated/ })).toBeUndefined()
   expect(await ui.find({ type: 'Button', text: 'Details' })).toBeDefined() // the same label: the row never shifts
   expect(tree).toContain('"width":"50%"') // side by side
   const narrow = await $.ui.mount(sized('desktop', 71)) // one under the other
   expect(JSON.stringify(await narrow.drawn())).not.toContain('"width":"50%"')
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /Updated/ })).toBeUndefined()
+})
+
+test("a row's note follows its value, quieter", async ($, on) => {
+  const rows: Detail[] = [
+    { label: 'At reset', value: 'about 60%', tone: 'text', note: '40% unused', note_tone: 'success' },
+    { label: 'Resets', value: 'Fri 04:00', tone: 'text', note: '100% Sat 06:00' },
+  ]
+  const { ui } = await drawn($, on, [win({ id: 'h5' }), win({ id: 'wk', details: rows })])
+  await ui.press({ key: 'details' })
+  expect(await ui.find({ type: 'Text', text: '· 40% unused' })).toMatchObject({ props: { color: 'success' } })
+  expect(await ui.find({ type: 'Text', text: '· 100% Sat 06:00' })).toMatchObject({ props: { color: 'inactive' } })
 })
 
 test('a card keeps the CLI order of rows; an older CLI shows its sentence', async ($, on) => {
@@ -782,22 +794,22 @@ test('a chart that does not read is none', () => {
 
 test('the chart draws what was used, the forecast in the pace color, earlier forecasts and the grid', () => {
   const svg = chartSvg(CHART, 300, 'alt <x>')
-  expect(svg).toMatch(/^<svg xmlns='http:\/\/www.w3.org\/2000\/svg' class='ctc' width='300' height='76'/)
+  expect(svg).toMatch(/^<svg xmlns='http:\/\/www.w3.org\/2000\/svg' class='ctc' width='300' height='64'/)
   expect(svg).toContain('<title>alt &lt;x&gt;</title>')
   expect(svg.match(/<line class='g'/g)?.length).toBe(5)
-  expect(svg).toMatch(/<path class='ar' d='M1,62L.*L1,62Z'/) // the area, from the start at 0
+  expect(svg).toMatch(/<path class='ar' d='M1,50L.*L1,50Z'/) // the area, from the start at 0
   expect(svg).toMatch(/<path class='ac'/)
   expect(svg).toMatch(/<path class='gh'/)
   expect(svg).toMatch(/<path class='fc'/)
   expect(svg).not.toMatch(/class='fn'/)
   expect(svg.match(/<text /g)?.length).toBe(5)
-  expect(svg).toMatch(/<text x='[\d.]+' y='74' text-anchor='middle'>12<\/text>/)
+  expect(svg).toMatch(/<text x='[\d.]+' y='62' text-anchor='middle'>12<\/text>/)
   expect(chartSvg(CHART, 300, 'a', 'error')).toMatch(/<path class='fx'/)
   expect(chartSvg(CHART, 300, 'a', 'warning')).toMatch(/<path class='fy'/)
   // The fan: from the slower line out and back along the faster one.
   const lo: [number, number][] = [[CHART.now, 70], [CHART.t1, 90]]
   const hi: [number, number][] = [[CHART.now, 70], [CHART.t0 + 4 * 3600, 100], [CHART.t1, 100]]
-  expect(chartSvg({ ...CHART, fan: [lo, hi] }, 300, 'a')).toMatch(/<path class='fn' d='M187.8,22.8L296,11.6L296,6L237,6L187.8,22.8Z'\/>/)
+  expect(chartSvg({ ...CHART, fan: [lo, hi] }, 300, 'a')).toMatch(/<path class='fn' d='M187.8,19.2L296,10.4L296,6L237,6L187.8,19.2Z'\/>/)
   // The end ring in the forecast's color; now a mid-tone grey, never black or white.
   expect(chartSvg(CHART, 300, 'a', 'error')).toContain("<circle class='end ex'")
   expect(svg).toContain("<circle class='end'")
@@ -808,14 +820,16 @@ test('the chart draws what was used, the forecast in the pace color, earlier for
   expect(chartSvg(many, 300, 'a').match(/<circle class='dt'/g)?.length).toBe(1)
   // Labels at the edges stay inside.
   const edge = chartSvg({ ...CHART, labels: [[CHART.t0, '11'], [CHART.t1, '16']] }, 300, 'a')
-  expect(edge).toContain("<text x='1' y='74' text-anchor='start'>11<")
-  expect(edge).toContain("<text x='299' y='74' text-anchor='end'>16<")
+  expect(edge).toContain("<text x='1' y='62' text-anchor='start'>11<")
+  expect(edge).toContain("<text x='299' y='62' text-anchor='end'>16<")
 })
 
 test("the week's nights are pale bands behind the lines", () => {
   const svg = chartSvg({ ...CHART, nights: [[CHART.t0, CHART.t0 + 1800], [CHART.t0 + 3 * 3600, CHART.t0 + 4 * 3600]] }, 300, 'a')
   expect(svg.match(/<rect class='nt'/g)?.length).toBe(2)
-  expect(svg).toContain("<rect class='nt' x='1' y='6' width='29.5' height='56'/>")
+  expect(svg).toContain("<rect class='nt' x='1' y='6' width='29.5' height='44'/>")
+  // A thin rounded strip under the axis marks each night.
+  expect(svg).toContain("<rect class='ns' x='1' y='52' width='29.5' height='2' rx='1'/>")
   expect(svg.indexOf("class='nt'")).toBeLessThan(svg.indexOf("<line class='g'"))
   expect(chartSvg(CHART, 300, 'a')).not.toContain("class='nt'") // the 5 hours, or an older CLI
 })
@@ -879,6 +893,7 @@ test('the bars draw what each kind means', async () => {
 test('says how old the reading is', async () => {
   expect(age(1000, 1030)).toBe('Updated just now.')
   expect(age(1000, 1000 + 180)).toBe('Updated 3 min ago.')
+  expect([stale(1000, 1000 + 299), stale(1000, 1000 + 300), stale(null, 1000)]).toEqual([false, true, false])
   expect(age(1000, 1000 + 7200)).toBe('Updated 2 h ago.')
   expect(age(null, 1000)).toBe('')
 })

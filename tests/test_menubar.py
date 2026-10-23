@@ -29,13 +29,15 @@ class Lines(TempHome):
                                  r"tooltip=\"5-hour: 55% used")
         # With color= on a menu line, SwiftBar drew its text and dropped its image.
         self.assertFalse([line for line in out[1:] if "image=" in line and "color=" in line])
-        self.assertRegex(out[9], r"^Wk 48% \| image=\S+ width=199 ")
+        self.assertRegex(out[8], r"^Wk 48% \| image=\S+ width=199 ")
         menlo = " | font=Menlo size=11 trim=false color="
-        self.assertEqual(out[3], "Used            55%" + menlo + menubar.DIM)
-        self.assertEqual(out[4], "Pace            On pace" + menlo + menubar.DIM)
-        self.assertIn("Resets          16:30" + menlo + menubar.DIM, out)
-        self.assertIn("Rate            17%/h, 18%/h fits" + menlo + menubar.DIM, out)
-        self.assertIn("Resets          Fri 04:00" + menlo + menubar.DIM, out)
+        self.assertEqual(out[3], "Used      55%" + menlo + menubar.DIM)
+        self.assertEqual(out[4], "Pace      On pace" + menlo + menubar.DIM)
+        # A row's note follows its value after a dot.
+        self.assertEqual(out[5], "At reset  about 95% · 5% unused" + menlo + menubar.DIM)
+        self.assertIn("Resets    16:30" + menlo + menubar.DIM, out)
+        self.assertIn("Rate      17%/h, 18%/h fits" + menlo + menubar.DIM, out)
+        self.assertIn("Resets    Fri 04:00" + menlo + menubar.DIM, out)
         self.assertIn("Updated 1 min ago | size=11 color=%s" % menubar.DIM, out)
         self.assertEqual(out[-1], "Refresh | refresh=true")
 
@@ -44,16 +46,16 @@ class Lines(TempHome):
         self.assertTrue(title.startswith("70% 2x slower · 48% | image="), title)
         self.assertTrue(title.endswith(" color=" + menubar.TONE["error"]), title)
         menu = self.out("runs out")
-        self.assertIn("Pace            2x slower | font=Menlo size=11 trim=false color=" + menubar.TONE["error"], menu)
-        self.assertIn("Runs out        15:40, 50 min early | font=Menlo size=11 trim=false color="
+        self.assertIn("Pace      2x slower | font=Menlo size=11 trim=false color=" + menubar.TONE["error"], menu)
+        self.assertIn("Runs out  15:40, 50 min early · resets 16:30 | font=Menlo size=11 trim=false color="
                       + menubar.TONE["error"], menu)
-        self.assertIn("Pace            ~2x faster | font=Menlo size=11 trim=false color=" + menubar.TONE["success"],
+        self.assertIn("Pace      ~2x faster | font=Menlo size=11 trim=false color=" + menubar.TONE["success"],
                       self.out("early"))
         title = self.out("unused")[0]  # green ("faster"): the color says it, the words are in the menu
         self.assertTrue(title.startswith("12% · 40% | image="), title)
         self.assertTrue(title.endswith(" color=" + menubar.TONE["success"]), title)
         self.assertTrue(self.out("maxed")[0].startswith("100% Back 16:30 · 52% | image="))
-        self.assertIn("Limit           reached | font=Menlo size=11 trim=false color=" + menubar.TONE["error"],
+        self.assertIn("Limit     reached | font=Menlo size=11 trim=false color=" + menubar.TONE["error"],
                       self.out("maxed"))
 
     def test_old_readings_dim_the_title_and_say_where_they_come_from(self):
@@ -94,7 +96,9 @@ class BarWidth(TempHome):
         self.assertEqual(menubar.bar_width(["x" * 200 + " | size=11"]), menubar.BAR_MAX)
         out = menubar.lines(band.windows(*STATES["week dry"], NOW), NOW - 60, NOW, self.cfg)
         widths = {line.split(" width=")[1].split()[0] for line in out if " | image=" in line and "font=Menlo" in line}
-        self.assertEqual(widths, {"238"})  # 289 for the line, less 6 Menlo characters and the gap
+        # "Runs out  Wed 11:00, 1 day 17 h early · resets Fri 04:00": 56 Menlo
+        # characters, 376 points, less 6 Menlo characters and the gap.
+        self.assertEqual(widths, {"325"})
         out = menubar.lines(band.windows(*STATES["maxed"], NOW), NOW - 60, NOW, self.cfg)
         lines = [line for line in out if " | image=" in line and "font=Menlo" in line]
         # A longer label, a shorter bar: both lines end at the same point.

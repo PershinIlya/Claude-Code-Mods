@@ -196,31 +196,41 @@ def _p(pre, num, post, tone, attention, narrow=None, calm=False, narrow_pre=None
 
 def details(v, now):
     """The window's numbers for Details (the Desktop band) and the menu bar's
-    menu: [{label, value, tone}], the same rows on both. The pace leads;
-    "Will go unused" and "Runs out" only when they apply."""
+    menu: [{label, value, tone, note?, note_tone?}], the same rows on both.
+    The pace leads. Rows that belong together share one, the second fact a
+    quieter note after the value: where it lands at the reset and what goes
+    unused; the reset and when it would run out at this pace; or, when it
+    runs out before the reset, that time and the reset."""
     if not v.get("present"):
         return []
     rows = [_row("Used", "%d%%" % floor_pct(v["used"]))]
     p = phrase(v, now)
     if p and v["verdict"] != "maxed":
         rows.append(_row("Pace", p["pre"] + p["num"] + p["post"], p["tone"]))
+    reset = at(v["reset_ts"], now) if v["window"] == FIVE_HOUR else render.dhm(v["reset_ts"])
     if v["verdict"] == "maxed":
         rows.append(_row("Limit", "reached", "error"))
+        rows.append(_row("Resets", reset))
     else:
+        out = _out(v)
         proj = v.get("projected")
         if proj is not None and v["verdict"] != "idle":
-            rows.append(_row("At reset", ("about %d%%" % int(round(proj))) + (", rough" if _rough(v) else "")))
-        out = _out(v)
+            row = _row("At reset", ("about %d%%" % int(round(proj))) + (", rough" if _rough(v) else ""))
+            left = _unused(v)
+            if left is not None and floor_pct(left) >= 1 and not out:
+                row.update(note="%d%% unused" % floor_pct(left), note_tone="success" if _harvest(v) else "inactive")
+            rows.append(row)
         if out:
             soft = _soft(v)
             rows.append(_row("Runs out", "%s%s, %s early" % ("about " if soft else "", at(out, now),
-                                                              dur(v["reset_ts"] - out)), "warning" if soft else "error"))
-        elif v.get("empty_ts") and v["verdict"] not in ("idle", "unknown"):
-            rows.append(_row("Runs out", _later(v["empty_ts"], v["reset_ts"], now), "inactive"))
-        left = _unused(v)
-        if left is not None and floor_pct(left) >= 1 and not out:
-            rows.append(_row("Will go unused", "%d%%" % floor_pct(left), "success" if _harvest(v) else "text"))
-    rows.append(_row("Resets", at(v["reset_ts"], now) if v["window"] == FIVE_HOUR else render.dhm(v["reset_ts"])))
+                                                              dur(v["reset_ts"] - out)), "warning" if soft else "error",
+                             note="resets " + reset))
+        else:
+            row = _row("Resets", reset)
+            later = _later(v.get("empty_ts"), v["reset_ts"], now) if v["verdict"] not in ("idle", "unknown") else None
+            if later:
+                row.update(note=later, note_tone="inactive")
+            rows.append(row)
     if v["window"] == FIVE_HOUR and v["verdict"] != "maxed" and v.get("allowed") is not None:
         rate = v.get("rate")
         fits = "%s%%/h fits" % render.rate(v["allowed"])
@@ -231,19 +241,20 @@ def details(v, now):
 
 
 def _later(ts, reset, now):
-    """When a window that lasts to its reset would run out at this pace:
-    "Sat 14:10, past the reset"."""
+    """When a window that lasts to its reset would reach 100% at this pace,
+    as a note to its reset: "100% Sat 14:10"; None when that is not worth
+    saying (at about the reset, or over a week away)."""
+    if not ts:
+        return None
     if ts < reset - ON_PACE_MARGIN_S[FIVE_HOUR]:  # a shaky run-out (D-37)
-        return "about %s, early estimate" % at(ts, now)
-    if ts - reset < 60:
-        return "about the reset"
-    if ts - now > 7 * 86400:
-        return "over a week away"
-    return "%s, past the reset" % at(ts, now)
+        return "maybe 100%% %s" % at(ts, now)
+    if ts - reset < 60 or ts - now > 7 * 86400:
+        return None
+    return "100%% %s" % at(ts, now)
 
 
-def _row(label, value, tone="text"):
-    return {"label": label, "value": value, "tone": tone}
+def _row(label, value, tone="text", **note):
+    return dict({"label": label, "value": value, "tone": tone}, **note)
 
 
 def sentence(v, now):

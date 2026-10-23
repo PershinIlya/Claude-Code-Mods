@@ -159,7 +159,7 @@ class Weekly(TempHome):
         # D-37: 2% in the week's first hour, no typical week. At 1.13 the walk
         # runs out on Sunday, but the estimate is early (the target weighs
         # 94%) and 49% slower it lands under 100: on pace, no color, no
-        # "Runs out"; Details says when, as an early estimate.
+        # "Runs out"; Details notes when, as a maybe.
         from ctempo import band
 
         R = int(MON + 10 * H + 7 * D)
@@ -177,8 +177,9 @@ class Weekly(TempHome):
         w = band.window(v, now)
         self.assertFalse(w["phrase"]["attention"])
         rows = {r["label"]: r for r in w["details"]}
-        self.assertTrue(rows["Runs out"]["value"].endswith(", early estimate"), rows["Runs out"])
-        self.assertEqual(rows["Runs out"]["tone"], "inactive")
+        self.assertNotIn("Runs out", rows)
+        self.assertTrue(rows["Resets"]["note"].startswith("maybe 100% "), rows["Resets"])
+        self.assertEqual(rows["Resets"]["note_tone"], "inactive")
 
     def test_a_drop_reset_is_paced_from_the_drop(self):
         # Review 8 (mod-and-texts#0): the weekly limit is reset early (42% to

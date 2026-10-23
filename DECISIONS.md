@@ -887,6 +887,18 @@ the work. The weights of D-13 still expect a little spend at night (the
 floor), so this week's own evidence runs a few percent high for a user who
 never works at night.
 
+**D-38. Compact Details.** Details grew past the band's room on both
+computers, so it scrolled for a row or two. In the same room: facts that
+belong together share a row, the second a quieter note after a dot (a
+`note` and `note_tone` on a row; the menu bar appends it in the row's
+color): At reset · what goes unused; Resets · when it would reach 100% at
+this pace; or, when it runs out first, Runs out · when it resets. A
+5-hour card went from 5 rows to 3, a week's from 4 to 2. The chart is 64
+px high, not 76. "Updated" shows only once the reading is 5 minutes old,
+when it says something. The week's nights, a 9% tint that was all but
+invisible on a Windows screen, are now a 6% tint and a thin rounded strip
+under the axis at 45%, which reads on any screen.
+
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.
 

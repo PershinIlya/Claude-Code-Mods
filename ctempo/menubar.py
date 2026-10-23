@@ -162,19 +162,21 @@ def chart_lines(w, width):
     return out
 
 
-LABEL_W = len("Will go unused") + 2
+LABEL_W = len("At reset") + 2
 
 
 def detail_lines(w):
     """A window's rows under its bar, the rows of the Desktop band's Details
     (band.details): label and value in columns (Menlo), each row in its
-    tone; plain numbers dim, so the pace and what needs you stand out."""
+    tone (a row's note after a dot, in its color: one color a line); plain
+    numbers dim, so the pace and what needs you stand out."""
     rows = w.get("details") or []
     if not rows:
         return ["%s | size=11 color=%s" % (w["sentence"].replace("|", "/"), DIM)]
     width = max([LABEL_W] + [len(r["label"]) + 2 for r in rows])  # one column for both windows
     return ["%s%s | font=Menlo size=11 trim=false color=%s" % (
-        r["label"].ljust(width), r["value"].replace("|", "/"), TONE.get(r["tone"], DIM)) for r in rows]
+        r["label"].ljust(width), (r["value"] + (" · " + r["note"] if r.get("note") else "")).replace("|", "/"),
+        TONE.get(r["tone"], DIM)) for r in rows]
 
 
 def title_color(ws, dim):

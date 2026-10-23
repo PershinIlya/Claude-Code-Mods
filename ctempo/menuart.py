@@ -88,7 +88,7 @@ def icon(ws, dark, width=24, height=18):
 
 # The chart's margins in points: room for the end ring on the right and the
 # line at 100 on top.
-PAD_L, PAD_R, PAD_T, PAD_B = 1.0, 4.0, 4.0, 1.5
+PAD_L, PAD_R, PAD_T, PAD_B = 1.0, 4.0, 4.0, 4.5  # the bottom holds the nights' strip
 
 
 def _x(c, t, width):
@@ -104,8 +104,9 @@ def chart(c, width, height, dark, tone=None):
     Y = lambda u: (PAD_T + (1 - max(0.0, min(100.0, u)) / 100.0) * (height - PAD_T - PAD_B)) * S  # noqa: E731
     pts = lambda series: [(X(t), Y(u)) for t, u in series]  # noqa: E731
     base, top = Y(0), Y(100)
-    for a, b in c.get("nights") or []:  # pale bands behind the rest
-        cv.fill_between(X(a), X(b), lambda x: top, lambda x: base, hex_color(p["t"], 0.1))
+    for a, b in c.get("nights") or []:  # a faint tint behind the rest, a thin strip under the axis
+        cv.fill_between(X(a), X(b), lambda x: top, lambda x: base, hex_color(p["t"], 0.06))
+        cv.round_rect(X(a), base + 1.5 * S, X(b), base + 3.0 * S, 0.75 * S, hex_color(p["t"], 0.45))
     for t in c["grid"]:
         cv.polyline([(X(t), top), (X(t), base)], 1.0, hex_color(p["t"], 0.22))
     cv.polyline([(PAD_L * S, top), ((width - PAD_R) * S, top)], 1.2, hex_color(p["t"], 0.6), dash=(2.5, 4))

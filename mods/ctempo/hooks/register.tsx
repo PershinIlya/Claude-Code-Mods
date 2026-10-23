@@ -252,7 +252,7 @@ function isPhrase(x: unknown): x is Phrase {
 }
 
 // The order of Details' rows (band.details); a label the mod does not know goes last.
-const ORDER = ['Used', 'Pace', 'Limit', 'At reset', 'Runs out', 'Will go unused', 'Opens', 'Resets', 'Rate']
+const ORDER = ['Used', 'Pace', 'Limit', 'At reset', 'Will go unused', 'Runs out', 'Opens', 'Resets', 'Rate']
 // Rows a card shows in its head: the percent and the pace.
 const HEAD = ['Used', 'Pace', 'Limit']
 const rank = (label: string) => (ORDER.indexOf(label) + ORDER.length + 1) % (ORDER.length + 1)
@@ -275,7 +275,8 @@ export function chartOf(x: unknown): Chart | null {
 
 const isRow = (r: unknown): r is Detail =>
   typeof r === 'object' && r !== null && isStr((r as Detail).label) && isStr((r as Detail).value) &&
-  isStr((r as Detail).tone)
+  isStr((r as Detail).tone) && ((r as Detail).note === undefined || isStr((r as Detail).note)) &&
+  ((r as Detail).note_tone === undefined || isStr((r as Detail).note_tone))
 
 // The CLI's windows, when every one is whole; else the text line is drawn.
 function windowsOf(x: unknown): Win[] | null {
@@ -426,7 +427,8 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const CHART_STYLE =
   '<style>.ctc{--t:#8a867c;--a:#d97757;--r:#d0564c;--y:#c08a1e}' +
   '@media(prefers-color-scheme:dark){.ctc{--t:#a3a19a;--r:#e5695e;--y:#e0b252}}' +
-  '.ctc .nt{fill:var(--t);opacity:.09}.ctc .g{stroke:var(--t);stroke-width:1;opacity:.2}.ctc .lim{stroke:var(--t);stroke-width:.8;stroke-dasharray:2 3;opacity:.6}' +
+  '.ctc .nt{fill:var(--t);opacity:.06}.ctc .ns{fill:var(--t);opacity:.45}' +
+  '.ctc .g{stroke:var(--t);stroke-width:1;opacity:.2}.ctc .lim{stroke:var(--t);stroke-width:.8;stroke-dasharray:2 3;opacity:.6}' +
   '.ctc .ar{fill:var(--a);opacity:.13}.ctc .ac{fill:none;stroke:var(--a);stroke-width:1.8;stroke-linejoin:round}' +
   '.ctc .dt{fill:var(--a)}.ctc .fn{fill:var(--a);opacity:.1}' +
   '.ctc .fc{fill:none;stroke:var(--a);stroke-width:1.6;stroke-dasharray:4 3;opacity:.75}' +
@@ -437,7 +439,7 @@ const CHART_STYLE =
   '.ctc .ex{stroke:var(--r)}.ctc .ey{stroke:var(--y)}' +
   '.ctc text{font:9px -apple-system,"Segoe UI",system-ui,sans-serif;fill:var(--t)}</style>'
 
-export const CHART_H = 76
+export const CHART_H = 64
 // A label's character at 9 px, with some to spare (the system font's widest
 // day names, "Wed", run about 5.5 px a character).
 const LABEL_PX = 6
@@ -463,8 +465,13 @@ export function chartSvg(c: Chart, W: number, alt: string, tone?: string): strin
     CHART_STYLE,
     `<title>${esc(alt)}</title>`,
   ]
+  // The week's nights: a faint tint, and a thin rounded strip under the axis
+  // that reads on any screen.
   for (const [a, b] of c.nights ?? []) {
-    out.push(`<rect class='nt' x='${sx(a)}' y='${pad.t}' width='${r1(sx(b) - sx(a))}' height='${r1(base - pad.t)}'/>`)
+    const x = sx(a)
+    const w = r1(sx(b) - x)
+    out.push(`<rect class='nt' x='${x}' y='${pad.t}' width='${w}' height='${r1(base - pad.t)}'/>`)
+    out.push(`<rect class='ns' x='${x}' y='${base + 2}' width='${w}' height='2' rx='1'/>`)
   }
   for (const t of c.grid) out.push(`<line class='g' x1='${sx(t)}' y1='${pad.t}' x2='${sx(t)}' y2='${base}'/>`)
   out.push(`<line class='lim' x1='${pad.l}' y1='${sy(100)}' x2='${W - pad.r}' y2='${sy(100)}'/>`)
@@ -578,6 +585,10 @@ export function barSvg(w: Win, W: number): string {
   out.push('</svg>')
   return out.join('')
 }
+
+// A reading 5 min old or more: Details says how old.
+export const stale = (updated: number | null | undefined, now: number | undefined): boolean =>
+  typeof updated === 'number' && typeof now === 'number' && now - updated >= 300
 
 // "Updated 3 min ago." from the CLI's own clock, so a stale view says so.
 export function age(updated: number | null | undefined, now: number | undefined): string {
@@ -730,9 +741,16 @@ export const register: Register = (on) => {
                 <Text size="footnote" color="inactive">
                   {r.label}
                 </Text>
-                <Text size="footnote" tabular wrap="truncate-end" color={r.tone === 'text' ? 'text' : r.tone}>
-                  {r.value}
-                </Text>
+                <Box flexDirection="row" flexShrink={1} columnGap="xs">
+                  <Text size="footnote" tabular wrap="truncate-end" color={r.tone === 'text' ? 'text' : r.tone}>
+                    {r.value}
+                  </Text>
+                  {r.note ? (
+                    <Text size="footnote" tabular wrap="truncate-end" color={r.note_tone ?? 'inactive'}>
+                      {`· ${r.note}`}
+                    </Text>
+                  ) : null}
+                </Box>
               </Box>
             ))}
           </Box>
@@ -830,9 +848,12 @@ export const register: Register = (on) => {
         <Box flexDirection="column" rowGap="sm">
           {row}
           {table}
-          <Text size="footnote" color="inactive">
-            {age(current.updated_ts, current.now) || ' '}
-          </Text>
+          {/* How old the reading is, once that is worth a line (5 min). */}
+          {stale(current.updated_ts, current.now) ? (
+            <Text size="footnote" color="inactive">
+              {age(current.updated_ts, current.now)}
+            </Text>
+          ) : null}
         </Box>
       ) : (
         row

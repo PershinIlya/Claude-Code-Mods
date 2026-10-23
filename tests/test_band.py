@@ -117,12 +117,17 @@ class Words(unittest.TestCase):
             return [(r["label"], r["value"], r["tone"]) for r in w["details"]]
 
         h5, wk = band.windows(*STATES["runs out"], NOW)
+        # Running out before the reset: that time, the reset its note.
         self.assertEqual(rows(h5), [("Used", "70%", "text"), ("Pace", "2x slower", "error"),
                                     ("At reset", "about 100%", "text"), ("Runs out", "15:40, 50 min early", "error"),
-                                    ("Resets", "16:30", "text"), ("Rate", "17%/h, 18%/h fits", "text")])
+                                    ("Rate", "17%/h, 18%/h fits", "text")])
+        self.assertEqual(h5["details"][3]["note"], "resets 16:30")
         _, wk = band.windows(*STATES["unused"], NOW)
-        self.assertIn(("Will go unused", "40%", "success"), rows(wk))
+        # What goes unused is the note of where it lands.
+        at = [r for r in wk["details"] if r["label"] == "At reset"][0]
+        self.assertEqual((at["value"], at["note"], at["note_tone"]), ("about 60%", "40% unused", "success"))
         self.assertEqual(rows(wk)[-1], ("Resets", "Fri 04:00", "text"))  # no rate for the week
+        self.assertNotIn("note", wk["details"][-1])  # no time it would run out: no pace in the fixture
         h5, _ = band.windows(*STATES["maxed"], NOW)
         self.assertEqual(rows(h5), [("Used", "100%", "text"), ("Limit", "reached", "error"), ("Resets", "16:30", "text")])
         h5, _ = band.windows(*STATES["idle"], NOW)
@@ -370,14 +375,17 @@ class RunsOutLater(unittest.TestCase):
         return {r["label"]: r for r in band.details(v, NOW)}
 
     def test_a_window_that_lasts_says_when_it_would_run_out(self):
-        r = self.rows(v5(empty_ts=NOW + 2 * H + 38 * 60))["Runs out"]  # 17:18
-        self.assertEqual((r["value"], r["tone"]), ("17:18, past the reset", "inactive"))
-        r = self.rows(vw(empty_ts=MON + 5 * D + 6 * H))["Runs out"]
-        self.assertEqual(r["value"], "Sat 06:00, past the reset")
-        self.assertEqual(self.rows(vw(empty_ts=NOW + 9 * D))["Runs out"]["value"], "over a week away")
+        # The reset, and when it would reach 100% at this pace as its note.
+        r = self.rows(v5(empty_ts=NOW + 2 * H + 38 * 60))["Resets"]  # 17:18
+        self.assertEqual((r["value"], r["note"], r["note_tone"]), ("16:30", "100% 17:18", "inactive"))
+        r = self.rows(vw(empty_ts=MON + 5 * D + 6 * H))["Resets"]
+        self.assertEqual((r["value"], r["note"]), ("Fri 04:00", "100% Sat 06:00"))
+        self.assertNotIn("note", self.rows(vw(empty_ts=NOW + 9 * D))["Resets"])  # over a week away
+        # A shaky run-out (D-37), before the reset: maybe.
+        self.assertEqual(self.rows(vw(empty_ts=MON + 3 * D, shaky=True))["Resets"]["note"], "maybe 100% Thu 00:00")
         # Idle or without a pace: no time.
-        self.assertNotIn("Runs out", self.rows(v5(verdict="idle", empty_ts=NOW + 9 * H)))
-        self.assertNotIn("Runs out", self.rows(v5(verdict="unknown", empty_ts=NOW + 9 * H)))
+        self.assertNotIn("note", self.rows(v5(verdict="idle", empty_ts=NOW + 9 * H))["Resets"])
+        self.assertNotIn("note", self.rows(v5(verdict="unknown", empty_ts=NOW + 9 * H))["Resets"])
 
 
 
