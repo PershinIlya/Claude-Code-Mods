@@ -347,11 +347,12 @@ class NowText(TempHome):
         for k in range(25):
             self.feed(T + k * 300, week=(30, R))
         out = self.now(T + 2 * H)
-        self.assertIn("whole window so far (the level has not moved since the first timed reading, Thu 00:00)", out)
-        self.assertNotIn("recent span too short", out)
+        self.assertIn("this week so far: 30.0 pts, profile expected 44.0 (the level has not moved since the first "
+                      "timed reading, Thu 00:00)", out)
+        self.assertIn("pulled toward the target (no typical week yet), 1.00: this week counts 81%; uncertain by +/-22%", out)
         # The next week, a new session's first reading only (D-06): no timed reading yet.
         self.feed(T + 7 * D, week=(30, R + int(7 * D)), sid="s2")
-        self.assertIn("whole window so far (no timed reading yet)", self.now(T + 7 * D + 2 * H))
+        self.assertIn("(no timed reading yet)", self.now(T + 7 * D + 2 * H))
 
     def test_typical_and_assumed_fallbacks_name_their_cause(self):
         # Review 6 (E-display-commands-weekly#3): a cut lookback whose window is
@@ -361,11 +362,11 @@ class NowText(TempHome):
         # Saturday 02:00 and the readings from Monday 09:00 are 0.
         R0 = int(MON - 2 * D + 2 * H)
         R1 = R0 + int(7 * D)
-        still = "the level has not moved since the first timed reading, Mon 09:00; the window is still at 0%"
+        still = "no evidence from this week yet (the level has not moved since the first timed reading, Mon 09:00)"
         cases = [  # (closed week at 70%, timed readings, the label)
-            (True, True, "your typical week (%s)" % still),
-            (False, True, "assumed (%s)" % still),
-            (False, False, "assumed (no timed reading yet; the window is still at 0%)"),  # a new session's first reading
+            (True, True, still + "\n" + " " * 27 + "pulled toward your typical week, 0.70: this week counts 0%"),
+            (False, True, still + "\n" + " " * 27 + "pulled toward the target (no typical week yet), 1.00: this week counts 0%"),
+            (False, False, "no evidence from this week yet (no timed reading yet)"),  # a new session's first reading
         ]
         for i, (closed, timed, label) in enumerate(cases):
             self.use_home("zero-%d" % i)
@@ -377,7 +378,7 @@ class NowText(TempHome):
             for k in range(25):
                 self.feed(MON + 9 * H + k * 300, week=(0, R1))
             out = self.now(MON + 11 * H)
-            self.assertIn("intensity       %.2f     %s\n" % (0.7 if closed else 1.0, label), out)
+            self.assertIn("intensity       %.2f     %s" % (0.7 if closed else 1.0, label), out)
             self.assertNotIn("no recent data", out)
             self.assertNotIn("no data yet", out)
         # A week that opened at 10:00, read at 1% and 2% since: no earlier week,
@@ -388,7 +389,10 @@ class NowText(TempHome):
         self.feed(MON + 10 * H + 10 * M, week=(1, R2))
         self.feed(MON + 10 * H + 40 * M, week=(2, R2))
         out = self.now(MON + 11 * H)
-        self.assertIn("intensity       1.00     assumed (recent span too short; the window is too new, opened Mon 10:00)\n", out)
+        self.assertIn("this week's last 1h 00m: spent 2.0 pts, profile expected 0.6", out)
+        self.assertIn("this week counts 6%; uncertain by +/-49%", out)
+        # 2% in its first hour: the low edge does not overshoot, so no "Ease off" (D-37).
+        self.assertIn("Weekly window: on pace", out)
 
     def test_data_age_ignores_heartbeats(self):
         # Review 5 (X-integration#2): check measures data age from readings

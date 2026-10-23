@@ -8,8 +8,9 @@ earlier, to see by eye how the model does.
             the week at its intensity along the hour-of-week profile (slower
             at night, down to the profile's floor, steeper in the hours you
             usually work); capped at 100
-  fan       the 5 hours while the rate is still an early estimate: the lines
-            at that rate FAN lower and FAN higher, each capped at 100
+  fan       the forecast at its slope `spread` lower and higher, each capped
+            at 100: how sure it is (pace.SPREAD; the week's narrows as the
+            week brings evidence, D-37)
   ghosts    forecasts made earlier in this window (an hour ago for the 5
             hours, a day and 2 days ago for the week), drawn from snapshots
             `snapshot` keeps as the status line and the band run
@@ -34,7 +35,6 @@ SNAP_EVERY = {FIVE_HOUR: 15 * 60, SEVEN_DAY: 2 * 3600}
 KEEP = 60
 # The forecasts drawn as ghosts: made this long ago (within a third of it).
 GHOSTS = {FIVE_HOUR: (3600,), SEVEN_DAY: (86400, 2 * 86400)}
-FAN = 0.4  # the spread of an early 5-hour estimate: its rate this share lower and higher
 HOUR = profile.HOUR
 WEEK = 7 * 86400
 # A day at the week's edge shorter than this goes unnamed: its name would
@@ -142,15 +142,18 @@ def _at(points, t):
     return points[-1][1]
 
 
-def _fan(used, rate, t0, t1):
-    """[low, high]: the lines at the rate FAN lower and higher, or None when
-    they hardly differ (idle, or both at 100 at about the same time)."""
-    if not rate:
+def _fan(v, w, used, slope, t0, t1):
+    """[low, high]: the forecast at its slope `spread` lower and higher
+    (pace.SPREAD, weekly spread), each capped at 100, or None when they
+    hardly differ (idle, or both at 100 at about the same time)."""
+    spread = v.get("spread")
+    if not slope or not spread:
         return None
-    lo, hi = _line(used, rate * (1 - FAN), t0, t1), _line(used, rate * (1 + FAN), t0, t1)
+    lo = _forecast(v, w, used, slope * (1 - spread), t0, t1)
+    hi = _forecast(v, w, used, slope * (1 + spread), t0, t1)
     if not lo or max(_at(hi, t) - _at(lo, t) for t, _ in lo + hi) < 1.0:
         return None
-    return [[[int(t), round(u, 2)] for t, u in lo], [[int(t), round(u, 2)] for t, u in hi]]
+    return [[[int(t), round(u, 2)] for t, u in _thin(p, t0, t1, 60)] for p in (lo, hi)]
 
 
 def _days(t0, t1):
@@ -231,9 +234,7 @@ def build(store, v, now, wake=(8, 23)):
     forecast = []
     if v["verdict"] not in ("maxed", "unknown"):
         forecast = _forecast(v, w, used, _slope(v), now, t1)
-    fan = None
-    if window == FIVE_HOUR and forecast and v.get("rate_source") == "interpolated":
-        fan = _fan(used, _slope(v), now, t1)
+    fan = _fan(v, w, used, _slope(v), now, t1) if forecast else None
     ghosts = []
     kept = store.meta_get(_key(window)) or {}
     log = kept.get("log", []) if kept.get("wid") == wid else []

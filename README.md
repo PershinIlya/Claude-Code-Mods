@@ -57,14 +57,14 @@ One row per window: its name, a small bar, the percent, and its pace.
   `profile.override`, else 8 to 23, as pale bands): what was used (the line over a pale area, a dot per
   reading while there are few), now (a hairline), the forecast to the reset
   (dashed, in the pace's color when it needs you: red when it runs out or
-  the week blocks it, yellow when it may run out or passes your target),
+  the week blocks it, yellow when it may run out or passes your target,
+  inside a pale fan: how sure it is, wide early in the window and narrow
+  near its reset),
   and the forecasts made earlier in the window in grey, an hour ago for the
   5 hours, a day and 2 days ago for the week, so you can see by eye how
   well the forecast holds. The week's forecast follows your usual hours
   (slower at night; a straight line only while the profile is uniform:
-  no transcripts and nothing learned yet); while
-  the 5-hour rate is an early estimate, a pale fan spans the rate 40% lower
-  to 40% higher. The grid marks hours (5 hours) or the days (the week)
+  no transcripts and nothing learned yet). The grid marks hours (5 hours) or the days (the week)
   (D-36).
 
 The terminal status line says the same in text: `━` used, `╍` forecast, `┈`
@@ -191,7 +191,12 @@ below 100 keeps never counts; never while the 5h burn rate is not known yet).
   100);
 - multiplier = allowed / current;
 - projection = used + rate × hours left, capped at 100, with the time it hits
-  100 if that comes first.
+  100 if that comes first;
+- uncertainty: the rate is taken as ±25% (±40% while fewer than 3 readings
+  carry the fit), so the spread of where you land grows with the time left
+  and narrows toward the reset (the chart's fan). "Runs out" is red only when
+  it runs out even 25% slower; an early estimate warns only of what holds at
+  its low edge (D-37).
 
 **Weekly window**
 
@@ -208,19 +213,25 @@ below 100 keeps never counts; never while the 5h burn rate is not known yet).
 - on-pace level = target × (1 − E); after an early reset that keeps the same
   reset time, it is paced from that reset instead: target × the share of the
   span from it to the reset that has passed; delta = used − on-pace;
-- intensity = what you spent over your last 24 awake hours / what the profile
-  expected for those hours (at target pace). Spend in a long gap you did not
-  observe is spread over the gap by the profile, so only its expected part
-  counts. When the 24 hours reach back into the previous week, its hours after
-  it hit 100% (blocked until the reset) are left out of the expected part; its
-  other hours after its last reading count as no spend, since a last day spent
-  on claude.ai only and an idle one leave the same readings. Right after
-  install the count starts at the first timed reading, and until the level
-  moves the whole window so far stands in (the typical week while the window
-  is still at 0, or within the first 2% of a week's expected spend after an
-  early reset);
+- intensity = what you spent over this week's last 24 awake hours / what
+  the profile expected for those hours (at target pace), pulled toward your
+  typical week (or the target, before ctempo has seen a whole week): the
+  typical week counts as much as a tenth of a week's spend would, so right
+  after a reset it leads, and as the week brings evidence it fades. The count
+  never reaches back past the reset: the last days of a week (when quota
+  that would go unused gets spent) say little about the next one (D-37).
+  Spend in a long gap you did not observe is spread over the gap by the
+  profile, so only its expected part counts. Right after install the count
+  starts at the first timed reading, and until the level moves the whole
+  week so far stands in (nothing, while it is still at 0);
+- uncertainty: the intensity is taken as ±50% while the typical week leads,
+  narrowing with the week's evidence (±50% × √(0.1 / (0.1 + its share))).
+  The forecast's spread grows with the share of the week still ahead, so it
+  is widest after a reset and narrow near the next one (the chart's fan);
 - projection = used + intensity × target × E; "dry" is where an hour-by-hour
-  walk at that intensity crosses 100%;
+  walk at that intensity crosses 100%; red only when the walk at the low
+  edge crosses it too, and an early estimate (the typical week leading)
+  warns only of what holds at its low edge;
 - multiplier = max(0, target − used) / (intensity × target × E): 0 once you
   are past a target below 100, as for the 5-hour window.
 
@@ -477,7 +488,7 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 537 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 536 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
 claude plugin test mods/ctempo                 # 73 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders

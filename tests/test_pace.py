@@ -67,6 +67,14 @@ class FiveHour(TempHome):
         self.assertAlmostEqual(v["projected_raw"], 110.0)
         self.assertEqual(v["projected"], 100.0)
         self.assertAlmostEqual(v["cap_ts"], self.t + 100 * M)  # (100 - 50) / 30 h
+        # D-37: 25% slower (22.5 %/h) it lasts to the reset: may run out, yellow.
+        self.assertFalse(v["sure_out"])
+        self.assertEqual(v["severity"], "warn")
+        # 90 at 60 %/h with 70 min left: even at 45 %/h it runs out 57 min early: red.
+        for k, used in enumerate((60, 70, 80, 90)):
+            self.feed(self.t + (20 + 10 * k) * M, five=(used, self.R))
+        v = pace.five_hour(self.st, self.t + 50 * M, self.cfg)
+        self.assertTrue(v["sure_out"])
         self.assertEqual(v["severity"], "alert")
 
     def test_heartbeats_never_make_a_burst(self):

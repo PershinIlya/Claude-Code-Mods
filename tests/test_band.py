@@ -193,7 +193,7 @@ class Words(unittest.TestCase):
         # the week ran out 50 min before Friday's reset, and the band said "Out".
         reset = int(MON + 4 * D + 4 * H)
         v = vw(used=17, verdict="on_pace", multiplier=0.98, projected=100, dry_ts=reset - 50 * 60,
-               severity="warn", intensity_source="window", E=0.83)
+               severity="warn", intensity_source="typical", E=0.83)
         self.assertEqual(words(band.phrase(v, NOW)), "On pace")
         self.assertEqual(band.bar_kind(v), "rough")
         self.assertIn("On pace", band.sentence(v, NOW))
@@ -204,11 +204,12 @@ class Words(unittest.TestCase):
         self.assertIn("May run out at 16:00", band.sentence(h5, NOW))
 
     def test_early_in_the_week_the_window_average_is_rough(self):
+        # D-37: while the typical week weighs more than this week's spend.
         early = vw(used=17, verdict="slow_down", multiplier=0.7, projected=100, dry_ts=MON + 2 * D,
-                   severity="alert", intensity_source="window", E=0.85)
+                   severity="alert", intensity_source="typical", E=0.85)
         p = band.phrase(early, NOW)
         self.assertEqual((words(p), p["tone"]), ("~1.5x slower", "warning"))
-        later = dict(early, E=0.5)
+        later = dict(early, intensity_source="recent", E=0.5)
         self.assertEqual(band.phrase(later, NOW)["tone"], "error")
 
     def test_a_milder_run_out_is_soft(self):

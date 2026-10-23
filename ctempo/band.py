@@ -69,14 +69,14 @@ def times(m):
 ON_PACE_MARGIN_S = {FIVE_HOUR: 10 * 60, SEVEN_DAY: 6 * 3600}
 # Early in a week paced from the window alone (no profile, no recent hours to
 # go by), one day's work is stretched over the rest: a rough estimate.
-EARLY_WEEK_E = 0.75
 
 
 def _rough(v):
+    """An early estimate: the 5 hours on fewer readings than a fit needs, the
+    week while the typical week weighs more than its own spend (D-37)."""
     if v["window"] == FIVE_HOUR:
         return v.get("rate_source") == "interpolated"
-    source = v.get("intensity_source")
-    return source in ("typical", "assumed") or (source == "window" and (v.get("E") or 0) > EARLY_WEEK_E)
+    return v.get("intensity_source") in ("typical", "assumed")
 
 
 def _out(v):
@@ -84,6 +84,8 @@ def _out(v):
     within the margin of the reset."""
     out = v.get("cap_ts") if v["window"] == FIVE_HOUR else v.get("dry_ts")
     if out and v.get("reset_ts") and v["reset_ts"] - out <= ON_PACE_MARGIN_S[v["window"]]:
+        return None
+    if v.get("shaky"):  # an early estimate's run-out that its low edge escapes (D-37)
         return None
     return out
 
@@ -231,6 +233,8 @@ def details(v, now):
 def _later(ts, reset, now):
     """When a window that lasts to its reset would run out at this pace:
     "Sat 14:10, past the reset"."""
+    if ts < reset - ON_PACE_MARGIN_S[FIVE_HOUR]:  # a shaky run-out (D-37)
+        return "about %s, early estimate" % at(ts, now)
     if ts - reset < 60:
         return "about the reset"
     if ts - now > 7 * 86400:

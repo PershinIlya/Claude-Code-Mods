@@ -8,7 +8,7 @@ import os
 import unittest
 from unittest import mock
 
-from ctempo import commands
+from ctempo import commands, weekly
 from ctempo.config import FIVE_HOUR, SEVEN_DAY
 from ctempo.store import HEARTBEAT, Store
 
@@ -66,7 +66,9 @@ class Check(TempHome):
         res = self.result(now)
         self.assertTrue(res["ok"])
         self.assertTrue(res["seven_day"]["harvestable"])
-        self.assertAlmostEqual(res["seven_day"]["projected_unused"], 60)
+        # Idle for a day, but the target still weighs (D-37): some spend is expected.
+        i = weekly.PRIOR_SHARE / (1 / 7 + weekly.PRIOR_SHARE)
+        self.assertAlmostEqual(res["seven_day"]["projected_unused"], 60 - i * 100 / 7)
 
     def test_weekly_harvest_waits_while_5h_runs_dry(self):
         r7 = int(MON + 7 * D)
@@ -466,8 +468,10 @@ class Check(TempHome):
         # 85, it refused a 5h leftover as "already tight" and said go on the
         # week's ~15% in the same JSON, which takes the week to 100.
         self.cfg["target_week"] = 90
-        cases = ((92, 5, "warn", 0, False), (85, 10, "dim", 5, False), (85, 5, "opportunity", 5, True),
-                 (70, 10, "opportunity", 20, True))
+        # Idle for a day, the target still weighs (D-37): 5.3 points expected.
+        spend = weekly.PRIOR_SHARE / (1 / 7 + weekly.PRIOR_SHARE) * 90 / 7
+        cases = ((92, 5, "warn", 0, False), (85, 10, "dim", 0, False), (75, 5, "opportunity", 15 - spend, True),
+                 (70, 10, "opportunity", 20 - spend, True))
         for used, min_free, tone, spare, go in cases:
             with self.subTest(used=used, min_free=min_free):
                 self.fresh_store("tw-%d-%d.db" % (used, min_free))
@@ -478,12 +482,12 @@ class Check(TempHome):
                 self.assertEqual(k["harvestable"], go, res["reasons"])
                 self.assertEqual(res["ok"], go)
                 self.assertEqual(commands.views(self.st, self.cfg, now)[1]["severity"], tone)
-                self.assertAlmostEqual(k["projected_unused"], 100 - used)
+                self.assertAlmostEqual(k["projected_unused"], 100 - used - spend)
                 self.assertAlmostEqual(k["spare"], spare)
                 if used >= 90:
                     self.assertIn("weekly window is at or above its 90% target", res["reasons"])
                 if go:
-                    self.assertIn("weekly window ends in 1d 00h with ~%d%% projected to expire below its 90%% target"
+                    self.assertIn("weekly window ends in 1d 00h with ~%.0f%% projected to expire below its 90%% target"
                                   % spare, res["reasons"])
         # The week at 85 with the 5h window in its tail: no go on either.
         self.fresh_store("tw-tail.db")

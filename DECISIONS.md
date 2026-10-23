@@ -442,7 +442,9 @@ intensity and the projection keep the full week's normalization. Measured from
 behind for days. In its first hour, the whole-window fallback divided the new
 level by the old week's elapsed share: `×9+▲ →2%` (found in review). Normal
 instances are unchanged. Intensity uses the last 24 *awake* hours, walking
-back through nights and weekends, and crosses into the previous weekly window
+back through nights and weekends (since D-37 never past the window's start,
+and pulled toward the typical week; the rest of this paragraph on the
+previous window describes the rule before it), and crosses into the previous weekly window
 when needed (spend = previous window's peak minus its value at the lookback
 start, plus the current window from 0). The previous window is the one whose
 reset is nearest the current window's start, never one that did not end
@@ -842,6 +844,48 @@ when the quota would run out at this pace even when the window lasts:
 early when it comes before the reset (as before), in grey with "past the
 reset" when it does not (the 5 hours at the fitted rate, the week walked
 along the profile up to 4 weeks on; "over a week away" beyond 7 days).
+
+**D-37. Forecasts with their uncertainty.** Five hours after a weekly reset,
+at 2%, the person's band said "Ease off" and "Runs out about Thu 13:30". The
+lookback (D-15) reached back past the reset into the old week's last day,
+when the quota that would go unused got spent (ctempo itself suggests it),
+and that burst set the new week's pace. They asked for a forecast whose
+spread is wide far from the reset and narrows toward it. Now:
+
+- The week's lookback stops at the window's start: what was spent before a
+  reset never counts for the week after it. The previous-window walk, its
+  capped-hours rule and its pick among drop windows are gone with it.
+- Intensity = (spent in the lookback + K × target × prior) / (target ×
+  (the lookback's profile share + K)), K = 0.1 of a week: the evidence
+  pulled toward the prior, your typical week (M / target), or 1 (the target)
+  before a whole week was seen. It is the mean of a gamma prior on the
+  spend rate updated by what this week spent: right after a reset the prior
+  leads, and its pull fades as the week brings evidence (to 30 to 40% with a
+  full 24 awake hours of it). A cut lookback with no step yet (D-15) uses
+  the whole week so far, which started at 0, or nothing while it is still at
+  0. "Idle" is a lookback of at least 1% of a week's share that spent
+  nothing; it still expects some spend from the prior.
+- Spread: the intensity is taken as ±50% × √(K / (K + share)), from 50%
+  with no evidence to 27 to 32% with a full lookback; the 5-hour rate as
+  ±25%, or ±40% while fewer than `rate_min_samples` readings carry the fit
+  (the old fan). Since the spend to come is the rate times what is left of
+  the window, the spread of the landing level grows with the time to the
+  reset and narrows near it. The chart's fan is that band for both windows.
+- "Runs out" is red (alert, a notification) only when it runs out at the
+  low edge too (more than 10 minutes or 6 hours early); otherwise yellow,
+  "may". An early estimate (the 5 hours on fewer readings than a fit needs,
+  the week while the prior weighs more than the evidence) warns only of what
+  holds at its low edge: a run-out it escapes there is `shaky`, with no
+  "Runs out" and no color (Details shows the time in grey, "early
+  estimate"), and "slow down" becomes "on pace" unless the multiplier at
+  the low edge is under the threshold too. 2% in the first hour of a week,
+  with nothing known, now reads "On pace" where it read "Ease off".
+
+The 5-hour rate itself is unchanged (the least-squares slope of the last 20
+minutes, D-11): its window is short and its reset close, so the spread does
+the work. The weights of D-13 still expect a little spend at night (the
+floor), so this week's own evidence runs a few percent high for a user who
+never works at night.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.

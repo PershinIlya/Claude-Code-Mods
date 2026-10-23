@@ -4,21 +4,31 @@
   on_pace    = target * (1 - E)                     (after a drop reset, over
                the span since the drop: target * (1 - E / span))
   delta      = used - on_pace                       (+ ahead, - behind)
-  intensity  = actual spend over the last N active hours
-               / (target * profile share of those hours, blocked ones left out)
+  intensity  = (spent in this week's last N awake hours + K * typical week)
+               / (target * (profile share of those hours + K))
+               the evidence of this week, pulled toward your typical week (or
+               the target, while there is none) as if it were K of a week's
+               expected spend; the pull fades as the week brings evidence
+  spread     = SPREAD * sqrt(K / (share + K)), the intensity's relative
+               uncertainty: wide at the start of a week, narrower with evidence
   projected  = used + intensity * target * E        (capped at 100)
   multiplier = max(0, target - used) / (intensity * target * E)
 
-`dry` is where the hour-by-hour walk at that intensity crosses 100%.
+`dry` is where the hour-by-hour walk at that intensity crosses 100%; `sure`
+when the walk at the low edge (intensity * (1 - spread)) does too.
 """
+
+import math
 
 from . import config, profile
 from .config import DURATION, FIVE_HOUR, SEVEN_DAY
-from .pace import below_target, current_used, over_target, spare, verdict_for
+from .pace import below_target, current_used, early, over_target, spare, verdict_for
 from .store import FIRST, FRESH
 
-MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend
-MIN_WINDOW_SHARE = 0.02
+MIN_EXPECTED_SHARE = 0.01  # the lookback must cover at least 1% of a week's expected spend to say "idle"
+SURE_MARGIN_S = 6 * 3600  # band.ON_PACE_MARGIN_S for the week
+PRIOR_SHARE = 0.1  # the typical week weighs as much as this share of a week's evidence
+SPREAD = 0.5  # the intensity's relative uncertainty with no evidence of this week
 
 
 def _start_level(store, wid, a, w, max_gap):
@@ -53,52 +63,19 @@ def _start_level(store, wid, a, w, max_gap):
 
 
 def spend_since(store, inst, t0, now, used, w, max_gap):
-    """Points spent between t0 (or the earliest known point after it) and now.
-
-    Walks back into the previous weekly window when the lookback crosses a
-    reset. Returns (points, effective_start, cut, capped), cut when the count
-    had to start at a first FRESH reading after the lookback start, capped
-    the span (lo, hi) of the previous window after it reached 100%: nothing
-    could be spent there, so it is no expected spend either.
+    """Points spent in this window instance between t0 (or the earliest
+    known point after it) and now. Never before the window's start: what was
+    spent before a reset says little about the week after it (its last days
+    are where quota left over gets spent). Returns (points, effective_start,
+    cut), cut when the count had to start at a first FRESH reading after t0.
     """
     a = max(t0, inst["start_ts"])
-    cut, capped = False, (now, now)
     if a <= inst["start_ts"]:
-        v0 = 0.0  # a weekly window starts empty
-    else:
-        k = _start_level(store, inst["id"], a, w, max_gap)
-        if k is None:
-            return 0.0, now, True, capped
-        cut = k[0] > a
-        a, v0 = k
-    actual = max(0.0, used - v0)
-    if t0 < inst["start_ts"] and a <= inst["start_ts"]:
-        # Not a window that never ended ('shift'), nor one a drop reset
-        # replaced ('drop', D-10): the window that replaced it ends at the
-        # same reset, give or take the seconds resets_at wobbles (D-08), and
-        # holds the spend since the drop. Which one was closer was chance.
-        prev = store.db.execute(
-            "SELECT id, start_ts, max_used FROM windows WHERE window=? AND id!=? "
-            "AND ABS(reset_ts - ?) <= 3600 AND IFNULL(close_reason, '') NOT IN ('shift', 'drop') "
-            "ORDER BY ABS(reset_ts - ?), id DESC LIMIT 1",
-            (SEVEN_DAY, inst["id"], inst["start_ts"], inst["start_ts"]),
-        ).fetchone()
-        if prev is not None:
-            a2 = max(t0, prev[1])
-            k = (a2, 0.0) if a2 <= prev[1] else _start_level(store, prev[0], a2, w, max_gap)
-            if k is not None:
-                actual += max(0.0, prev[2] - k[1])
-                a, cut = k[0], k[0] > a2
-                if prev[2] >= 100.0:
-                    # Blocked from the cap to the reset. A FIRST reading at
-                    # 100 still bounds the moment it got there.
-                    cap = store.db.execute(
-                        "SELECT MIN(ts) FROM samples WHERE window_id=? AND flag IN (?, ?) AND used_pct>=100",
-                        (prev[0], FRESH, FIRST),
-                    ).fetchone()[0]
-                    if cap is not None:
-                        capped = (max(a, cap), inst["start_ts"])
-    return actual, a, cut, capped
+        return max(0.0, used), a, False  # a weekly window starts empty
+    k = _start_level(store, inst["id"], a, w, max_gap)
+    if k is None:
+        return 0.0, now, True
+    return max(0.0, used - k[1]), k[0], k[0] > a
 
 
 def exchange_rate(store, now, days=28):
@@ -162,36 +139,40 @@ def weekly(store, now, cfg, reading=None, prof=None):
              profile_source=info["source"], awake_hours=info["awake_hours"], weekly_typical=info["weekly_total"],
              last_seen=inst["last_seen"])
 
-    # Intensity over the last N awake hours (the lookback may cross a reset).
+    # Intensity over the last N awake hours of this window, pulled toward the
+    # typical week (D-37).
     hours = float(cfg["profile"]["active_hours_lookback"])
     t0 = profile.active_lookback(awake, now, hours, 7 * 86400)
     max_gap = float(cfg["profile"]["max_gap_hours"]) * profile.HOUR
-    actual, t_eff, cut, capped = spend_since(store, inst, t0, now, used, w, max_gap)
-    share = (profile.share_between(w, t_eff, now) - profile.share_between(w, *capped)) / total
-    intensity, source = None, None
+    actual, t_eff, cut = spend_since(store, inst, t0, now, used, w, max_gap)
+    share = profile.share_between(w, t_eff, now) / total if t_eff < now else 0.0
     # Readings are whole percents: a lookback cut short at the first reading
     # (install, first sighting late in the window) that has not seen a step
-    # yet knows nothing, so its zero is not "idle"; nor is the whole window's
-    # while it is still at 0 (the typical week stands in).
-    if share >= MIN_EXPECTED_SHARE and t_eff < now and not (cut and actual <= 0):
-        intensity, source = actual / (tgt * share), "recent"
-    elif elapsed >= MIN_WINDOW_SHARE and not (cut and used <= 0):
-        intensity, source = used / (tgt * elapsed), "window"
-    elif info["weekly_total"]:
-        intensity, source = info["weekly_total"] / tgt, "typical"
-    else:
-        intensity, source = 1.0, "assumed"
-    v.update(intensity=intensity, intensity_source=source, lookback_start=t_eff, lookback_cut=cut,
+    # yet knows nothing. The window so far stands in (it started at 0),
+    # unless it is still at 0: that is no news either (D-15).
+    kind = "recent"
+    if cut and actual <= 0:
+        actual, share, kind = (used, elapsed, "window") if used > 0 else (0.0, 0.0, "none")
+    prior, prior_source = (info["weekly_total"] / tgt, "typical") if info["weekly_total"] else (1.0, "assumed")
+    intensity = (actual + PRIOR_SHARE * tgt * prior) / (tgt * (share + PRIOR_SHARE))
+    weight = share / (share + PRIOR_SHARE)  # how much this week's own spend counts
+    source = kind if weight >= 0.5 else prior_source
+    spread = SPREAD * math.sqrt(PRIOR_SHARE / (share + PRIOR_SHARE))
+    v.update(intensity=intensity, intensity_source=source, evidence=kind, intensity_weight=weight, intensity_prior=prior,
+             prior_source=prior_source, spread=spread, lookback_start=t_eff, lookback_cut=cut,
              lookback_actual=actual, lookback_expected=tgt * share)
 
     remaining_spend = intensity * tgt * E
     raw = used + remaining_spend
-    dry = None
+    dry = sure = None
     if raw >= 100.0 and used < 100.0:
         dry = profile.walk_to(w, now, reset, intensity * tgt / total, 100.0 - used)
+        # Runs out even at the low edge of the estimate: a firm "Runs out".
+        low = profile.walk_to(w, now, reset, intensity * (1 - spread) * tgt / total, 100.0 - used)
+        sure = low is not None and reset - low > SURE_MARGIN_S
     # Past a target below 100 there is nothing left to allow: 0, as for 5h.
     mult = max(0.0, tgt - used) / remaining_spend if remaining_spend > 1e-9 else None
-    v.update(projected=min(100.0, raw), projected_raw=raw, dry_ts=dry, multiplier=mult,
+    v.update(projected=min(100.0, raw), projected_raw=raw, dry_ts=dry, sure_out=bool(sure), multiplier=mult,
              expire=max(0.0, 100.0 - min(100.0, raw)), unused_at_reset=max(0.0, 100.0 - min(100.0, raw)))
     # For the chart (chart.py): the profile and the walk's percent per share.
     v["_weights"], v["_path_k"] = w, intensity * tgt / total
@@ -201,21 +182,22 @@ def weekly(store, now, cfg, reading=None, prof=None):
         v["empty_ts"] = dry or profile.walk_to(w, now, now + 28 * 86400, intensity * tgt / total, 100.0 - used)
     if used >= 100.0:
         v["verdict"] = "maxed"
-    elif source == "recent" and actual <= 0:
+    elif share >= MIN_EXPECTED_SHARE and actual <= 0:
         v["verdict"] = "idle"
     else:
         v["verdict"] = verdict_for(mult, cfg)
+        early(v, source in ("typical", "assumed"), cfg)
     v["in_tail"] = (reset - now) <= float(cfg["tail"]["seven_day_hours"]) * 3600
     v["severity"] = _severity(v, cfg)
     return v
 
 
 def _severity(v, cfg):
-    # The 5h tiers (pace.severity): red needs a dry time and a slow down
-    # verdict; at or above a target below 100 is yellow, idle included; green
+    # The 5h tiers (pace.severity): red needs a dry time that holds at the
+    # low edge of the estimate and a slow down verdict; at or above a target below 100 is yellow, idle included; green
     # counts only what expires below the target, as `check` does.
-    dry = v.get("dry_ts") is not None
-    if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
+    dry = v.get("dry_ts") is not None and not v.get("shaky")
+    if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down" and v.get("sure_out", True)):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"

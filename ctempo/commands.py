@@ -146,24 +146,25 @@ def _print_week(v, ppw, now):
         "  on-pace level  %5.1f%%   you are %+.1f points %s"
         % (v["on_pace"], v["delta"], "ahead (spending faster than your profile)" if v["delta"] > 0 else "behind (surplus)")
     )
-    why = "recent span too short"
-    if v["lookback_cut"] and v["lookback_actual"] <= 0:
+    # This week's evidence, pulled toward the typical week (D-37).
+    cut = ""
+    if v["lookback_cut"]:
         # A lookback cut short at the first timed reading knows nothing
         # until the level moves (D-15).
-        why = ("no timed reading yet" if v["lookback_start"] >= now
+        cut = ("no timed reading yet" if v["lookback_start"] >= now
                else "the level has not moved since the first timed reading, %s" % render.dhm(v["lookback_start"]))
-    if v["intensity_source"] in ("typical", "assumed"):
-        # Nor could the whole window stand in (D-15): it is still at 0 after
-        # a cut lookback (no news either), or too little of it has passed.
-        why += ("; the window is still at 0%" if v["lookback_cut"] and v["used"] <= 0
-                else "; the window is too new, opened %s" % render.dhm(v["start_ts"]))
-    src = {
-        "recent": "last %s: spent %.1f pts, profile expected %.1f" % (dur(now - v["lookback_start"]), v["lookback_actual"], v["lookback_expected"]),
-        "window": "whole window so far (%s)" % why,
-        "typical": "your typical week (%s)" % why,
-        "assumed": "assumed (%s)" % why,
-    }
-    print("  intensity      %5.2f     %s" % (v["intensity"], src.get(v["intensity_source"], "")))
+    if v["evidence"] == "none":
+        seen = "no evidence from this week yet (%s)" % (cut or "it has just begun")
+    elif v["evidence"] == "window":
+        seen = "this week so far: %.1f pts, profile expected %.1f (%s)" % (
+            v["lookback_actual"], v["lookback_expected"], cut)
+    else:
+        seen = "this week's last %s: spent %.1f pts, profile expected %.1f" % (
+            dur(now - v["lookback_start"]), v["lookback_actual"], v["lookback_expected"])
+    prior = "your typical week" if v["prior_source"] == "typical" else "the target (no typical week yet)"
+    print("  intensity      %5.2f     %s" % (v["intensity"], seen))
+    print("                           pulled toward %s, %.2f: this week counts %d%%; uncertain by +/-%d%%"
+          % (prior, v["intensity_prior"], round(v["intensity_weight"] * 100), round(v["spread"] * 100)))
     if v.get("dry_ts"):
         print("  projection     runs dry ~%s, %s before the reset" % (render.dhm(v["dry_ts"]), dur(v["reset_ts"] - v["dry_ts"])))
     else:

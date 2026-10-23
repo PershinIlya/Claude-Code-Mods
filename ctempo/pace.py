@@ -8,6 +8,10 @@ from .config import FIVE_HOUR
 from .store import FIRST, FRESH
 
 IDLE_RATE = 0.05  # %/h; below this a fitted slope counts as idle
+# The rate's relative uncertainty: an early estimate (fewer than
+# rate_min_samples readings) or a fitted one (D-37).
+SPREAD = {"interpolated": 0.4, "lsq": 0.25}
+SURE_MARGIN_S = 10 * 60  # band.ON_PACE_MARGIN_S for the 5 hours
 
 
 def lsq_slope(points):
@@ -96,6 +100,18 @@ def level_at(path, t):
     return path[-1][1]
 
 
+def early(v, rough, cfg):
+    """D-37: an early estimate warns only of what holds at its low edge. A
+    run-out that does not is `shaky` (no "Runs out", no color); slow down
+    becomes on pace unless it overshoots at the low edge too."""
+    out = v.get("cap_ts") if v["window"] == FIVE_HOUR else v.get("dry_ts")
+    v["shaky"] = bool(rough and out and not v.get("sure_out"))
+    m, spread = v.get("multiplier"), v.get("spread") or 0.0
+    if rough and v["verdict"] == "slow_down" and m is not None and spread < 1:
+        if m / (1 - spread) >= float(cfg["verdict"]["slow_down"]):
+            v["verdict"] = "on_pace"
+
+
 def verdict_for(mult, cfg):
     th = cfg["verdict"]
     if mult is None:
@@ -167,6 +183,7 @@ def five_hour(store, now, cfg, reading=None):
             rate, source = max(0.0, s), "lsq" if enough else "interpolated"
     v["rate"] = rate
     v["rate_source"] = source
+    v["spread"] = SPREAD.get(source)
     # When the level was last read at what it is now: the start of a nowcast
     # (band.level). A FIRST reading's timing may be stale (level_path), so not those.
     at = [ts for ts, u in fresh if u >= used - 1e-9 and ts <= now]
@@ -190,12 +207,16 @@ def five_hour(store, now, cfg, reading=None):
         cap_ts = None
         if raw >= 100.0 and used < 100.0:
             cap_ts = now + (100.0 - used) / rate * 3600.0
+            # Runs out even at the low edge of the rate: a firm "Runs out".
+            low = rate * (1 - SPREAD[source])
+            v["sure_out"] = low > 0 and reset - (now + (100.0 - used) / low * 3600.0) > SURE_MARGIN_S
         mult = allowed / rate if rate > 0 else None
         v.update(multiplier=mult, projected=min(100.0, raw), projected_raw=raw, cap_ts=cap_ts)
         # When it would reach 100 at this rate, past the reset too (Details' "Runs out").
         if used < 100.0 and rate > 0:
             v["empty_ts"] = now + (100.0 - used) / rate * 3600.0
         v["verdict"] = verdict_for(mult, cfg)
+        early(v, source == "interpolated", cfg)
     if used >= 100.0:
         v["verdict"] = "maxed"
     if v["verdict"] == "unknown":
@@ -232,7 +253,8 @@ def below_target(points, target):
 def severity(v, cfg):
     """dim (fine), opportunity (spare quota about to expire), warn, alert.
 
-    alert: maxed, or it runs dry before the reset with a slow down verdict.
+    alert: maxed, or it runs dry before the reset with a slow down verdict,
+    also at the low edge of the estimate (`sure_out`).
     warn: a milder overshoot (dry, but on pace), slow down without a dry
     time, or at or above a target below 100 whatever the verdict (idle
     included). At target 100 slow down always runs dry.
@@ -243,8 +265,8 @@ def severity(v, cfg):
     """
     if not v.get("present"):
         return "dim"
-    dry = v.get("cap_ts") is not None
-    if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down"):
+    dry = v.get("cap_ts") is not None and not v.get("shaky")
+    if v["verdict"] == "maxed" or (dry and v["verdict"] == "slow_down" and v.get("sure_out", True)):
         return "alert"
     if dry or v["verdict"] == "slow_down" or over_target(v):
         return "warn"

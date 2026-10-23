@@ -174,7 +174,9 @@ class Build(TempHome):
         self.assertEqual(c["forecast"][0], [int(now), v5["used"]])
         self.assertEqual(c["forecast"][-1][0], R5)
         self.assertAlmostEqual(c["forecast"][-1][1], v5["projected"], places=1)
-        self.assertIsNone(c["fan"])  # a fitted rate, no early estimate
+        lo, hi = c["fan"]  # a fitted rate: 25% either way (pace.SPREAD)
+        self.assertAlmostEqual(lo[-1][1], round(v5["used"] + 0.75 * v5["rate"] * (R5 - now) / H, 2), places=2)
+        self.assertAlmostEqual(hi[-1][1], round(min(100, v5["used"] + 1.25 * v5["rate"] * (R5 - now) / H), 2), places=2)
         self.assertEqual(c["ghosts"], [])  # no snapshot yet
         self.assertEqual([t for _, t in c["labels"]], ["12", "13", "14", "15", "16"])
         w = chart.build(self.st, vw, now)
@@ -212,11 +214,12 @@ class Build(TempHome):
 
     def test_a_capped_estimate_fans_out_over_when_it_runs_out(self):
         # 50% used at 50%/h, 4 hours left: every line reaches 100, at different times.
-        lo, hi = chart._fan(50.0, 50.0, 0, 4 * H)
+        five = {"window": config.FIVE_HOUR, "spread": 0.4}
+        lo, hi = chart._fan(five, None, 50.0, 50.0, 0, 4 * H)
         self.assertEqual(lo, [[0, 50.0], [int(5 * H / 3), 100.0], [int(4 * H), 100.0]])
         self.assertEqual(hi, [[0, 50.0], [int(5 * H / 7), 100.0], [int(4 * H), 100.0]])
-        self.assertIsNone(chart._fan(64.0, 0.0, 0, H))  # idle
-        self.assertIsNone(chart._fan(99.5, 50.0, 0, H))  # nothing left to spread
+        self.assertIsNone(chart._fan(five, None, 64.0, 0.0, 0, H))  # idle
+        self.assertIsNone(chart._fan(five, None, 99.5, 50.0, 0, H))  # nothing left to spread
 
     def snaps(self, window, log, wid):
         self.st.meta_set("forecasts:" + window, {"wid": wid, "log": log})
