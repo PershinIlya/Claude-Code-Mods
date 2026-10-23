@@ -8,8 +8,8 @@ import tempfile
 import time
 import unittest
 
-from ctempo import clock, config, ingest
-from ctempo.store import Store
+from pacer import clock, config, ingest
+from pacer.store import Store
 
 MON = 1791763200  # Monday 2026-10-12 00:00 UTC
 H = 3600.0
@@ -20,7 +20,7 @@ TZ_UTC = "UTC0"
 
 
 def utc():
-    """Local time is UTC, on every OS: in this process through ctempo.clock;
+    """Local time is UTC, on every OS: in this process through pacer.clock;
     TZ goes to child processes (and to the time module where time.tzset
     exists), which read it at startup, Windows' C runtime included."""
     os.environ["TZ"] = TZ_UTC
@@ -92,13 +92,13 @@ def payload(five=None, week=None, sid="s1"):
 
 
 class TempHome(unittest.TestCase):
-    """Each test gets its own CTEMPO_HOME and a fresh store."""
+    """Each test gets its own PACER_HOME and a fresh store."""
 
     def setUp(self):
         utc()
-        self.dir = tempfile.mkdtemp(prefix="ctempo-test-")
-        self.old_home = os.environ.get("CTEMPO_HOME")
-        os.environ["CTEMPO_HOME"] = self.dir
+        self.dir = tempfile.mkdtemp(prefix="pacer-test-")
+        self.old_home = os.environ.get("PACER_HOME")
+        os.environ["PACER_HOME"] = self.dir
         self.old_ccd = os.environ.get("CLAUDE_CONFIG_DIR")
         os.environ["CLAUDE_CONFIG_DIR"] = os.path.join(self.dir, "claude")  # never the real ~/.claude
         self.cfg = config.load()
@@ -107,9 +107,9 @@ class TempHome(unittest.TestCase):
     def tearDown(self):
         self.st.close()
         if self.old_home is None:
-            os.environ.pop("CTEMPO_HOME", None)
+            os.environ.pop("PACER_HOME", None)
         else:
-            os.environ["CTEMPO_HOME"] = self.old_home
+            os.environ["PACER_HOME"] = self.old_home
         if self.old_ccd is None:
             os.environ.pop("CLAUDE_CONFIG_DIR", None)
         else:
@@ -117,11 +117,11 @@ class TempHome(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def use_home(self, name):
-        """A fresh store in its own CTEMPO_HOME under the test's directory."""
+        """A fresh store in its own PACER_HOME under the test's directory."""
         self.st.close()
         home = os.path.join(self.dir, name)
         os.makedirs(home)
-        os.environ["CTEMPO_HOME"] = home
+        os.environ["PACER_HOME"] = home
         self.st = Store(os.path.join(home, "tempo.db"))
 
     def feed(self, now, five=None, week=None, sid="s1", source="test"):
@@ -154,7 +154,7 @@ class TempHome(unittest.TestCase):
         working, in whole percents, capped at 100; the weekly window resets
         at R and every 7 days after. With learn, the statusline's profile
         learning runs after each reading. Returns the next reset after t1."""
-        from ctempo import profile, statusline
+        from pacer import profile, statusline
 
         prof = profile.load(self.st)
         level, t = 0.0, t0

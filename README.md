@@ -1,4 +1,4 @@
-# ctempo (claude-tempo)
+# pacer (pacer)
 
 A local pace monitor for Claude's two usage limits: the rolling 5-hour window
 and the 7-day weekly window, shared by claude.ai, the Desktop app and Claude
@@ -86,30 +86,30 @@ through `/usage`, below.
 
 ### Usage from everywhere
 
-`ctempo fetch --every 10` lets ctempo ask Claude Code itself: at most every
+`pacer fetch --every 10` lets pacer ask Claude Code itself: at most every
 10 minutes the macOS menu bar, or a Desktop band on any system, runs
 `claude -p "/usage"` in the background (about 6 s) and records the account's
-levels it prints, as readings from a session of its own. ctempo never sees a
-credential: Claude Code makes the request with its own login. `ctempo fetch`
-runs it once now; `ctempo fetch --every 0` turns it off (the default);
-`ctempo doctor` says when it last answered, or why not. It needs Python 3.9
+levels it prints, as readings from a session of its own. pacer never sees a
+credential: Claude Code makes the request with its own login. `pacer fetch`
+runs it once now; `pacer fetch --every 0` turns it off (the default);
+`pacer doctor` says when it last answered, or why not. It needs Python 3.9
 or later (time zones) and the `claude` command (on Windows in
 `%USERPROFILE%\.local\bin` or npm's folder). Claude Code answers `/usage`
-with the plan's limits only in a folder it trusts, and ctempo asks it in its
-own folder (`~/.claude-tempo`): once, run `claude` there, choose "Yes, I trust
+with the plan's limits only in a folder it trusts, and pacer asks it in its
+own folder (`~/.pacer`): once, run `claude` there, choose "Yes, I trust
 this folder", and exit (`doctor` says so when this is missing).
 
 ## The menu bar (macOS)
 
 The band shows only in Claude Code (the Desktop Code tab, the terminal). To
-see the pace anywhere, in a regular chat or another app, ctempo can put it in
+see the pace anywhere, in a regular chat or another app, pacer can put it in
 the macOS menu bar through [SwiftBar](https://swiftbar.app), a free menu bar
 app:
 
 ```sh
 brew install --cask swiftbar      # or download it from swiftbar.app
 open -a SwiftBar                  # once: it asks for a plugin folder
-ctempo menubar --install          # writes ctempo.1m.sh into that folder
+pacer menubar --install          # writes pacer.1m.sh into that folder
 ```
 
 The menu bar then shows two small bars, the 5 hours on top and the week below,
@@ -124,16 +124,16 @@ readings are. `"menubar": {"charts": false}` leaves the charts out. The full sen
 (its submenu, which takes a column on the right of every line, and its
 "Updated") are hidden: Option-click the menu bar item to show them. SwiftBar
 reads that when it starts, so after an update that changes the plugin, run
-`ctempo menubar --install` and restart SwiftBar once
+`pacer menubar --install` and restart SwiftBar once
 (`killall SwiftBar; open -a SwiftBar`). `"menubar": {"style": "text"}` brings back plain text. It refreshes every minute and
 records nothing itself: the readings come from Claude Code sessions on this
 Mac (the status line and the Desktop mod), so while none runs the numbers
 grow old, the title turns grey after 30 minutes and the menu says so.
-`ctempo menubar --uninstall` (or `ctempo uninstall --apply`) removes it.
+`pacer menubar --uninstall` (or `pacer uninstall --apply`) removes it.
 
 To keep the numbers fresh while you work in chats, Cowork or cloud sessions,
-turn on [Usage from everywhere](#usage-from-everywhere) (`ctempo fetch --every
-10`; `ctempo menubar --fetch 10` does the same). The menu then also says when
+turn on [Usage from everywhere](#usage-from-everywhere) (`pacer fetch --every
+10`; `pacer menubar --fetch 10` does the same). The menu then also says when
 `/usage` last answered.
 
 The menu bar also posts a macOS notification, once per window, when a limit
@@ -178,7 +178,7 @@ at least 10 points about to expire below its target (the reserve that a target
 below 100 keeps never counts; never while the 5h burn rate is not known yet).
 `NO_COLOR` turns colors off; the ▲/▼ glyphs keep the verdict.
 
-`ctempo now` prints the line with the reasoning behind every number.
+`pacer now` prints the line with the reasoning behind every number.
 
 ## The math
 
@@ -219,7 +219,7 @@ below 100 keeps never counts; never while the 5h burn rate is not known yet).
   span from it to the reset that has passed; delta = used − on-pace;
 - intensity = what you spent over this week's last 24 awake hours / what
   the profile expected for those hours (at target pace), pulled toward your
-  typical week (or the target, before ctempo has seen a whole week): the
+  typical week (or the target, before pacer has seen a whole week): the
   typical week counts as much as a tenth of a week's spend would, so right
   after a reset it leads, and as the week brings evidence it fades. The count
   never reaches back past the reset: the last days of a week (when quota
@@ -247,9 +247,9 @@ rule.
 ## Install (macOS and Linux)
 
 ```sh
-git clone <this repo> ~/Projects/claude-tempo && cd ~/Projects/claude-tempo
-python3 bin/ctempo install                          # dry run: shows the diff, changes nothing
-python3 bin/ctempo install --apply --bin-dir ~/.local/bin
+git clone <this repo> ~/Projects/pacer && cd ~/Projects/pacer
+python3 bin/pacer install                          # dry run: shows the diff, changes nothing
+python3 bin/pacer install --apply --bin-dir ~/.local/bin
 ```
 
 `install --apply`:
@@ -259,27 +259,27 @@ python3 bin/ctempo install --apply --bin-dir ~/.local/bin
    Windows: see below) and pins it in the command, run as `python -I -S` so
    conda or PYTHONPATH cannot interfere;
 2. backs up `~/.claude/settings.json` to
-   `settings.json.ctempo-backup-<UTC time>` and sets only `statusLine`
-   (`refreshInterval: 60`). If you already have a status line, ctempo
-   **composes**: your command still runs, with the same input, and ctempo's
+   `settings.json.pacer-backup-<UTC time>` and sets only `statusLine`
+   (`refreshInterval: 60`). If you already have a status line, pacer
+   **composes**: your command still runs, with the same input, and pacer's
    segment is appended to its last line, or put on a line of its own when the
    joined line would not fit Claude Code's footer (`--replace` to replace it
    instead); a background job your command starts keeps running, and a command
    still running after `compose.timeout_ms` is stopped;
 3. installs the Desktop mod from the local marketplace in this repo:
    `claude plugin marketplace add <repo>` then
-   `claude plugin install ctempo@claude-tempo` (`--no-mod` to skip). If
+   `claude plugin install pacer@pacer` (`--no-mod` to skip). If
    `claude` is not on PATH, it prints the two commands for you to run, and
    uninstall still undoes them;
-4. writes `~/.claude-tempo/runtime.json` (the mod reads it: the interpreter,
-   its flags and the entry point), a default `config.json`, and a `ctempo`
+4. writes `~/.pacer/runtime.json` (the mod reads it: the interpreter,
+   its flags and the entry point), a default `config.json`, and a `pacer`
    launcher in `--bin-dir` (a later install repins it without `--bin-dir`,
    after `--python` or a moved clone too; a new `--bin-dir` moves it there);
 5. builds the profile prior from `~/.claude/projects` transcripts
    (`--no-bootstrap` to skip).
 
 The terminal status line applies at once. For the mod, restart Claude Code or
-run `/reload-plugins` (in Desktop: start a new session). Then `ctempo doctor`.
+run `/reload-plugins` (in Desktop: start a new session). Then `pacer doctor`.
 
 ## Install on Windows
 
@@ -291,20 +291,20 @@ when it finds one, else in PowerShell, and install prints which. In
 PowerShell, each command on its own line (Windows PowerShell 5.1 has no `&&`):
 
 ```powershell
-git clone <this repo> $HOME\Projects\claude-tempo
-cd $HOME\Projects\claude-tempo
-py -3 bin\ctempo install                                    # dry run
-py -3 bin\ctempo install --apply --bin-dir $HOME\.local\bin
+git clone <this repo> $HOME\Projects\pacer
+cd $HOME\Projects\pacer
+py -3 bin\pacer install                                    # dry run
+py -3 bin\pacer install --apply --bin-dir $HOME\.local\bin
 ```
 
-From the clone, `py -3 ctempo ...` and `py -3 -m ctempo ...` work the same as
-`py -3 bin\ctempo ...`; after install, the `ctempo` launcher works from anywhere.
+From the clone, `py -3 pacer ...` and `py -3 -m pacer ...` work the same as
+`py -3 bin\pacer ...`; after install, the `pacer` launcher works from anywhere.
 
 In cmd.exe the same lines work with `%USERPROFILE%` for `$HOME` (and `cd /d`),
 each such path in double quotes (`"%USERPROFILE%\.local\bin"`), since a profile
 folder may hold a space, and without the comment. `~` in this README is
 `%USERPROFILE%` on Windows: settings in `%USERPROFILE%\.claude\settings.json`,
-data in `%USERPROFILE%\.claude-tempo`. `install --apply` takes the steps above,
+data in `%USERPROFILE%\.pacer`. `install --apply` takes the steps above,
 with these differences:
 
 - **Python.** `python3` is often only the Microsoft Store stub ("Python was
@@ -313,18 +313,18 @@ with these differences:
   `py -0p`, the default install folders, the one you ran it with, then
   `python` and `python3` on PATH. Behind a Store alias or `py.exe` it pins the
   real `python.exe`, and for a venv's `python.exe` the base one it starts
-  (ctempo runs `-I -S`, so a venv adds only a process); install's list says
+  (pacer runs `-I -S`, so a venv adds only a process); install's list says
   `via <path>` for these. A Store Python is used only when nothing else
   passes. `--python C:\path\to\python.exe` chooses.
 - **The shell.** Claude Code looks for Git Bash in `CLAUDE_CODE_GIT_BASH_PATH`,
   `C:\Program Files\Git`, `C:\Program Files (x86)\Git` and beside the `git`
   on PATH; without one it uses PowerShell (pwsh 7, else Windows PowerShell
   5.1). install repeats that search ("Claude Code runs it with Git Bash
-  here"), and your previous status line runs in the shell that runs ctempo's.
+  here"), and your previous status line runs in the shell that runs pacer's.
 - **The command.** Forward slashes and `-X utf8` (a pipe gets the ANSI code
   page, and `-I` ignores `PYTHONUTF8`), in a form Git Bash and PowerShell read
   the same, so it keeps working when the shell changes:
-  `C:/Users/ana/AppData/Local/Programs/Python/Python312/python.exe -I -S -X utf8 C:/Users/ana/Projects/claude-tempo/bin/ctempo statusline`.
+  `C:/Users/ana/AppData/Local/Programs/Python/Python312/python.exe -I -S -X utf8 C:/Users/ana/Projects/pacer/bin/pacer statusline`.
   A path with a space is written with its folders' 8.3 short names
   (`C:/PROGRA~1/PYTHON~1/python.exe`); on a drive without them the command is
   quoted for the shell Claude Code uses now, and install warns that it runs
@@ -332,15 +332,15 @@ with these differences:
   changed (one with a `"`, which Windows PowerShell 5.1 alters, or one that
   starts with a POSIX path such as `/usr/bin/env`, which Git Bash rewrites) is
   stored as `--compose-b64 b<base64>` instead of `--compose '<command>'`.
-  install says so, and `ctempo doctor` shows it decoded; to change it by hand,
-  put `--compose '<command>'` in its place, then run `ctempo install --apply`,
+  install says so, and `pacer doctor` shows it decoded; to change it by hand,
+  put `--compose '<command>'` in its place, then run `pacer install --apply`,
   which encodes it again when a shell would change it (until then
-  `ctempo doctor` warns).
-- **Launchers.** `--bin-dir` writes `ctempo.cmd`, for PowerShell and cmd.exe,
-  and an extensionless `ctempo`, for Git Bash and Claude Code's Bash tool
+  `pacer doctor` warns).
+- **Launchers.** `--bin-dir` writes `pacer.cmd`, for PowerShell and cmd.exe,
+  and an extensionless `pacer`, for Git Bash and Claude Code's Bash tool
   (which runs in Git Bash). A later install repins each one you keep, and
   one you delete stays deleted until you pass `--bin-dir` again. The status
-  line and the mod run `python.exe` itself, never a launcher. If `ctempo` is
+  line and the mod run `python.exe` itself, never a launcher. If `pacer` is
   not found, add the folder to your user PATH, then open a new terminal and
   restart Claude Code:
 
@@ -350,22 +350,22 @@ with these differences:
   ```
 
 - **Quoting.** PowerShell reads a comma as a list: write
-  `ctempo check --tail '5h=60m,week=2d'`.
+  `pacer check --tail '5h=60m,week=2d'`.
 
 After you install or remove Git for Windows, or set
-`CLAUDE_CODE_GIT_BASH_PATH`, run `ctempo doctor`. If it warns about the
-statusLine shell or your previous status line, run `ctempo install --apply`
+`CLAUDE_CODE_GIT_BASH_PATH`, run `pacer doctor`. If it warns about the
+statusLine shell or your previous status line, run `pacer install --apply`
 again. A command that install said reads the same in Git Bash and PowerShell
 needs nothing.
 
 ### Windows notes
 
 - Only a command quoted for a single shell (above) depends on which shell
-  Claude Code picks; `ctempo doctor` checks it.
+  Claude Code picks; `pacer doctor` checks it.
 - Claude Code started from a Git Bash terminal can pick another shell than
   when started from the Desktop app or PowerShell (Git Bash puts its own `git`
   first on PATH). install and doctor say so when run there; run
-  `ctempo doctor` from PowerShell to check.
+  `pacer doctor` from PowerShell to check.
 - Your previous status line runs in a nested Git Bash or PowerShell, which
   can take about 1 s to start cold, so `compose.timeout_ms` is 3000 on Windows.
   If your part of the line still drops out (a slow script), set it to 5000 in
@@ -373,60 +373,60 @@ needs nothing.
 - Claude Code inside WSL is a separate Linux install: follow the macOS and
   Linux steps there. The Desktop app draws no band in WSL sessions, where
   plugins are not available.
-- `CTEMPO_HOME`: `~` is `%USERPROFILE%` (never `HOME`); `~\x`, `C:\x`, `C:/x`
+- `PACER_HOME`: `~` is `%USERPROFILE%` (never `HOME`); `~\x`, `C:\x`, `C:/x`
   and Git Bash's `/c/x` work. `%USERPROFILE%` in settings.json `env` is not
   expanded (it names a folder called `%USERPROFILE%`). Any other path that
-  starts with a single `/` (`/srv/ctempo`) is refused, since Git Bash would
+  starts with a single `/` (`/srv/pacer`) is refused, since Git Bash would
   rewrite it to a folder under its own install (the message names the same
   path on your home's drive, where an older version kept it), and so is `C:x`
   (no slash after the colon, so relative to that drive's current folder).
   Keep it on a local drive: the band usually cannot read a `\\server\share`
   folder.
 - `config.json` may be UTF-8 or UTF-16 (what Windows PowerShell 5.1's `>`
-  writes); `ctempo config show` says when the file is not used.
+  writes); `pacer config show` says when the file is not used.
 
 ## Uninstall
 
 ```sh
-ctempo uninstall            # dry run
-ctempo uninstall --apply
+pacer uninstall            # dry run
+pacer uninstall --apply
 ```
 
 It uninstalls the mod and the marketplace, puts your previous `statusLine` back
-(or the command inside ctempo's `--compose` if you put or changed one there),
-or removes ctempo's, removes the launcher (on Windows both) and `runtime.json`.
+(or the command inside pacer's `--compose` if you put or changed one there),
+or removes pacer's, removes the launcher (on Windows both) and `runtime.json`.
 `--no-mod` keeps the mod, and `runtime.json` and the launchers with it, until
-an uninstall without it. If `~/.claude-tempo/install.json` is gone (you deleted
-the folder, or use another `CTEMPO_HOME`) while your settings still list the
+an uninstall without it. If `~/.pacer/install.json` is gone (you deleted
+the folder, or use another `PACER_HOME`) while your settings still list the
 mod, uninstall says so and removes it all the same. A launcher made before the
 folder was deleted stays: remove it yourself. If you did not change
 `settings.json` in between, the file comes back byte for byte (it is restored
 from the backup). If `claude` is not on PATH, uninstall prints the two plugin
 commands and exits 1; once your settings list neither the plugin nor its
 marketplace (you ran them yourself), it completes. Your history stays in
-`~/.claude-tempo/`; delete that folder yourself if you want it gone.
+`~/.pacer/`; delete that folder yourself if you want it gone.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `ctempo statusline` | reads the status-line JSON on stdin, records a sample, prints the line (`--format json` for the mod) |
-| `ctempo now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate, and the age of the last reading (heartbeats shown apart) |
-| `ctempo report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
-| `ctempo profile [--rebuild]` | hour-of-week heatmap, the prior's age and weight now, lightest awake blocks, points vs pace by day before reset |
-| `ctempo check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); spare quota is measured against each window's target (`spare` in the JSON), so a window at or above a target below 100, or one that should slow down, is never harvestable; `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
-| `ctempo bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
-| `ctempo install` / `uninstall` | see above; dry run unless `--apply` |
-| `ctempo doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen; on Windows, the shell Claude Code runs the status line in and whether the command suits it |
-| `ctempo fetch [--every MIN]` | ask Claude Code's `/usage` for the account's levels now, or from now on every MIN minutes (0: never) |
-| `ctempo menubar [--install|--uninstall]` | the band in the macOS menu bar (SwiftBar) |
-| `ctempo config [show|init|path]` | effective configuration |
+| `pacer statusline` | reads the status-line JSON on stdin, records a sample, prints the line (`--format json` for the mod) |
+| `pacer now` | the line plus the reasoning: rates, allowed rates, on-pace level, intensity, projections, exchange rate, and the age of the last reading (heartbeats shown apart) |
+| `pacer report [--days N]` | waste ledger: % unused at each closed weekly and 5-hour window, totals, in 5h-window equivalents |
+| `pacer profile [--rebuild]` | hour-of-week heatmap, the prior's age and weight now, lightest awake blocks, points vs pace by day before reset |
+| `pacer check [--min-free X] [--tail 5h=60m,week=2d] [--max-age 30m]` | for a future scavenger: exit 0 and JSON when there is quota to harvest now, else exit 1; data older than `--max-age` is a no-go, and heartbeats do not count as data; so is a 5h window whose burn rate is not known yet (its leftover is unknown); spare quota is measured against each window's target (`spare` in the JSON), so a window at or above a target below 100, or one that should slow down, is never harvestable; `--min-free` is clamped to 0 to 100 like `min_free`, and a leftover counts only when it is at least that and more than 0 |
+| `pacer bootstrap [--days N] [--dry-run]` | rebuild the profile prior from transcripts |
+| `pacer install` / `uninstall` | see above; dry run unless `--apply` |
+| `pacer doctor` | interpreter, database, settings wiring, mod, last samples, last line and the raw rate limits it came from, rate-limit kinds seen; on Windows, the shell Claude Code runs the status line in and whether the command suits it |
+| `pacer fetch [--every MIN]` | ask Claude Code's `/usage` for the account's levels now, or from now on every MIN minutes (0: never) |
+| `pacer menubar [--install|--uninstall]` | the band in the macOS menu bar (SwiftBar) |
+| `pacer config [show|init|path]` | effective configuration |
 
-`ctempo` with no command is `ctempo now`.
+`pacer` with no command is `pacer now`.
 
 ## Configuration
 
-`~/.claude-tempo/config.json` (written with defaults by the first install, and
+`~/.pacer/config.json` (written with defaults by the first install, and
 kept as it is after that: a key you leave out takes the default of the version
 you run, one in the file keeps its value, so delete a key to get a newer
 default):
@@ -447,25 +447,25 @@ default):
 | `display.max_width` | 80 | the line drops optional parts to fit, then is cut with `…` (`...` in ascii mode); each part keeps its color |
 | `mod.surfaces` | `["desktop"]` | where the mod draws its band (add `terminal` if you do not use the status line) |
 | `mod.refresh_s` | 60 | how often the mod refreshes the band when no reading moved (15 to 3600) |
-| `compose.timeout_ms` | 1500 (3000 on Windows) | how long your previous status line may take; once it exits, ctempo reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 5000 for a slow PowerShell or Git Bash script |
-| `fetch_usage_min` | 0 | every this many minutes the menu bar or a Desktop band runs `claude -p "/usage"` for the account's levels; 0 never (`ctempo fetch --every N`) |
+| `compose.timeout_ms` | 1500 (3000 on Windows) | how long your previous status line may take; once it exits, pacer reads its output for up to 500 ms more, and only a command still running at the timeout is stopped; on Windows, 5000 for a slow PowerShell or Git Bash script |
+| `fetch_usage_min` | 0 | every this many minutes the menu bar or a Desktop band runs `claude -p "/usage"` for the account's levels; 0 never (`pacer fetch --every N`) |
 | `menubar.notify`, `menubar.style`, `menubar.charts` | true, `bars`, true | macOS notifications; `text` for the plain text menu; a chart under each bar |
 | `retention_days` | 365 | history kept |
 
-`CTEMPO_HOME` moves everything (default `~/.claude-tempo`). The Desktop app
+`PACER_HOME` moves everything (default `~/.pacer`). The Desktop app
 does not inherit your shell's environment, so if you move it, set it in
 `~/.claude/settings.json` under `env` too. Claude Code passes that value as
-written, so ctempo expands a leading `~` itself and takes a relative path from
+written, so pacer expands a leading `~` itself and takes a relative path from
 your home directory, never from the session's folder. The mod does not expand
 `~otheruser/...`: use an absolute path for that. On Windows the home directory
 is `%USERPROFILE%`, and some forms are refused: see Windows notes. Values of
 the wrong type or out of range fall back to the default or are clamped; a
-`config.json` that is not valid JSON is ignored as a whole (`ctempo config
+`config.json` that is not valid JSON is ignored as a whole (`pacer config
 show` says so).
 
 ## Data and privacy
 
-- `~/.claude-tempo/tempo.db` (SQLite, WAL): `samples` (time, window, used %,
+- `~/.pacer/tempo.db` (SQLite, WAL): `samples` (time, window, used %,
   resets_at, source, session id), `windows` (one row per window: start, reset,
   peak, % unused at close), the profile, counters. Kept 365 days.
 - The status-line payload carries no message content; only the rate limits and
@@ -475,7 +475,7 @@ show` says so).
   is never stored, printed or logged (a test checks the database for a planted
   secret).
 - No hooks inject anything into Claude's context.
-- Errors from the status line go to `~/.claude-tempo/errors.log` (64 KB, one
+- Errors from the status line go to `~/.pacer/errors.log` (64 KB, one
   rotation), never to the line.
 
 ## Performance
@@ -493,8 +493,8 @@ start, the imports, and each phase of a render.
 
 ```sh
 python3 -m unittest discover -s tests -t .     # 537 tests, Python 3.8 to 3.13
-claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 75 tests
+claude plugin validate mods/pacer
+claude plugin test mods/pacer                 # 75 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 
@@ -508,10 +508,10 @@ throwaway settings files, including the byte-identical round trip (CRLF, mode,
 several settings files, a crash mid-install, a lost install record). A
 model-based fuzzer runs 400 seeded random sequences of installs and uninstalls
 (some with `--no-mod`) on two settings files, with claude working, missing or
-hanging, hand edits (the command inside ctempo's `--compose` included), the
+hanging, hand edits (the command inside pacer's `--compose` included), the
 plugin commands run by hand and the data folder deleted in between. It checks
 after every step that `runtime.json` exists while a mod record does, and at
-the end that nothing of ctempo is left, each file holds the user's JSON, and a
+the end that nothing of pacer is left, each file holds the user's JSON, and a
 file the user never edited comes back byte for byte.
 
 Windows rules run on every OS with the one platform flag (`config.IS_WINDOWS`)
@@ -524,8 +524,8 @@ the command it wrote through each shell Claude Code may use (Git Bash, pwsh and
 powershell.exe; `/bin/sh` on macOS), composed commands in plain and encoded
 form, and uninstall back to the same bytes; a read-only settings.json; and on
 Windows the launchers from cmd.exe, PowerShell and Git Bash, a drive-less
-`CTEMPO_HOME`, and a venv's `python.exe` pinned as its base interpreter.
-`.gitattributes` keeps `bin/ctempo`, `*.py` and `*.sh` LF on a Windows
+`PACER_HOME`, and a venv's `python.exe` pinned as its base interpreter.
+`.gitattributes` keeps `bin/pacer`, `*.py` and `*.sh` LF on a Windows
 checkout, where a CR breaks the `#!` line in Git Bash.
 
 The 18 review passes (2 of them model-based fuzzers, for install and for reset
@@ -538,15 +538,15 @@ a check that the Windows section says what the code does).
 ## Layout
 
 ```
-bin/ctempo                 launcher (python -I -S safe)
-ctempo/                    the core: store, ingest, pace, weekly, profile, band
+bin/pacer                 launcher (python -I -S safe)
+pacer/                    the core: store, ingest, pace, weekly, profile, band
                            (what the band and the line say), chart (the
                            charts' data), menubar, menuart and png (the
                            menu bar's pictures), render,
                            statusline, commands, install, transcripts, clock
                            (local time), winshell (Windows shells and commands)
-mods/ctempo/               the Desktop mod (TypeScript, thin)
-.claude-plugin/            local marketplace: claude-tempo
+mods/pacer/               the Desktop mod (TypeScript, thin)
+.claude-plugin/            local marketplace: pacer
 tests/                     unittest suite
 scripts/bench_statusline.py
 scripts/ci_integration.py  end to end through each shell (CI on Windows, macOS)
@@ -557,7 +557,7 @@ PLAN.md, DECISIONS.md
 
 ## Credits
 
-ctempo reimplements ideas from these MIT-licensed projects (read, not run or
+pacer reimplements ideas from these MIT-licensed projects (read, not run or
 copied):
 
 - [SeanLF/ccpool](https://github.com/SeanLF/ccpool): least-squares burn on a

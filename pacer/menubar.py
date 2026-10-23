@@ -1,9 +1,9 @@
-"""`ctempo menubar`: the band in the macOS menu bar, through SwiftBar.
+"""`pacer menubar`: the band in the macOS menu bar, through SwiftBar.
 
 SwiftBar (a free menu bar app) runs a plugin script every minute and shows
 what it prints: the first line in the menu bar, the lines after `---` in the
-menu that opens on a click. The script `ctempo menubar --install` writes
-runs `ctempo menubar`, which reads the store and prints
+menu that opens on a click. The script `pacer menubar --install` writes
+runs `pacer menubar`, which reads the store and prints
 
   [two small bars] 22% · 18%             (5 hours on top; green with room to spare,
   ---                                       red or yellow words when a window needs you)
@@ -28,8 +28,8 @@ import time
 
 from . import band, config, render
 
-PLUGIN = "ctempo.1m.sh"  # SwiftBar reads the refresh interval from the name
-MARK = "# ctempo menu bar plugin"
+PLUGIN = "pacer.1m.sh"  # SwiftBar reads the refresh interval from the name
+MARK = "# pacer menu bar plugin"
 STALE_S = 30 * 60
 TONE = {  # SwiftBar takes "light,dark"
     "error": "#c2453b,#ec6a5e",
@@ -217,7 +217,7 @@ def text_lines(ws, updated, now, cfg, checked=None, note=None):
     newest = max([t for t in (updated, checked) if t is not None] or [0])
     stale = not newest or now - newest > STALE_S
     if waiting:
-        title = "ctempo | color=%s" % DIM
+        title = "pacer | color=%s" % DIM
     else:
         title = " · ".join(title_parts)
         color = title_color(ws, stale)
@@ -288,7 +288,7 @@ def show(cfg):
                 st.close()
         out = lines(ws, updated, now, cfg, checked, note)
     except Exception as e:  # the menu bar shows why instead of nothing
-        out = ["ctempo ! | color=%s" % TONE["warning"], "---", "ctempo: %s | size=12" % clean(e)[:200],
+        out = ["pacer ! | color=%s" % TONE["warning"], "---", "pacer: %s | size=12" % clean(e)[:200],
                "Refresh | refresh=true"]
     sys.stdout.write("\n".join(out) + "\n")
     return 0
@@ -339,7 +339,7 @@ def notify(st, ws, newest, now, send=None):
 def post(title, body):
     if sys.platform != "darwin":
         return
-    script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title \"ctempo\" "
+    script = ["-e", "on run argv", "-e", "display notification (item 2 of argv) with title \"pacer\" "
               "subtitle (item 1 of argv)", "-e", "end run"]
     try:
         subprocess.Popen(["osascript"] + script + [title, body], stdout=subprocess.DEVNULL,
@@ -365,8 +365,8 @@ def script(python, args, entry, home):
     q = shlex.quote
     return "\n".join([
         "#!/bin/sh",
-        MARK + " (written by `ctempo menubar --install`; `ctempo menubar --uninstall` removes it)",
-        "# <swiftbar.title>ctempo</swiftbar.title>",
+        MARK + " (written by `pacer menubar --install`; `pacer menubar --uninstall` removes it)",
+        "# <swiftbar.title>pacer</swiftbar.title>",
         "# <swiftbar.desc>Claude usage pace: the 5-hour and weekly windows</swiftbar.desc>",
         "# <swiftbar.hideAbout>true</swiftbar.hideAbout>",
         "# <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>",
@@ -375,7 +375,7 @@ def script(python, args, entry, home):
         # the right of every line. Option-click shows both.
         "# <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>",
         "# <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>",
-        "export CTEMPO_HOME=%s" % q(home),
+        "export PACER_HOME=%s" % q(home),
         "exec %s menubar" % " ".join(q(a) for a in [python] + list(args) + [entry]),
     ]) + "\n"
 
@@ -392,7 +392,7 @@ def runtime():
             return rt["python"], args, rt["entry"]
     except (OSError, ValueError):
         pass
-    entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "ctempo")
+    entry = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "pacer")
     return sys.executable, ["-I", "-S"], entry
 
 
@@ -409,12 +409,12 @@ def install(folder):
     if not folder:
         print("SwiftBar's plugin folder is not set. Install SwiftBar (brew install --cask swiftbar, or "
               "https://swiftbar.app), open it once and choose a plugin folder, then run this again; "
-              "or name the folder: ctempo menubar --install ~/SwiftBarPlugins")
+              "or name the folder: pacer menubar --install ~/SwiftBarPlugins")
         return 1
     folder = os.path.abspath(os.path.expanduser(folder))
     path = os.path.join(folder, PLUGIN)
     if os.path.exists(path) and not ours(path):
-        print("%s exists and is not ctempo's; not touched" % path)
+        print("%s exists and is not pacer's; not touched" % path)
         return 1
     python, args, entry = runtime()
     os.makedirs(folder, exist_ok=True)
@@ -440,7 +440,7 @@ def uninstall(folder=None):
     removed = remove(path)
     state.pop("menubar", None)
     inst.save_state(state)
-    print("Removed %s" % path if removed else "No ctempo menu bar plugin to remove")
+    print("Removed %s" % path if removed else "No pacer menu bar plugin to remove")
     return 0
 
 

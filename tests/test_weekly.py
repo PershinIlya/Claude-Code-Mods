@@ -4,9 +4,9 @@ import math
 import os
 import unittest
 
-from ctempo import profile, render, weekly
-from ctempo.config import FIVE_HOUR, SEVEN_DAY
-from ctempo.store import Store
+from pacer import profile, render, weekly
+from pacer.config import FIVE_HOUR, SEVEN_DAY
+from pacer.store import Store
 
 from .helpers import MON, H, D, TempHome
 
@@ -160,7 +160,7 @@ class Weekly(TempHome):
         # runs out on Sunday, but the estimate is early (the target weighs
         # 94%) and 49% slower it lands under 100: on pace, no color, no
         # "Runs out"; Details notes when, as a maybe.
-        from ctempo import band
+        from pacer import band
 
         R = int(MON + 10 * H + 7 * D)
         self.known("s1")

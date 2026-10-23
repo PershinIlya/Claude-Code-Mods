@@ -1,7 +1,7 @@
-"""`ctempo statusline`: read the payload, record a sample, print the line.
+"""`pacer statusline`: read the payload, record a sample, print the line.
 
 Hot path. Fail open: any error prints a minimal line and exits 0, the
-traceback goes to ~/.claude-tempo/errors.log (capped), never to stdout.
+traceback goes to ~/.pacer/errors.log (capped), never to stdout.
 """
 
 import json
@@ -139,7 +139,7 @@ def touch_stamp(now):
 
 def note_render(st, now, source, line, rate_limits):
     """Keep the last line and the raw rate_limits per source (numbers and
-    window names only) for `ctempo doctor`; at most once a minute unless the
+    window names only) for `pacer doctor`; at most once a minute unless the
     line changed."""
     import sqlite3
 
@@ -198,7 +198,7 @@ def bare_line(readings, now, cfg=None):
     if config.SEVEN_DAY in readings:
         u, r = readings[config.SEVEN_DAY]
         parts.append("wk %s @%s" % (pct(u), dhm(r)))
-    return plain(fit([(symbols(cfg)["sep"].join(parts) or "ctempo: no data", "dim")], cfg))
+    return plain(fit([(symbols(cfg)["sep"].join(parts) or "pacer: no data", "dim")], cfg))
 
 
 class Composer:
@@ -211,7 +211,7 @@ class Composer:
     own process group, so one still running at the deadline is killed with
     its children.
 
-    On Windows it runs in the shell that started ctempo, where Claude Code ran
+    On Windows it runs in the shell that started pacer, where Claude Code ran
     the statusLine, else in the one Claude Code would pick (Git Bash, else
     PowerShell; never cmd.exe, which shell=True means there), the pipes are
     served by threads (select() takes sockets only), and a command still
@@ -225,7 +225,7 @@ class Composer:
         import threading
 
         env = dict(os.environ)
-        env["CTEMPO_COMPOSED"] = "1"
+        env["PACER_COMPOSED"] = "1"
         self.result = None
         self.deadline = deadline
         self.windows = config.IS_WINDOWS
@@ -433,7 +433,7 @@ def main(argv):
             and opts["compose"]
             and opts["source"] == "statusline"
             and opts["format"] == "ansi"
-            and not os.environ.get("CTEMPO_COMPOSED")
+            and not os.environ.get("PACER_COMPOSED")
         ):
             try:
                 composer = Composer(cmd, raw, t0 + float(cfg["compose"].get("timeout_ms", 1500)) / 1000.0)
@@ -485,12 +485,12 @@ def main(argv):
         if opts.get("format") == "json":
             mod = (cfg or config.DEFAULTS)["mod"]
             out = json.dumps(
-                {"ok": False, "line": "ctempo: error", "segments": [{"text": "ctempo: error", "tone": "dim"}],
+                {"ok": False, "line": "pacer: error", "segments": [{"text": "pacer: error", "tone": "dim"}],
                  "surfaces": mod.get("surfaces", ["desktop"]), "refresh_s": mod.get("refresh_s", 60)},
                 separators=(",", ":"),
             )
         else:
-            out = "ctempo: error"
+            out = "pacer: error"
     if composer is not None:
         # Outside the main try: whatever failed above, the user's own line still shows.
         try:

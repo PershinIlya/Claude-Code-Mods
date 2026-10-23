@@ -37,7 +37,7 @@ type Options = {
   run?: () => { value: ProcessRunResult }
   // What $.fs.exists answers; left out, nothing answers it (the call rejects).
   exists?: (path: string) => boolean
-  // CTEMPO_HOME/changed as the CLI leaves it; absent, the file is missing.
+  // PACER_HOME/changed as the CLI leaves it; absent, the file is missing.
   stamp?: { mtimeMs: number; text: string }
   // What $.session.surfaces() answers.
   surfaces?: RenderSurface[]
@@ -51,7 +51,7 @@ function stub(on: StubOn, options: Options = {}) {
   const writes: { path: string; text: string }[] = []
   const runtime =
     options.runtime === undefined
-      ? JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/ctempo' })
+      ? JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/pacer' })
       : options.runtime
   on('fs.read', (_$, e) => {
     const path = String((e as { path?: string }).path)
@@ -89,7 +89,7 @@ function stub(on: StubOn, options: Options = {}) {
 
 function band(surface: RenderSurface): MountTarget {
   return {
-    plugin: 'ctempo',
+    plugin: 'pacer',
     component: 'AbovePrompt',
     surface,
     viewport: { columns: 120, rows: 40, isFullscreen: false },
@@ -130,14 +130,14 @@ test('converts rate limits to the statusLine payload', async () => {
   })
 })
 
-test('draws the ctempo line above the prompt in Desktop', async ($, on) => {
+test('draws the pacer line above the prompt in Desktop', async ($, on) => {
   const { runs, clock } = stub(on)
   await $.session.start(start('desktop'))
   await clock.advance(1)
 
   expect(runs.length).toBe(1)
   expect(runs[0]?.argv).toEqual([
-    '/usr/bin/python3', '-I', '-S', '/repo/bin/ctempo', 'statusline', '--source', 'mod', '--format', 'json',
+    '/usr/bin/python3', '-I', '-S', '/repo/bin/pacer', 'statusline', '--source', 'mod', '--format', 'json',
   ])
   const input = JSON.parse(runs[0]?.init?.stdin ?? '{}')
   expect(input.session_id).toBe('sess-1')
@@ -179,13 +179,13 @@ test('records new readings when a window moves and refreshes every minute', asyn
   expect(runs.length).toBe(3)
 })
 
-test('explains itself when ctempo is not installed', async ($, on) => {
+test('explains itself when pacer is not installed', async ($, on) => {
   const { runs, clock } = stub(on, { runtime: null })
   await $.session.start(start('desktop'))
   await clock.advance(1)
   expect(runs.length).toBe(0)
   const ui = await $.ui.mount(band('desktop'))
-  expect(await ui.find({ type: 'Text', text: /^ctempo: / })).toMatchObject({ props: { dimColor: true } })
+  expect(await ui.find({ type: 'Text', text: /^pacer: / })).toMatchObject({ props: { dimColor: true } })
 })
 
 test('shows why when the CLI fails, instead of a JSON parse error', async ($, on) => {
@@ -194,7 +194,7 @@ test('shows why when the CLI fails, instead of a JSON parse error', async ($, on
       value: {
         exitCode: 2,
         stdout: '',
-        stderr: "python3: can't open file '/old/path/bin/ctempo': [Errno 2] No such file or directory\n",
+        stderr: "python3: can't open file '/old/path/bin/pacer': [Errno 2] No such file or directory\n",
         isStdoutTruncated: false,
         isStderrTruncated: false,
       },
@@ -208,50 +208,50 @@ test('shows why when the CLI fails, instead of a JSON parse error', async ($, on
 
 test('an error reply without surfaces still draws on Desktop', async ($, on) => {
   const { clock } = stub(on, {
-    run: () => ran(JSON.stringify({ ok: false, line: 'ctempo: error', segments: [{ text: 'ctempo: error', tone: 'dim' }] })),
+    run: () => ran(JSON.stringify({ ok: false, line: 'pacer: error', segments: [{ text: 'pacer: error', tone: 'dim' }] })),
   })
   await $.session.start(start('desktop'))
   await clock.advance(1)
   const ui = await $.ui.mount(band('desktop'))
-  expect(await ui.find({ type: 'Text', text: 'ctempo: error' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'pacer: error' })).toBeDefined()
 })
 
-test('an empty CTEMPO_HOME counts as unset, and the CLI gets the same home', async ($, on) => {
-  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: '' } })
+test('an empty PACER_HOME counts as unset, and the CLI gets the same home', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', PACER_HOME: '' } })
   await $.session.start(start('desktop'))
   await clock.advance(1)
-  expect(slashed(reads[0])).toMatch(ending('/home/u/.claude-tempo/runtime.json'))
-  expect(runs[0]?.init?.env).toEqual({ CTEMPO_HOME: '/home/u/.claude-tempo' })
+  expect(slashed(reads[0])).toMatch(ending('/home/u/.pacer/runtime.json'))
+  expect(runs[0]?.init?.env).toEqual({ PACER_HOME: '/home/u/.pacer' })
 })
 
 // Review 4: settings.json env reaches the mod as written, so a `~` or a
-// relative CTEMPO_HOME would otherwise be read from the session's cwd.
-test('expands a leading ~ in CTEMPO_HOME and passes the result to the CLI', async ($, on) => {
-  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: '~/.ctempo-moved' } })
+// relative PACER_HOME would otherwise be read from the session's cwd.
+test('expands a leading ~ in PACER_HOME and passes the result to the CLI', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', PACER_HOME: '~/.pacer-moved' } })
   await $.session.start(start('desktop'))
   await clock.advance(1)
-  expect(slashed(reads[0])).toMatch(ending('/home/u/.ctempo-moved/runtime.json'))
-  expect(runs[0]?.init?.env).toEqual({ CTEMPO_HOME: '/home/u/.ctempo-moved' })
+  expect(slashed(reads[0])).toMatch(ending('/home/u/.pacer-moved/runtime.json'))
+  expect(runs[0]?.init?.env).toEqual({ PACER_HOME: '/home/u/.pacer-moved' })
 })
 
-test('takes a relative CTEMPO_HOME from HOME, never from the session cwd', async ($, on) => {
-  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: 'data/ctempo' } })
+test('takes a relative PACER_HOME from HOME, never from the session cwd', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', PACER_HOME: 'data/pacer' } })
   await $.session.start(start('desktop'))
   await clock.advance(1)
-  expect(slashed(reads[0])).toMatch(ending('/home/u/data/ctempo/runtime.json'))
-  expect(runs[0]?.init?.env).toEqual({ CTEMPO_HOME: '/home/u/data/ctempo' })
+  expect(slashed(reads[0])).toMatch(ending('/home/u/data/pacer/runtime.json'))
+  expect(runs[0]?.init?.env).toEqual({ PACER_HOME: '/home/u/data/pacer' })
 })
 
-test('uses an absolute CTEMPO_HOME as is, even without HOME', async ($, on) => {
-  const { runs, clock, reads } = stub(on, { env: { CTEMPO_HOME: '/srv/ctempo' } })
+test('uses an absolute PACER_HOME as is, even without HOME', async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { PACER_HOME: '/srv/pacer' } })
   await $.session.start(start('desktop'))
   await clock.advance(1)
-  expect(slashed(reads[0])).toMatch(ending('/srv/ctempo/runtime.json'))
-  expect(runs[0]?.init?.env).toEqual({ CTEMPO_HOME: '/srv/ctempo' })
+  expect(slashed(reads[0])).toMatch(ending('/srv/pacer/runtime.json'))
+  expect(runs[0]?.init?.env).toEqual({ PACER_HOME: '/srv/pacer' })
 })
 
-test("asks for an absolute path when CTEMPO_HOME names another user's ~", async ($, on) => {
-  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', CTEMPO_HOME: '~other/ctempo' } })
+test("asks for an absolute path when PACER_HOME names another user's ~", async ($, on) => {
+  const { runs, clock, reads } = stub(on, { env: { HOME: '/home/u', PACER_HOME: '~other/pacer' } })
   await $.session.start(start('desktop'))
   await clock.advance(1)
   expect(reads.length).toBe(0)
@@ -261,32 +261,32 @@ test("asks for an absolute path when CTEMPO_HOME names another user's ~", async 
 })
 
 // Windows: Python takes the home from USERPROFILE (else HOMEDRIVE+HOMEPATH)
-// and never from HOME, and `ctempo install` writes runtime.json there.
+// and never from HOME, and `pacer install` writes runtime.json there.
 const WINDOWS = { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\u' }
 const WINDOWS_HOMES: [string, Record<string, string>, string][] = [
-  ['USERPROFILE', WINDOWS, 'C:\\Users\\u\\.claude-tempo'],
-  ['USERPROFILE, with HOME ignored', { ...WINDOWS, HOME: '/c/Users/other' }, 'C:\\Users\\u\\.claude-tempo'],
+  ['USERPROFILE', WINDOWS, 'C:\\Users\\u\\.pacer'],
+  ['USERPROFILE, with HOME ignored', { ...WINDOWS, HOME: '/c/Users/other' }, 'C:\\Users\\u\\.pacer'],
   [
     'HOMEDRIVE+HOMEPATH without USERPROFILE',
     { OS: 'Windows_NT', USERPROFILE: '', HOMEDRIVE: 'D:', HOMEPATH: '\\Users\\u', HOME: '/home/u' },
-    'D:\\Users\\u\\.claude-tempo',
+    'D:\\Users\\u\\.pacer',
   ],
-  ['~\\ in CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: '~\\ctempo' }, 'C:\\Users\\u\\ctempo'],
-  ['~/ in CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: '~/ctempo' }, 'C:\\Users\\u\\ctempo'],
-  ['a relative CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: 'data\\ctempo' }, 'C:\\Users\\u\\data\\ctempo'],
-  ['an absolute E:\\ CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: 'E:\\data\\ctempo' }, 'E:\\data\\ctempo'],
-  ['an absolute E:/ CTEMPO_HOME', { ...WINDOWS, CTEMPO_HOME: 'E:/data/ctempo' }, 'E:/data/ctempo'],
-  ['a rooted \\x, on the home drive', { ...WINDOWS, CTEMPO_HOME: '\\data\\ctempo' }, 'C:\\data\\ctempo'],
-  ["Git Bash's /c/Users/u/ctempo", { ...WINDOWS, CTEMPO_HOME: '/c/Users/u/ctempo' }, 'C:/Users/u/ctempo'],
-  ["Git Bash's /d/data, on another drive", { ...WINDOWS, CTEMPO_HOME: '/d/data' }, 'D:/data'],
+  ['~\\ in PACER_HOME', { ...WINDOWS, PACER_HOME: '~\\pacer' }, 'C:\\Users\\u\\pacer'],
+  ['~/ in PACER_HOME', { ...WINDOWS, PACER_HOME: '~/pacer' }, 'C:\\Users\\u\\pacer'],
+  ['a relative PACER_HOME', { ...WINDOWS, PACER_HOME: 'data\\pacer' }, 'C:\\Users\\u\\data\\pacer'],
+  ['an absolute E:\\ PACER_HOME', { ...WINDOWS, PACER_HOME: 'E:\\data\\pacer' }, 'E:\\data\\pacer'],
+  ['an absolute E:/ PACER_HOME', { ...WINDOWS, PACER_HOME: 'E:/data/pacer' }, 'E:/data/pacer'],
+  ['a rooted \\x, on the home drive', { ...WINDOWS, PACER_HOME: '\\data\\pacer' }, 'C:\\data\\pacer'],
+  ["Git Bash's /c/Users/u/pacer", { ...WINDOWS, PACER_HOME: '/c/Users/u/pacer' }, 'C:/Users/u/pacer'],
+  ["Git Bash's /d/data, on another drive", { ...WINDOWS, PACER_HOME: '/d/data' }, 'D:/data'],
 ]
 for (const [what, env, home] of WINDOWS_HOMES) {
-  test(`Windows: finds the ctempo home from ${what}`, async ($, on) => {
+  test(`Windows: finds the pacer home from ${what}`, async ($, on) => {
     const { runs, clock, reads } = stub(on, { env })
     await $.session.start(start('desktop'))
     await clock.advance(1)
     expect(slashed(reads[0])).toMatch(ending(`${home}/runtime.json`))
-    expect(runs[0]?.init?.env).toEqual({ CTEMPO_HOME: home })
+    expect(runs[0]?.init?.env).toEqual({ PACER_HOME: home })
   })
 }
 
@@ -296,7 +296,7 @@ test('Windows: joins runtime.json with a backslash', async ($, on) => {
   await clock.advance(1)
   // The test kit keeps this path as is on Windows; elsewhere it only puts the
   // cwd before it.
-  expect(reads[0]).toMatch(/C:\\Users\\u\\\.claude-tempo\\runtime\.json$/)
+  expect(reads[0]).toMatch(/C:\\Users\\u\\\.pacer\\runtime\.json$/)
 })
 
 test('Windows: asks for USERPROFILE, not HOME', async ($, on) => {
@@ -309,9 +309,9 @@ test('Windows: asks for USERPROFILE, not HOME', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /USERPROFILE is unset/ })).toBeDefined()
 })
 
-test('Windows: says why a network CTEMPO_HOME cannot be read', async ($, on) => {
+test('Windows: says why a network PACER_HOME cannot be read', async ($, on) => {
   const { runs, clock } = stub(on, {
-    env: { ...WINDOWS, CTEMPO_HOME: '\\\\srv\\share\\ctempo' },
+    env: { ...WINDOWS, PACER_HOME: '\\\\srv\\share\\pacer' },
     runtime: null,
     denied: 'a network location is not reached from here',
   })
@@ -320,17 +320,17 @@ test('Windows: says why a network CTEMPO_HOME cannot be read', async ($, on) => 
   expect(runs.length).toBe(0)
   const ui = await $.ui.mount(band('desktop'))
   expect(
-    await ui.find({ type: 'Text', text: /network path \\\\srv\\share\\ctempo: set CTEMPO_HOME to a local folder/ }),
+    await ui.find({ type: 'Text', text: /network path \\\\srv\\share\\pacer: set PACER_HOME to a local folder/ }),
   ).toBeDefined()
 })
 
-test('resolves CTEMPO_HOME like Python on each platform', async () => {
+test('resolves PACER_HOME like Python on each platform', async () => {
   const posix = (home: string | undefined) => ({ windows: false, home })
   const windows = (home: string | undefined) => ({ windows: true, home })
-  expect(resolveHome(undefined, posix('/home/u/'))).toBe('/home/u/.claude-tempo')
+  expect(resolveHome(undefined, posix('/home/u/'))).toBe('/home/u/.pacer')
   expect(resolveHome('C:\\x', posix('/home/u'))).toBe('/home/u/C:\\x')
   expect(() => resolveHome('~\\x', posix('/home/u'))).toThrow(/only ~ and ~\/ are expanded/)
-  expect(resolveHome(undefined, windows('C:\\'))).toBe('C:\\.claude-tempo')
+  expect(resolveHome(undefined, windows('C:\\'))).toBe('C:\\.pacer')
   expect(resolveHome('~', windows('C:\\Users\\u'))).toBe('C:\\Users\\u')
   expect(resolveHome('\\\\srv\\share\\x', windows('C:\\Users\\u'))).toBe('\\\\srv\\share\\x')
   expect(resolveHome('//srv/share/x', windows('C:\\Users\\u'))).toBe('//srv/share/x')
@@ -341,7 +341,7 @@ test('resolves CTEMPO_HOME like Python on each platform', async () => {
   expect(() => resolveHome('~other\\x', windows('C:\\Users\\u'))).toThrow(/only ~, ~\/ and ~\\ are expanded/)
 })
 
-// A CTEMPO_HOME set from Git Bash (export CTEMPO_HOME=/c/Users/me/x) names a
+// A PACER_HOME set from Git Bash (export PACER_HOME=/c/Users/me/x) names a
 // drive: the CLI reads it so (config.windows_home), and the mod must find the
 // same folder, or the band reads a runtime.json the CLI never wrote.
 test("Windows: reads Git Bash's /c/Users/x as C:/Users/x, as the CLI does", async () => {
@@ -370,19 +370,19 @@ test('runs Python with the flags runtime.json lists', async ($, on) => {
   const runtime = JSON.stringify({
     python: 'C:\\Python313\\python.exe',
     args: ['-I', '-S', '-X', 'utf8'],
-    entry: 'C:\\repo\\bin\\ctempo',
+    entry: 'C:\\repo\\bin\\pacer',
   })
   const { runs, clock } = stub(on, { env: WINDOWS, runtime })
   await $.session.start(start('desktop'))
   await clock.advance(1)
   expect(runs[0]?.argv).toEqual([
-    'C:\\Python313\\python.exe', '-I', '-S', '-X', 'utf8', 'C:\\repo\\bin\\ctempo',
+    'C:\\Python313\\python.exe', '-I', '-S', '-X', 'utf8', 'C:\\repo\\bin\\pacer',
     'statusline', '--source', 'mod', '--format', 'json',
   ])
 })
 
 test('refuses runtime.json args that are not a list of strings', async ($, on) => {
-  const runtime = JSON.stringify({ python: '/usr/bin/python3', args: '-I -S', entry: '/repo/bin/ctempo' })
+  const runtime = JSON.stringify({ python: '/usr/bin/python3', args: '-I -S', entry: '/repo/bin/pacer' })
   const { runs, clock } = stub(on, { runtime })
   await $.session.start(start('desktop'))
   await clock.advance(1)
@@ -392,11 +392,11 @@ test('refuses runtime.json args that are not a list of strings', async ($, on) =
 })
 
 test('reads a runtime.json saved with a byte order mark', async ($, on) => {
-  const runtime = `\uFEFF${JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/ctempo' })}`
+  const runtime = `\uFEFF${JSON.stringify({ python: '/usr/bin/python3', entry: '/repo/bin/pacer' })}`
   const { runs, clock } = stub(on, { runtime })
   await $.session.start(start('desktop'))
   await clock.advance(1)
-  expect(runs[0]?.argv.slice(0, 4)).toEqual(['/usr/bin/python3', '-I', '-S', '/repo/bin/ctempo'])
+  expect(runs[0]?.argv.slice(0, 4)).toEqual(['/usr/bin/python3', '-I', '-S', '/repo/bin/pacer'])
 })
 
 test('follows mod.refresh_s from the CLI', async ($, on) => {
@@ -411,8 +411,8 @@ test('follows mod.refresh_s from the CLI', async ($, on) => {
 })
 
 // Review 15: Git Bash, which runs the statusLine on Windows, rewrites a
-// CTEMPO_HOME rooted with a slash and no drive to a folder under its own
-// install (C:\Program Files\Git\srv\ctempo) before Python sees it, while the
+// PACER_HOME rooted with a slash and no drive to a folder under its own
+// install (C:\Program Files\Git\srv\pacer) before Python sees it, while the
 // mod hands Python the value as given: the band and the line would use 2
 // folders. The CLI refuses the same values (tests/test_config.py, NoDriveHome).
 // The example is on the home's drive, where older versions put the folder.
@@ -420,17 +420,17 @@ const PROFILES: [string, Record<string, string>, string][] = [
   ['a profile on C:', WINDOWS, 'C:'],
   ['a profile on D:', { ...WINDOWS, USERPROFILE: 'D:\\Users\\u' }, 'D:'],
 ]
-for (const value of ['/srv/ctempo', '/ctempo', '/tmp/x', '/']) {
+for (const value of ['/srv/pacer', '/pacer', '/tmp/x', '/']) {
   for (const [what, env, drive] of PROFILES) {
-    test(`Windows: refuses the drive-less CTEMPO_HOME ${value} with ${what}, naming the fix`, async ($, on) => {
-      const { runs, clock, reads } = stub(on, { env: { ...env, CTEMPO_HOME: value } })
+    test(`Windows: refuses the drive-less PACER_HOME ${value} with ${what}, naming the fix`, async ($, on) => {
+      const { runs, clock, reads } = stub(on, { env: { ...env, PACER_HOME: value } })
       await $.session.start(start('desktop'))
       await clock.advance(1)
       expect(reads.length).toBe(0)
       expect(runs.length).toBe(0)
       const ui = await $.ui.mount(band('desktop'))
       const why =
-        `CTEMPO_HOME ${value} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
+        `PACER_HOME ${value} has no drive; Git Bash rewrites such a path to a folder under its own install. ` +
         `Write it with a drive, e.g. ${drive}${value}, or as ~/...`
       expect(await ui.find({ type: 'Text', text: ending(why) })).toBeDefined()
     })
@@ -440,38 +440,38 @@ for (const value of ['/srv/ctempo', '/ctempo', '/tmp/x', '/']) {
 test("the drive-less example takes the home's drive, else C:", async () => {
   const windows = (home: string | undefined) => ({ windows: true, home })
   const example = (drive: string) =>
-    'CTEMPO_HOME /srv/ctempo has no drive; Git Bash rewrites such a path to a folder under its own install. ' +
-    `Write it with a drive, e.g. ${drive}/srv/ctempo, or as ~/...`
-  expect(() => resolveHome('/srv/ctempo', windows('D:\\Users\\me'))).toThrow({ message: example('D:') })
+    'PACER_HOME /srv/pacer has no drive; Git Bash rewrites such a path to a folder under its own install. ' +
+    `Write it with a drive, e.g. ${drive}/srv/pacer, or as ~/...`
+  expect(() => resolveHome('/srv/pacer', windows('D:\\Users\\me'))).toThrow({ message: example('D:') })
   const unc = '\\\\srv\\share'
-  expect(() => resolveHome('/srv/ctempo', windows(`${unc}\\me`))).toThrow({ message: example(unc) })
-  expect(() => resolveHome('/srv/ctempo', windows('\\Users\\me'))).toThrow({ message: example('C:') })
-  expect(() => resolveHome('/srv/ctempo', windows(undefined))).toThrow({ message: example('C:') })
+  expect(() => resolveHome('/srv/pacer', windows(`${unc}\\me`))).toThrow({ message: example(unc) })
+  expect(() => resolveHome('/srv/pacer', windows('\\Users\\me'))).toThrow({ message: example('C:') })
+  expect(() => resolveHome('/srv/pacer', windows(undefined))).toThrow({ message: example('C:') })
   // C:x as the CLI refuses it, word for word (tests/test_config.py, NoDriveHome).
-  for (const given of ['C:x', 'c:ctempo', 'D:']) {
+  for (const given of ['C:x', 'c:pacer', 'D:']) {
     expect(() => resolveHome(given, windows('C:\\Users\\me'))).toThrow({
-      message: `CTEMPO_HOME ${given} is relative to a drive's current folder; use an absolute path`,
+      message: `PACER_HOME ${given} is relative to a drive's current folder; use an absolute path`,
     })
   }
 })
 
 test('the drive-less rule is Windows only, and UNC, \\x and Git Bash drives still work', async () => {
   const windows = (home: string | undefined) => ({ windows: true, home })
-  expect(resolveHome('/srv/ctempo', { windows: false, home: '/home/u' })).toBe('/srv/ctempo')
+  expect(resolveHome('/srv/pacer', { windows: false, home: '/home/u' })).toBe('/srv/pacer')
   expect(resolveHome('//srv/share/x', windows('C:\\Users\\u'))).toBe('//srv/share/x')
   expect(resolveHome('/\\srv\\share\\x', windows('C:\\Users\\u'))).toBe('/\\srv\\share\\x')
-  expect(resolveHome('\\srv\\ctempo', windows('D:\\Users\\u'))).toBe('D:\\srv\\ctempo')
+  expect(resolveHome('\\srv\\pacer', windows('D:\\Users\\u'))).toBe('D:\\srv\\pacer')
   expect(resolveHome('/d/srv', windows('C:\\Users\\u'))).toBe('D:/srv')
 })
 
 // Review 15: on Windows a pinned python.exe that is gone does not fail to
 // start. cmd.exe runs the command instead, and its message names neither
-// Python nor the fix: the band said "ctempo: operable program or batch file.".
+// Python nor the fix: the band said "pacer: operable program or batch file.".
 const GONE = 'C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python311\\python.exe'
-const GONE_RUNTIME = JSON.stringify({ python: GONE, args: ['-I', '-S', '-X', 'utf8'], entry: 'C:\\repo\\bin\\ctempo' })
+const GONE_RUNTIME = JSON.stringify({ python: GONE, args: ['-I', '-S', '-X', 'utf8'], entry: 'C:\\repo\\bin\\pacer' })
 const NOT_RECOGNIZED =
   `'${GONE}' is not recognized as an internal or external command,\r\n` + 'operable program or batch file.\r\n'
-const NOT_FOUND = /Python not found at C:\\Users\\u\\.*python\.exe: run `ctempo install --apply`/
+const NOT_FOUND = /Python not found at C:\\Users\\u\\.*python\.exe: run `pacer install --apply`/
 
 function failed(exitCode: number, stderr: string): () => { value: ProcessRunResult } {
   return () => ({ value: { exitCode, stdout: '', stderr, isStdoutTruncated: false, isStderrTruncated: false } })
@@ -973,7 +973,7 @@ test('logs which surfaces the session draws on and whether one asked for the ban
   const { clock, writes } = stub(on, { surfaces: [], run: () => cli([win({ id: 'h5' }), win({ id: 'wk' })]) })
   await $.session.start(start('desktop'))
   await clock.advance(1)
-  const log = () => writes.filter((w) => w.path.endsWith('/home/u/.claude-tempo/mod.log')).pop()?.text ?? ''
+  const log = () => writes.filter((w) => w.path.endsWith('/home/u/.pacer/mod.log')).pop()?.text ?? ''
   expect(log()).toMatch(/sess-1 start: surfaces \[\]\n$/)
   await $.ui.mount(band('desktop'))
   expect(log()).toMatch(/band asked on desktop: drawn\n$/)

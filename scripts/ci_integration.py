@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""ctempo end to end, the way Claude Code runs it, in throwaway folders.
+"""pacer end to end, the way Claude Code runs it, in throwaway folders.
 
     python scripts/ci_integration.py [--no-marketplace] [--keep]
 
 CI runs it on Windows and macOS (.github/workflows/tests.yml); it runs on
-Linux too. CTEMPO_HOME, CLAUDE_CONFIG_DIR, HOME and USERPROFILE point into
+Linux too. PACER_HOME, CLAUDE_CONFIG_DIR, HOME and USERPROFILE point into
 a temporary folder for every step: the real ones are never read or written.
 
 1. Report: the shell Claude Code would run the statusLine with here
@@ -13,20 +13,20 @@ a temporary folder for every step: the real ones are never read or written.
    interpreter report (install.choose_python()).
 2. For each starting settings.json (no statusLine; CRLF line endings; a
    statusLine of the user's to compose with, in plain form and, where a
-   shell would change it on the way to Python, encoded; ctempo and its
+   shell would change it on the way to Python, encoded; pacer and its
    interpreter in folders with a space, where Windows may use their 8.3
    short paths; the interpreter is a copy of this Python installation on
-   Windows, a venv elsewhere): `python bin/ctempo install --apply
+   Windows, a venv elsewhere): `python bin/pacer install --apply
    --settings <tmp>/settings.json --no-bootstrap --no-mod`, then the
    statusLine command is read back and a statusLine payload with rate
    limits is piped into it through each shell Claude Code may use on this
    OS, with COLUMNS set (Windows: Git Bash's `bash.exe -c`, and pwsh and
    powershell.exe with -NoProfile -NonInteractive -ExecutionPolicy Bypass
-   -Command; elsewhere `/bin/sh -c`). Each must exit 0 and print the ctempo
+   -Command; elsewhere `/bin/sh -c`). Each must exit 0 and print the pacer
    line with its UTF-8 intact. A command that reads the same in every shell
    must work in every one; one written for a single shell (a quoted
    interpreter on Windows), in that shell, which must be the one Claude
-   Code would use. Then `ctempo uninstall --apply`, after which
+   Code would use. Then `pacer uninstall --apply`, after which
    settings.json must be byte for byte what it was.
 3. Which forms of this repo's path `claude plugin marketplace add` accepts
    (absolute; with forward slashes on Windows; ./ with the repo as the
@@ -34,18 +34,18 @@ a temporary folder for every step: the real ones are never read or written.
    `claude plugin install` works from the first accepted one. Reported
    only: this part never fails the run.
 4. Windows: the launchers `install --bin-dir` writes, with that folder on
-   PATH: ctempo.cmd from `cmd /d /c`, pwsh and powershell.exe, and the sh
-   ctempo beside it from Git Bash (`bash -lc`) run --version, check (exit
+   PATH: pacer.cmd from `cmd /d /c`, pwsh and powershell.exe, and the sh
+   pacer beside it from Git Bash (`bash -lc`) run --version, check (exit
    1), an install that repins to this interpreter by a path of another
    length and an uninstall, which rewrite and delete the launcher while it
-   runs. Each must exit with ctempo's code, and cmd.exe must not say "The
+   runs. Each must exit with pacer's code, and cmd.exe must not say "The
    batch file cannot be found." or "is not recognized".
 5. A read-only settings.json (attrib +R on Windows): install and uninstall
    go through, and it comes back byte for byte, still read-only.
-6. Windows: a CTEMPO_HOME rooted with a slash and no drive (/srv/ctempo-ci)
+6. Windows: a PACER_HOME rooted with a slash and no drive (/srv/pacer-ci)
    in the settings env. What Git Bash hands python.exe for it is reported
    only; `install --apply` must refuse it up front ("has no drive", exit 1),
-   with settings.json byte for byte what it was and no ctempo home made.
+   with settings.json byte for byte what it was and no pacer home made.
 7. Windows: `install --python` with a venv's python.exe pins the venv's
    base interpreter, and its report names the venv.
 
@@ -66,7 +66,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.insert(0, ROOT)
 
-from ctempo import winshell  # noqa: E402
+from pacer import winshell  # noqa: E402
 
 WINDOWS = os.name == "nt"
 GIT_BASH = r"C:\Program Files\Git\bin\bash.exe"
@@ -81,7 +81,7 @@ ROWS = []  # (scenario, shell, result) for the GitHub step summary
 REPORT = r"""
 import sys
 sys.path.insert(0, sys.argv[1])
-from ctempo import config, install, winshell
+from pacer import config, install, winshell
 print("winshell.predict_shell(): %r" % (winshell.predict_shell(),))
 if not config.IS_WINDOWS:
     print("  (Windows only: here Claude Code runs the statusLine with /bin/sh -c)")
@@ -115,7 +115,7 @@ def sandbox(tmp):
     home = os.path.join(tmp, "home")
     os.makedirs(home, exist_ok=True)
     env = dict(os.environ)
-    env.update(CTEMPO_HOME=os.path.join(tmp, "ctempo"), CLAUDE_CONFIG_DIR=os.path.join(tmp, "claude"),
+    env.update(PACER_HOME=os.path.join(tmp, "pacer"), CLAUDE_CONFIG_DIR=os.path.join(tmp, "claude"),
                HOME=home, USERPROFILE=home, COLUMNS=COLUMNS,
                DISABLE_AUTOUPDATER="1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1")
     return env
@@ -170,7 +170,7 @@ def shell_versions(env):
             fail("%s not found (%s)" % (name, GIT_BASH if name == "bash" else "PATH"))
 
 
-def ctempo(entry, env, args):
+def pacer(entry, env, args):
     p = subprocess.run([sys.executable, entry] + args, env=env, capture_output=True, timeout=600)
     print("  $ python %s %s -> exit %d" % (entry, " ".join(args), p.returncode))
     show((p.stdout + p.stderr).decode("utf-8", "replace"))
@@ -211,7 +211,7 @@ def problems_of(p, lines, utf8, extra):
     if p.returncode != 0:
         out.append("exit %d" % p.returncode)
     if ours is None:
-        out.append("no ctempo line (5h [bar] 42% ... Week [bar] 17%)")
+        out.append("no pacer line (5h [bar] 42% ... Week [bar] 17%)")
     elif not utf8 or SEP not in ours:
         out.append("UTF-8 garbled on the way (no %r in the line)" % SEP)
     if extra and not any(extra in s for s in lines):
@@ -240,7 +240,7 @@ def try_shells(name, cmd, env, target=None, extra=None):
 def recorded_shell(env, path):
     """The shell install.json records for this settings file (Windows), or None."""
     try:
-        with open(os.path.join(env["CTEMPO_HOME"], "install.json"), encoding="utf-8-sig") as f:
+        with open(os.path.join(env["PACER_HOME"], "install.json"), encoding="utf-8-sig") as f:
             records = json.load(f).get("records") or {}
     except (OSError, ValueError, AttributeError):
         return None
@@ -272,7 +272,7 @@ def scenario(name, tmp, before, entry, python=None, extra=None):
     with open(path, "wb") as f:
         f.write(before)
     args = ["install", "--apply", "--settings", path, "--no-bootstrap", "--no-mod"]
-    if ctempo(entry, env, args + (["--python", python] if python else [])) != 0:
+    if pacer(entry, env, args + (["--python", python] if python else [])) != 0:
         return fail("%s: install failed" % name)
     try:
         with open(path, encoding="utf-8-sig") as f:
@@ -282,12 +282,12 @@ def scenario(name, tmp, before, entry, python=None, extra=None):
         return fail("%s: no statusLine command after install (%r)" % (name, e))
     print("  statusLine command: %s" % cmd)
     try_shells(name, cmd, env, target_shell(name, cmd, env, obj, path), extra)
-    log = os.path.join(env["CTEMPO_HOME"], "errors.log")
+    log = os.path.join(env["PACER_HOME"], "errors.log")
     if os.path.exists(log):
-        fail("%s: ctempo logged errors" % name)
+        fail("%s: pacer logged errors" % name)
         with open(log, encoding="utf-8", errors="replace") as f:
             show(f.read())
-    if ctempo(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
+    if pacer(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
         return fail("%s: uninstall failed" % name)
     with open(path, "rb") as f:
         after = f.read()
@@ -303,7 +303,7 @@ def base_python():
     return getattr(sys, "_base_executable", None) or sys.executable
 
 
-# Folders of a Python installation that ctempo never loads, left out of base_copy.
+# Folders of a Python installation that pacer never loads, left out of base_copy.
 NOT_COPIED = {"doc", "include", "libs", "tcl", "tools", "scripts"}
 
 
@@ -311,7 +311,7 @@ def base_copy(dest):
     """Windows: this Python installation (sys.base_prefix) copied to dest, and its python.exe
     there, else None after a failure. A python.org installation runs from any folder: python.exe
     finds the standard library by Lib\\os.py beside it. A venv will not do here, since install
-    pins a venv's base interpreter on Windows. Left out: what ctempo never loads (site-packages,
+    pins a venv's base interpreter on Windows. Left out: what pacer never loads (site-packages,
     the docs, headers and import libraries, Tcl/Tk, Tools, Scripts, the test suites, __pycache__)."""
     top, lib = (os.path.normcase(p) for p in (sys.base_prefix, os.path.join(sys.base_prefix, "Lib")))
 
@@ -338,25 +338,25 @@ def base_copy(dest):
 
 
 def spaced_copy(base):
-    """ctempo copied into base (a folder with a space), and an interpreter there (None if none):
+    """pacer copied into base (a folder with a space), and an interpreter there (None if none):
     on Windows a copy of this Python installation (base_copy), elsewhere a venv, which macOS and
     Linux pin as given."""
-    for part in ("bin", "ctempo"):
+    for part in ("bin", "pacer"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(base, "repo", part),
                         ignore=shutil.ignore_patterns("__pycache__"))
     if WINDOWS:
-        return os.path.join(base, "repo", "bin", "ctempo"), base_copy(os.path.join(base, "python"))
+        return os.path.join(base, "repo", "bin", "pacer"), base_copy(os.path.join(base, "python"))
     venv = os.path.join(base, "venv")
     p = subprocess.run([sys.executable, "-m", "venv", "--without-pip", venv], capture_output=True, timeout=300)
     python = os.path.join(venv, "Scripts", "python.exe") if WINDOWS else os.path.join(venv, "bin", "python")
     if p.returncode != 0 or not os.path.exists(python):
         print("  (no venv, so the interpreter's path has no space: %s)" % p.stderr.decode("utf-8", "replace").strip())
         python = None
-    return os.path.join(base, "repo", "bin", "ctempo"), python
+    return os.path.join(base, "repo", "bin", "pacer"), python
 
 
 def own_forms(env, python, entry):
-    """Windows: ctempo's command in each shell's own syntax (what install writes when a
+    """Windows: pacer's command in each shell's own syntax (what install writes when a
     path must be quoted) runs in that shell, whichever one Claude Code would pick."""
     argv = [python.replace("\\", "/")] + winshell.python_flags(True) + [entry.replace("\\", "/"), "statusline"]
     for sh, sargv, e in shells(env):
@@ -403,7 +403,7 @@ def composed_forms(tmp, entry):
     """A previous statusLine that a shell would hand to Python changed on Windows goes
     base64-encoded after --compose-b64, any other as the readable --compose <command>
     (never encoded on macOS or Linux). Each: install, check the form, render through the
-    shells given (the composed command's line must be there, and ctempo's), uninstall,
+    shells given (the composed command's line must be there, and pacer's), uninstall,
     and compare settings.json byte for byte."""
     for i, (theirs, encoded, names, ok, meaning) in enumerate(COMPOSED):
         name = "composed %s" % theirs
@@ -413,14 +413,14 @@ def composed_forms(tmp, entry):
         with open(os.path.join(env["HOME"], "mine.sh"), "w", encoding="utf-8", newline="\n") as f:
             f.write("#!/bin/sh\necho mine\n")
         os.chmod(os.path.join(env["HOME"], "mine.sh"), 0o755)
-        os.makedirs(env["CTEMPO_HOME"], exist_ok=True)
-        with open(os.path.join(env["CTEMPO_HOME"], "config.json"), "w", encoding="utf-8") as f:
+        os.makedirs(env["PACER_HOME"], exist_ok=True)
+        with open(os.path.join(env["PACER_HOME"], "config.json"), "w", encoding="utf-8") as f:
             json.dump({"compose": {"timeout_ms": 5000}}, f)  # what is checked here is the text, not the timing
         path = os.path.join(root, "settings.json")
         before = (json.dumps({"statusLine": {"type": "command", "command": theirs}}, indent=2) + "\n").encode("utf-8")
         with open(path, "wb") as f:
             f.write(before)
-        if ctempo(entry, env, ["install", "--apply", "--settings", path, "--no-bootstrap", "--no-mod"]) != 0:
+        if pacer(entry, env, ["install", "--apply", "--settings", path, "--no-bootstrap", "--no-mod"]) != 0:
             fail("%s: install failed" % name)
             continue
         with open(path, encoding="utf-8-sig") as f:
@@ -443,12 +443,12 @@ def composed_forms(tmp, entry):
             if problems:
                 fail("%s, through %s: %s" % (name, sh, "; ".join(problems)))
                 show(p.stderr.decode("utf-8", "replace"))
-        log = os.path.join(env["CTEMPO_HOME"], "errors.log")
+        log = os.path.join(env["PACER_HOME"], "errors.log")
         if os.path.exists(log):
-            fail("%s: ctempo logged errors" % name)
+            fail("%s: pacer logged errors" % name)
             with open(log, encoding="utf-8", errors="replace") as f:
                 show(f.read())
-        if ctempo(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
+        if pacer(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
             fail("%s: uninstall failed" % name)
             continue
         with open(path, "rb") as f:
@@ -461,14 +461,14 @@ def composed_forms(tmp, entry):
 
 def short_paths(python, entry):
     """Windows, the paths with a space: whether the statusLine command names the interpreter
-    and ctempo by their 8.3 short paths (then it reads the same in every shell, and the
+    and pacer by their 8.3 short paths (then it reads the same in every shell, and the
     scenario above required it to work in all of them). Reported only."""
     if not WINDOWS or not python:
         return
-    from ctempo import install
+    from pacer import install
 
     print("\n== 8.3 short paths for the paths with a space")
-    for what, path in (("interpreter", python), ("ctempo", entry)):
+    for what, path in (("interpreter", python), ("pacer", entry)):
         word = install._path_word(path)
         used = word != winshell.slashes(path)
         print("  %s: %s -> %s (%s)" % (what, path, word, "8.3 short path" if used else "no bare short path"))
@@ -484,47 +484,47 @@ def other_python():
 
 
 def launchers(tmp):
-    """Windows: ctempo.cmd from cmd.exe, pwsh and powershell.exe, and the sh ctempo beside it
+    """Windows: pacer.cmd from cmd.exe, pwsh and powershell.exe, and the sh pacer beside it
     from Git Bash, with the --bin-dir folder on PATH: --version, check (its exit 1 must reach
     the caller), an install that repins to an interpreter whose path has another length (it
     rewrites the launchers while one runs) and an uninstall (it deletes them while one runs).
-    Each must exit with ctempo's own code, and cmd.exe must not read the batch file again after
+    Each must exit with pacer's own code, and cmd.exe must not read the batch file again after
     python returned ("The batch file cannot be found.", or a piece of the new text run as a
     command: "is not recognized")."""
     if not WINDOWS:
         return
-    print("\n== The launchers: ctempo.cmd from cmd.exe and PowerShell, ctempo from Git Bash")
+    print("\n== The launchers: pacer.cmd from cmd.exe and PowerShell, pacer from Git Bash")
     env = sandbox(tmp)
     bindir = os.path.join(tmp, "bin")
     env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
     settings = os.path.join(tmp, "settings.json")
     before = b'{\n  "theme": "dark"\n}\n'
-    entry = os.path.join(ROOT, "bin", "ctempo")
+    entry = os.path.join(ROOT, "bin", "pacer")
     other = other_python()
     print("  interpreters: %s (%d characters), then %s (%d)" % (sys.executable, len(sys.executable), other, len(other)))
     cmd_exe = os.environ.get("ComSpec") or r"C:\Windows\System32\cmd.exe"
-    callers = [("cmd", "ctempo.cmd", lambda words: '"%s" /d /c %s' % (cmd_exe, subprocess.list2cmdline(words)))]
+    callers = [("cmd", "pacer.cmd", lambda words: '"%s" /d /c %s' % (cmd_exe, subprocess.list2cmdline(words)))]
     for ps in ("pwsh", "powershell"):
         exe = shutil.which(ps, path=env["PATH"])
         if exe:  # shell_versions() fails the run for a missing one
-            callers.append((ps, "ctempo.cmd", lambda words, exe=exe: [exe] + PS_FLAGS + [
+            callers.append((ps, "pacer.cmd", lambda words, exe=exe: [exe] + PS_FLAGS + [
                 "& %s; exit $LASTEXITCODE" % " ".join(winshell.quote(w, "powershell") for w in words)]))
     if os.path.exists(GIT_BASH):
-        callers.append(("Git Bash", "ctempo", lambda words: [GIT_BASH, "-lc", " ".join(
+        callers.append(("Git Bash", "pacer", lambda words: [GIT_BASH, "-lc", " ".join(
             winshell.quote(winshell.slashes(w), "bash") for w in words)]))
     inst = ["install", "--apply", "--no-mod", "--no-bootstrap", "--settings", settings]
     for caller, name, line in callers:
         print("\n  -- %s, running %s" % (caller, name))
         with open(settings, "wb") as f:
             f.write(before)
-        if ctempo(entry, env, inst + ["--bin-dir", bindir]) != 0:
+        if pacer(entry, env, inst + ["--bin-dir", bindir]) != 0:
             fail("launchers, %s: install --bin-dir failed" % caller)
             continue
-        steps = [([name, "--version"], 0, "ctempo "), ([name, "check"], 1, None),
+        steps = [([name, "--version"], 0, "pacer "), ([name, "check"], 1, None),
                  ([name] + inst + ["--python", other], 0, "Wrote launcher"),
                  ([name, "uninstall", "--apply", "--no-mod", "--settings", settings], 0, "Uninstalled")]
-        if name == "ctempo.cmd":  # by its bare name too: PATHEXT finds ctempo.cmd, never the sh ctempo
-            steps.insert(1, (["ctempo", "--version"], 0, "ctempo "))
+        if name == "pacer.cmd":  # by its bare name too: PATHEXT finds pacer.cmd, never the sh pacer
+            steps.insert(1, (["pacer", "--version"], 0, "pacer "))
         problems = []
         for words, want, text in steps:
             try:
@@ -541,15 +541,15 @@ def launchers(tmp):
                                                               "" if not text or text in out else ", no %r" % text,
                                                               "".join(", says %r" % s for s in said)))
             if words[1] == "install":  # repinned while one of them ran
-                for path, want_text in ((os.path.join(bindir, "ctempo.cmd"), other),
-                                        (os.path.join(bindir, "ctempo"), winshell.slashes(other))):
+                for path, want_text in ((os.path.join(bindir, "pacer.cmd"), other),
+                                        (os.path.join(bindir, "pacer"), winshell.slashes(other))):
                     try:
                         with open(path, encoding="latin-1") as f:
                             if want_text not in f.read():
                                 problems.append("%s does not run %s after the repin" % (path, other))
                     except OSError as e:
                         problems.append("%s after the repin: %s" % (path, e))
-        left = [n for n in ("ctempo.cmd", "ctempo") if os.path.exists(os.path.join(bindir, n))]
+        left = [n for n in ("pacer.cmd", "pacer") if os.path.exists(os.path.join(bindir, n))]
         if left:
             problems.append("uninstall left %s" % ", ".join(left))
         with open(settings, "rb") as f:
@@ -567,7 +567,7 @@ def read_only(tmp):
     name = "a read-only settings.json"
     print("\n== %s" % name)
     env = sandbox(tmp)
-    entry = os.path.join(ROOT, "bin", "ctempo")
+    entry = os.path.join(ROOT, "bin", "pacer")
     path, new = os.path.join(tmp, "settings.json"), os.path.join(tmp, "new", "settings.json")
     before = b'{\r\n  "theme": "dark"\r\n}\r\n'
     with open(path, "wb") as f:
@@ -590,24 +590,24 @@ def read_only(tmp):
     flags = ["--no-bootstrap", "--no-mod"]
     try:
         protect(path)
-        if ctempo(entry, env, ["install", "--apply", "--settings", path] + flags) != 0:
+        if pacer(entry, env, ["install", "--apply", "--settings", path] + flags) != 0:
             problems.append("install failed")
         else:
             with open(path, encoding="utf-8") as f:
-                if "ctempo" not in (json.load(f).get("statusLine") or {}).get("command", ""):
-                    problems.append("no ctempo statusLine after install")
+                if "pacer" not in (json.load(f).get("statusLine") or {}).get("command", ""):
+                    problems.append("no pacer statusLine after install")
             read_only_now(path, "after install")
-            if ctempo(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
+            if pacer(entry, env, ["uninstall", "--apply", "--settings", path, "--no-mod"]) != 0:
                 problems.append("uninstall failed")
             with open(path, "rb") as f:
                 if f.read() != before:
                     problems.append("it differs after uninstall")
             read_only_now(path, "after uninstall")
-        if ctempo(entry, env, ["install", "--apply", "--settings", new] + flags) != 0:
+        if pacer(entry, env, ["install", "--apply", "--settings", new] + flags) != 0:
             problems.append("install into a new settings.json failed")
         else:
             protect(new)
-            if ctempo(entry, env, ["uninstall", "--apply", "--settings", new, "--no-mod"]) != 0:
+            if pacer(entry, env, ["uninstall", "--apply", "--settings", new, "--no-mod"]) != 0:
                 problems.append("uninstall of a new settings.json made read-only failed")
             elif os.path.exists(new):
                 problems.append("uninstall left the settings.json it created")
@@ -626,37 +626,37 @@ def read_only(tmp):
 
 
 def drive_less_home(tmp, entry):
-    """Windows: what Git Bash hands python.exe for a CTEMPO_HOME rooted with a slash and no
+    """Windows: what Git Bash hands python.exe for a PACER_HOME rooted with a slash and no
     drive (reported only), and that install refuses such a value in the settings env, which
     Claude Code passes to the statusLine as written."""
-    print("\n== A CTEMPO_HOME with no drive: /srv/ctempo-ci")
+    print("\n== A PACER_HOME with no drive: /srv/pacer-ci")
     if not WINDOWS:
         print("  (Windows only: elsewhere it is an absolute path)")
         return
     env = sandbox(tmp)
-    probe = "'%s' -I -S -c 'import os; print(os.environ[\"CTEMPO_HOME\"])'" % sys.executable.replace("\\", "/")
+    probe = "'%s' -I -S -c 'import os; print(os.environ[\"PACER_HOME\"])'" % sys.executable.replace("\\", "/")
     for sh, argv, e in shells(env):
         if sh == "bash":
-            p = subprocess.run(argv + [probe], env=dict(e, CTEMPO_HOME="/srv/ctempo-ci"), capture_output=True,
+            p = subprocess.run(argv + [probe], env=dict(e, PACER_HOME="/srv/pacer-ci"), capture_output=True,
                                timeout=60, **hidden())
             seen = (p.stdout + p.stderr).decode("utf-8", "replace").strip()
-            print("  Git Bash hands python.exe CTEMPO_HOME=%s" % seen)
-            ROWS.append(("CTEMPO_HOME /srv/ctempo-ci", sh, "python.exe sees %s" % seen))
+            print("  Git Bash hands python.exe PACER_HOME=%s" % seen)
+            ROWS.append(("PACER_HOME /srv/pacer-ci", sh, "python.exe sees %s" % seen))
     path = os.path.join(tmp, "settings.json")
-    before = b'{\n  "env": {\n    "CTEMPO_HOME": "/srv/ctempo-ci"\n  }\n}\n'
+    before = b'{\n  "env": {\n    "PACER_HOME": "/srv/pacer-ci"\n  }\n}\n'
     with open(path, "wb") as f:
         f.write(before)
     args = ["install", "--apply", "--settings", path, "--no-bootstrap", "--no-mod"]
     p = subprocess.run([sys.executable, entry] + args, env=env, capture_output=True, timeout=600)
     out = (p.stdout + p.stderr).decode("utf-8", "replace")
-    print("  $ python %s %s (its env: CTEMPO_HOME=/srv/ctempo-ci) -> exit %d" % (entry, " ".join(args), p.returncode))
+    print("  $ python %s %s (its env: PACER_HOME=/srv/pacer-ci) -> exit %d" % (entry, " ".join(args), p.returncode))
     show(out)
     with open(path, "rb") as f:
         after = f.read()
-    ok = p.returncode == 1 and "has no drive" in out and after == before and not os.path.exists(env["CTEMPO_HOME"])
-    ROWS.append(("CTEMPO_HOME /srv/ctempo-ci", "install --apply", "refused" if ok else "FAILED"))
+    ok = p.returncode == 1 and "has no drive" in out and after == before and not os.path.exists(env["PACER_HOME"])
+    ROWS.append(("PACER_HOME /srv/pacer-ci", "install --apply", "refused" if ok else "FAILED"))
     if not ok:
-        fail("install --apply with CTEMPO_HOME=/srv/ctempo-ci in the settings env: not refused up front")
+        fail("install --apply with PACER_HOME=/srv/pacer-ci in the settings env: not refused up front")
 
 
 def venv_pin(tmp):
@@ -674,7 +674,7 @@ def venv_pin(tmp):
         print("  (no venv, not checked: %s)" % p.stderr.decode("utf-8", "replace").strip())
         ROWS.append(("venv pin", "install", "not checked (no venv)"))
         return
-    from ctempo import install
+    from pacer import install
 
     pin, report = install.choose_python(python)
     note = report[0][5] if report else ""
@@ -731,7 +731,7 @@ def marketplace(tmp):
             run(["--version"], env, cwd)
         code, _ = run(["plugin", "marketplace", "add", source], env, cwd)
         _, listed = run(["plugin", "marketplace", "list", "--json"], env, cwd)
-        ok = code == 0 and "claude-tempo" in listed
+        ok = code == 0 and "pacer" in listed
         ROWS.append(("marketplace add", label, "accepted" if ok else "rejected"))
         if ok:
             accepted.append((label, env, cwd))
@@ -743,17 +743,17 @@ def marketplace(tmp):
     if accepted:
         label, env, cwd = accepted[0]
         print("\n  -- plugin install, after the marketplace was added by %s" % label)
-        code, _ = run(["plugin", "install", "ctempo@claude-tempo", "--scope", "user"], env, cwd)
+        code, _ = run(["plugin", "install", "pacer@pacer", "--scope", "user"], env, cwd)
         _, listed = run(["plugin", "list", "--json"], env, cwd)
-        ROWS.append(("plugin install", "ctempo@claude-tempo",
-                     "installed" if code == 0 and "ctempo@claude-tempo" in listed else "failed"))
+        ROWS.append(("plugin install", "pacer@pacer",
+                     "installed" if code == 0 and "pacer@pacer" in listed else "failed"))
 
 
 def summary():
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not path or not ROWS:
         return
-    lines = ["### ctempo integration on %s, Python %s" % (sys.platform, sys.version.split()[0]), "",
+    lines = ["### pacer integration on %s, Python %s" % (sys.platform, sys.version.split()[0]), "",
              "| step | shell or form | result |", "| --- | --- | --- |"]
     lines += ["| %s | %s | %s |" % tuple(c.replace("|", "/") for c in row) for row in ROWS]
     with open(path, "a", encoding="utf-8") as f:
@@ -769,17 +769,17 @@ def main(argv):
     ap.add_argument("--keep", action="store_true", help="keep the temporary folder")
     args = ap.parse_args(argv)
     print("%s, Python %s (%s), repo %s" % (sys.platform, sys.version.split()[0], sys.executable, ROOT))
-    tmp = tempfile.mkdtemp(prefix="ctempo-ci-")
+    tmp = tempfile.mkdtemp(prefix="pacer-ci-")
     try:
         report(os.path.join(tmp, "report"))
         git_bash_predicted(os.path.join(tmp, "predicted"))
-        entry = os.path.join(ROOT, "bin", "ctempo")
+        entry = os.path.join(ROOT, "bin", "pacer")
         scenario("no statusLine before", os.path.join(tmp, "add"), b'{\n  "theme": "dark"\n}\n', entry)
         scenario("CRLF line endings", os.path.join(tmp, "crlf"), b'{\r\n  "theme": "dark"\r\n}\r\n', entry)
         theirs = b'{\n  "statusLine": {\n    "type": "command",\n    "command": "echo mine"\n  }\n}\n'
         scenario("composed with the user's statusLine", os.path.join(tmp, "compose"), theirs, entry, extra="mine")
         composed_forms(os.path.join(tmp, "forms"), entry)
-        spaces = os.path.join(tmp, "spaces", "with space")  # settings.json and CTEMPO_HOME too
+        spaces = os.path.join(tmp, "spaces", "with space")  # settings.json and PACER_HOME too
         entry, python = spaced_copy(spaces)
         env = scenario("paths with a space", spaces, b"{}\n", entry, python=python)
         short_paths(python, entry)
@@ -787,7 +787,7 @@ def main(argv):
             own_forms(env, python, entry)
         launchers(os.path.join(tmp, "launchers"))
         read_only(os.path.join(tmp, "read-only"))
-        drive_less_home(os.path.join(tmp, "nodrive"), os.path.join(ROOT, "bin", "ctempo"))
+        drive_less_home(os.path.join(tmp, "nodrive"), os.path.join(ROOT, "bin", "pacer"))
         venv_pin(os.path.join(tmp, "venv-pin"))
         if not args.no_marketplace:
             marketplace(os.path.join(tmp, "marketplace"))

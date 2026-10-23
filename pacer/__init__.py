@@ -1,4 +1,4 @@
-"""ctempo: a local pace monitor for Claude's 5-hour and weekly usage windows.
+"""pacer: a local pace monitor for Claude's 5-hour and weekly usage windows.
 
 Standard library only. See README.md for what each number means.
 """

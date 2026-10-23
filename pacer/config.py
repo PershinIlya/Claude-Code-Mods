@@ -1,9 +1,9 @@
 """Paths and configuration.
 
-Everything lives under CTEMPO_HOME (default ~/.claude-tempo; `~` is expanded
+Everything lives under PACER_HOME (default ~/.pacer; `~` is expanded
 and a relative value is taken from the home directory). The config file is
 optional: missing keys fall back to DEFAULTS, unknown keys are kept so a
-newer config does not break an older ctempo.
+newer config does not break an older pacer.
 """
 
 import copy
@@ -42,7 +42,7 @@ DEFAULTS = {
     # faster, < slow_down means you will overshoot the target.
     "verdict": {"speed_up": 1.2, "slow_down": 0.9},
     # A window is "in its tail" this close to its reset (used by colors and
-    # by `ctempo check`).
+    # by `pacer check`).
     "tail": {"five_hour_min": 60, "seven_day_hours": 48},
     # Points of projected surplus that count as worth harvesting.
     "min_free": 10.0,
@@ -90,9 +90,9 @@ DEFAULTS = {
     "mod": {"surfaces": ["desktop"], "refresh_s": 60},
     # Every this many minutes the menu bar or a Desktop band asks Claude
     # Code's own /usage for the account's levels, so work in chats, cloud
-    # sessions or on another computer shows too (0: never; `ctempo fetch`).
+    # sessions or on another computer shows too (0: never; `pacer fetch`).
     "fetch_usage_min": 0,
-    # The macOS menu bar (ctempo menubar).
+    # The macOS menu bar (pacer menubar).
     # notify: a macOS notification when a limit will run out or is reached,
     # or quota will go unused (once per window).
     # style: "bars" draws the bars as pictures, "text" as plain text.
@@ -106,7 +106,7 @@ DEFAULTS = {
 
 
 def private_dir(d):
-    """Make the folder `d` (and its parents) as ctempo's own: only the user
+    """Make the folder `d` (and its parents) as pacer's own: only the user
     reads a new one (its records hold earlier statusLine commands, session
     ids). An existing folder is left as it is."""
     if d:
@@ -138,11 +138,15 @@ def which(name, path=None):
 
 
 def home():
-    value = os.environ.get("CTEMPO_HOME")
+    # CTEMPO_HOME and ~/.claude-tempo: installs from before the rename, until
+    # `pacer install --apply` moves them (legacy.py).
+    value = os.environ.get("PACER_HOME") or os.environ.get("CTEMPO_HOME")
     if IS_WINDOWS:
         return windows_home(value)
     if not value:
-        return os.path.join(os.path.expanduser("~"), ".claude-tempo")
+        new = os.path.join(os.path.expanduser("~"), ".pacer")
+        old = os.path.join(os.path.expanduser("~"), ".claude-tempo")
+        return old if not os.path.exists(new) and os.path.isdir(old) else new
     # Claude Code copies settings.json `env` values as written: expand `~`
     # here, and take a relative path from the home directory, never from the
     # session's cwd (each project would get a database of its own).
@@ -150,7 +154,7 @@ def home():
 
 
 class HomeError(ValueError):
-    """A CTEMPO_HOME ctempo refuses (Windows: see windows_home)."""
+    """A PACER_HOME pacer refuses (Windows: see windows_home)."""
 
 
 def windows_home(value):
@@ -173,15 +177,16 @@ def windows_home(value):
 
     user = ntpath.expanduser("~")
     if not value:
-        return ntpath.join(user, ".claude-tempo")
+        new, old = ntpath.join(user, ".pacer"), ntpath.join(user, ".claude-tempo")
+        return old if not os.path.exists(new) and os.path.isdir(old) else new
     if value[:1] == "/" and value[1:2].isalpha() and value[1:2].isascii() and value[2:3] in ("", "/"):
         value = value[1].upper() + ":/" + value[3:]
     elif value[:1] == "/" and value[1:2] not in ("/", "\\"):
-        raise HomeError("CTEMPO_HOME %s has no drive; Git Bash rewrites such a path to a folder under its own "
+        raise HomeError("PACER_HOME %s has no drive; Git Bash rewrites such a path to a folder under its own "
                         "install. Write it with a drive, e.g. %s%s, or as ~/..."
                         % (value, ntpath.splitdrive(user)[0] or "C:", value))
     if value[:1].isalpha() and value[:1].isascii() and value[1:2] == ":" and value[2:3] not in ("/", "\\"):
-        raise HomeError("CTEMPO_HOME %s is relative to a drive's current folder; use an absolute path" % value)
+        raise HomeError("PACER_HOME %s is relative to a drive's current folder; use an absolute path" % value)
     return ntpath.normpath(ntpath.join(user, ntpath.expanduser(value)))
 
 

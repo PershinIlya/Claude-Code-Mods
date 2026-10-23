@@ -20,12 +20,12 @@ suite, the mod's tests, and `scripts/ci_integration.py` through Git Bash,
 pwsh, powershell.exe and cmd.exe); D-25 to D-29 hold its choices.
 
 **D-02. Python 3.8+, standard library only, package plus launcher.** The core
-is `ctempo/` (importable) and `bin/ctempo` (a launcher that puts the repo on
+is `pacer/` (importable) and `bin/pacer` (a launcher that puts the repo on
 `sys.path`, so it runs under `python -I -S`). macOS Command Line Tools ship
 Python 3.9, so nothing newer than 3.8 syntax is used; the suite runs on 3.8,
 3.9, 3.11, 3.12 and 3.13. The statusline path does not import argparse.
 
-**D-03. Interpreter pinning.** `ctempo install` probes candidates with
+**D-03. Interpreter pinning.** `pacer install` probes candidates with
 `python -I -S -c "import sys, sqlite3, json"` (three runs, best time), in this
 order: `/usr/bin/python3` (skipped on macOS when the Command Line Tools are
 missing, because the shim would pop an install dialog), Homebrew, the
@@ -33,7 +33,7 @@ interpreter running install, `which python3`. The first that passes wins;
 `--python` overrides. System and Homebrew paths come first because a conda env
 can be deactivated, updated or deleted, and the Desktop app does not inherit
 the shell's PATH. The chosen absolute path goes into the statusLine command
-and into `~/.claude-tempo/runtime.json` (read by the mod). `-I` ignores
+and into `~/.pacer/runtime.json` (read by the mod). `-I` ignores
 PYTHON* variables and the user site; `-S` skips `site` (faster, and stdlib
 needs nothing from it). On Windows the candidates, the probe and the pin
 differ (D-27), and every command adds `-X utf8` (D-25).
@@ -41,7 +41,7 @@ differ (D-27), and every command adds `-X utf8` (D-25).
 ## Data
 
 **D-04. Sources.** Primary: the statusLine stdin payload, written by
-`ctempo statusline` (no network, no token). Desktop: the mod reads
+`pacer statusline` (no network, no token). Desktop: the mod reads
 `$.session.usage().rateLimits` (and the same list from `session.measure`),
 converts it to the statusLine shape (ISO `resetsAt` to epoch seconds) and
 calls the same CLI. One code path, two collectors.
@@ -54,8 +54,8 @@ about it at the next API response), (c) `extra_usage`. Cost: it needs the
 OAuth token (Keychain item "Claude Code-credentials"), it can be rate limited
 (429), and the endpoint is undocumented.
 
-**D-05. Store.** SQLite at `~/.claude-tempo/tempo.db` (override with
-`CTEMPO_HOME`; a leading `~` is expanded and a relative path is taken from the
+**D-05. Store.** SQLite at `~/.pacer/tempo.db` (override with
+`PACER_HOME`; a leading `~` is expanded and a relative path is taken from the
 home directory, because Claude Code passes settings.json `env` values as
 written and the statusLine runs in each session's folder; on Windows by the
 rules of D-28), WAL,
@@ -124,9 +124,9 @@ moved earlier back to the old reset on every render pair (found in review).
 Limits: the reading before last does not catch 3 or more processes cycling on
 1 session id; a reading that another session's identical row deduplicated
 (D-07) leaves no sample to match; and a real reset whose `resets_at` lands on
-that of a window ctempo closed, read at levels the session already gave that
+that of a window pacer closed, read at levels the session already gave that
 window, waits for a level it did not give. Three more cases are known and left
-as they are, since 2 processes on 1 session id are rare and ctempo cannot tell
+as they are, since 2 processes on 1 session id are rare and pacer cannot tell
 them apart without a process identity (Claude Code runs each statusLine render
 through a new `sh` in a new process group, so neither the parent nor the group
 says which process it is): an idle process's stale reading can complete a real
@@ -178,7 +178,7 @@ Claude-Code-Usage-Monitor); values in (100, 105] clamp to 100. `resets_at`
 may be seconds, milliseconds, a numeric string or ISO 8601; it must be after
 2017, not already passed (5 s grace), and no further ahead than the window
 length plus 15 min (5h) or 1 h (7d). Each rejection is counted in `meta`
-(`ctempo doctor` shows them). Booleans are not numbers.
+(`pacer doctor` shows them). Booleans are not numbers.
 
 **D-10. Reset detection.** Besides a later `resets_at`: a fresh reading at
 least 15 points below the window's max (15 included) is an ANOMALY; two
@@ -268,7 +268,7 @@ reading may be a replay: one it already gave (D-06), or its first change,
 whose reading before last is unknown. The idle twins of 2 sessions, each at
 the old reset while its busy twin read the reset moved later, made the run
 that reopened the old window, and at install 2 sessions' idle twins put the
-line on a week that had ended before ctempo saw it (found in review). The
+line on a week that had ended before pacer saw it (found in review). The
 superseded instance stays closed with reason `shift`. It never ended, so
 `report`, the profile's points-vs-pace table, the typical week and the weekly
 lookback all leave it out.
@@ -296,7 +296,7 @@ the window's first real point once a second real point follows it (the
 0-at-start ramp diluted a late start); until 5 minutes follow that first point
 there is no rate, and the line shows only the allowed rate. The burn is then
 unknown, not zero, and so is the leftover: the window is never green (D-16)
-and `check` says no go (D-20); `ctempo now` names which wait it is (the window
+and `check` says no go (D-20); `pacer now` names which wait it is (the window
 opened less than 5 minutes ago, or work started in it less than 5 minutes ago,
 at HH:MM). An unknown burn priced as zero turned a late start in the tail
 green, with `check` saying go, while it ran dry (found in review). A single
@@ -368,9 +368,9 @@ cut at local hour boundaries, so DST days with 23 or 25 hours are handled.
   review); without those, the unweighted ratio `sum(m) / sum(p)` over observed
   bins. Unweighted because busy hours are observed with more confidence (short
   gaps), which inflated the weighted ratio from 40 to 106 in a test. The line,
-  `ctempo profile`, `profile --rebuild` and learning all build the weights
+  `pacer profile`, `profile --rebuild` and learning all build the weights
   this way (`profile.current_weights`); `profile` used the ratio and printed a
-  typical week of 168% (found in review). `ctempo profile` names the three
+  typical week of 168% (found in review). `pacer profile` names the three
   lightest 3-hour blocks whose hours are all awake by that rule, and none on a
   flat profile. It listed "Mon 00-03, Mon 03-06, Mon 06-09" on a flat profile,
   and wake-up or bedtime blocks that were two-thirds asleep (found in review).
@@ -395,7 +395,7 @@ days before it speaks. The transcript prior removes the cold start, and the
 shrinkage handles the noise of 168 bins.
 
 Learning runs inside the statusline at most every 10 minutes (incremental, a
-few ms); `ctempo profile --rebuild` relearns from all samples.
+few ms); `pacer profile --rebuild` relearns from all samples.
 
 **D-14. Transcript prior.** Assistant messages under `~/.claude/projects/**`
 (subagents included) from the last 45 days (`profile.bootstrap_days`); files
@@ -420,16 +420,16 @@ from its `built_at`, in shape (`a x prior + (1 - a) x uniform`,
 idle since then are only seen through overnight gaps, learned at low
 confidence and spread by the prior's own shape. So a prior of constant
 strength kept Mon-Fri 9-13 at 20% of the week 8 weeks after a move to 14-23
-(found in review). `ctempo profile` prints the prior's age and its weight now
+(found in review). `pacer profile` prints the prior's age and its weight now
 (trust times `a`) beside the trust it was built with. It printed the
 build-time trust for good: "trusted 100%" 8 weeks on (found in review). Under
-`profile.override` the transcript prior is unused, and `ctempo profile` says
+`profile.override` the transcript prior is unused, and `pacer profile` says
 so; it printed the prior's faded weight there too (found in review). With an
-override and no transcript prior, `ctempo profile` names the override as the
+override and no transcript prior, `pacer profile` names the override as the
 prior and `doctor` no longer warns "no transcript prior, run
-`ctempo bootstrap`" (found in review). Under mode `replace` the learned hours
-are unused as well, and `ctempo profile` and `doctor` say so instead of
-"folded in" (found in review). `ctempo bootstrap` builds a fresh one.
+`pacer bootstrap`" (found in review). Under mode `replace` the learned hours
+are unused as well, and `pacer profile` and `doctor` say so instead of
+"folded in" (found in review). `pacer bootstrap` builds a fresh one.
 `install --apply` runs the bootstrap too (`--no-bootstrap` skips it).
 
 **D-15. Weekly numbers.** As in the brief, with these details: `E` is
@@ -471,7 +471,7 @@ less than 1% of a week's expected spend, or when it was cut short at the first
 reading and has not seen a whole-percent step yet (that zero is no news, not
 idle): the whole window so far (unless it is still at 0 after a cut lookback,
 which is no news either; it showed `×? →0%`), then the typical week
-`M / target`, then 1.0, each labeled in `ctempo now` with its reason (recent
+`M / target`, then 1.0, each labeled in `pacer now` with its reason (recent
 span too short; the level has not moved since the first timed reading; no
 timed reading yet); the typical week and 1.0 also say why the whole window
 could not stand in (it is still at 0%, or it is too new: under 2% of a week's
@@ -522,15 +522,15 @@ optional parts are dropped in order: 5h reset time, weekly delta, weekly reset
 time, then projections. If it still does not fit, it is cut at the width with
 `…` (`...` in ascii mode) and each part keeps its tone; the bare line and the
 waiting message use the configured separator and are fitted the same way. The
-statusline never prints a traceback: errors go to `~/.claude-tempo/errors.log`
-(64 KB, one rotation) and the line degrades to "ctempo: error" or a bare line
+statusline never prints a traceback: errors go to `~/.pacer/errors.log`
+(64 KB, one rotation) and the line degrades to "pacer: error" or a bare line
 from the payload.
 
 **D-17. Composing with an existing statusLine.** `install` keeps the old
 command inside ours (`--compose '<old command>'`, shell-quoted), so
 `settings.json` shows exactly what runs. At render time the old command starts
 first, in its own process group, with the same stdin, and runs in parallel
-with ctempo's own work; its output comes first and our segment is appended to
+with pacer's own work; its output comes first and our segment is appended to
 its last line (two spaces) or put on a new line when the joined line would not
 fit where Claude Code draws it. Its prompt footer pads the line by 2 columns a
 side, so the room is `COLUMNS - 4`, counted in display columns: CJK characters
@@ -538,18 +538,18 @@ and most emoji take 2, combining marks and joiners take 0, and VS16 makes a
 narrow symbol 2. Measured as `COLUMNS` code points, a joined line in the last
 4 columns, or one with emoji in it, lost its weekly reset to Claude Code's `…`
 (found in review). A nonzero `statusLine.padding` takes 2 more columns per
-unit; ctempo does not read it. Its output is complete once it has exited and
+unit; pacer does not read it. Its output is complete once it has exited and
 its stdout has closed or stayed quiet for 500 ms (Claude Code waits the same
 for a hook's remaining output); a background job it started may keep stdout
 open, and is left running. Timeout 1.5 s, 3 s on Windows (`compose.timeout_ms`,
-counted from ctempo's start): a command still running then is killed with its
+counted from pacer's start): a command still running then is killed with its
 children and only our segment shows; one that already exited keeps the output
-that arrived. `CTEMPO_COMPOSED=1` stops recursion. `--replace` replaces instead.
+that arrived. `PACER_COMPOSED=1` stops recursion. `--replace` replaces instead.
 `refreshInterval` becomes 60, or stays lower if the old one was lower.
 
 On Windows a command that a shell would hand to Python changed is stored
 encoded instead (D-26). The old command runs in the shell Claude Code ran
-ctempo in (D-26), never through cmd.exe, which `shell=True` means there; it
+pacer in (D-26), never through cmd.exe, which `shell=True` means there; it
 gets no console window, and a process group of its own as on POSIX. Threads
 serve its pipes (`select()` takes only sockets there) with the same
 exit-plus-quiet rule, and a command still running at the deadline is killed
@@ -559,7 +559,7 @@ a Windows command ends its lines with CRLF, and the `\r` left before our
 segment sent the cursor back over the user's text.
 
 **D-19. The mod.** Thin: it builds the statusLine-shaped payload from
-`rateLimits`, runs `python -I -S bin/ctempo statusline --source mod --format
+`rateLimits`, runs `python -I -S bin/pacer statusline --source mod --format
 json` through `$.process.run` (the flags are `runtime.json`'s `args`: `-I -S -X
 utf8` on Windows, and `-I -S` when a file written before `args` has none) and
 draws the tone-tagged segments it gets back (no ANSI parsing). It calls the CLI
@@ -571,7 +571,7 @@ surfaces in `mod.surfaces` (default `["desktop"]`; VS Code and mobile draw no
 band per the docs) and passes the band on in the terminal, where the statusLine
 already shows the line; it keeps what other mods draw below its own row. Every
 `kind` it sees is logged by the CLI in the `kinds` table. It resolves
-`CTEMPO_HOME` like the CLI (empty counts as unset, a leading `~` is the home
+`PACER_HOME` like the CLI (empty counts as unset, a leading `~` is the home
 directory, a relative path is taken from it; `~user/...` is an error that asks
 for an absolute path), passes the home it resolved to the CLI, shows the CLI's
 stderr when it fails, and re-arms its timer to `mod.refresh_s` (clamped to
@@ -579,12 +579,12 @@ stderr when it fails, and re-arms its timer to `mod.refresh_s` (clamped to
 since no `$` API names the OS) `USERPROFILE`, else `HOMEDRIVE` plus `HOMEPATH`,
 never `HOME`, as in Python 3.8+; the Windows forms are in D-28. A leading byte
 order mark in `runtime.json` is ignored. Desktop does not inherit the shell
-environment: set `CTEMPO_HOME` in `settings.json` `env` if you move the home
+environment: set `PACER_HOME` in `settings.json` `env` if you move the home
 (Claude Code passes the value as written, without expanding `~`). On Windows a
 missing interpreter does not fail to start: the spawn falls back to cmd.exe,
 whose message ("...operable program or batch file.", exit 9009) named neither
 Python nor the fix. So after a failed run the mod checks that the interpreter
-exists, says "Python not found at <path>: run `ctempo install --apply`", and
+exists, says "Python not found at <path>: run `pacer install --apply`", and
 reads `runtime.json` again on its next refresh; for exit 9009 it shows
 cmd.exe's whole message. That fallback is inferred from the engine's spawn
 code, not seen on Windows (the mod tests stub `$.process.run`). The band draws
@@ -632,7 +632,7 @@ white where the embedding page's color scheme and the frame's differ (a dark
 app on a light system), found in review. So the bars are images, which are
 always transparent. Text uses theme keys only; each SVG carries its own small
 style with a dark-scheme block, and its base colors read on both
-backgrounds, since an image follows the system's scheme, not the app's. The words and sentences come from the CLI (`ctempo/band.py`),
+backgrounds, since an image follows the system's scheme, not the app's. The words and sentences come from the CLI (`pacer/band.py`),
 which also draws the terminal line with text bars (`━` used, `╍` forecast,
 `┈` unused; `#`, `=`, `.` in ascii mode), dropping resets, then calm words,
 then bar width, then "Week" for "Wk" to fit `display.max_width`.
@@ -653,14 +653,14 @@ rounded down, as Claude Code's `/usage` shows them (rounding to nearest showed
 the same or 1 more on the same data, which hid real lag and invented false
 gaps); the mod polls every 5 s and runs Python only when its session's
 `rateLimits` changed (any amount; `session.measure` waits for a whole point) or
-`CTEMPO_HOME/changed` did (the CLI touches it when a reading changes what is
+`PACER_HOME/changed` did (the CLI touches it when a reading changes what is
 shown: a new level, window or reset, never a heartbeat or a rejected window,
 which kept 2 chats waking each other every 5 s, found in review; another
 chat's reading arrives within seconds, and a run ignores its own touch by the
 time written in it); a failing run is retried by the 60 s refresh, not the
 poll; and the 5-hour percent was nowcast: the last
 level plus the fitted rate times the time since that level was read, capped at
-1 point, shown as "≈37%". A simulation of 2 chats on one store put ctempo
+1 point, shown as "≈37%". A simulation of 2 chats on one store put pacer
 below the native bar 5% of the time in steady work and above it at most 1%.
 On the person's Windows machine it read 15% against the account's 14% when
 work had paused, which read as wrong, so it is gone (D-33). Exact agreement
@@ -673,17 +673,17 @@ does the terminal; a cloud session viewed in the same app loads the mod, and
 the mod reads the rate limits, but `$.session.surfaces()` is empty and
 `$.ui.open` answers "no-surface", so nothing it draws (band, status, toast,
 pane) is shown; regular chats run no Claude Code at all. The mod now logs, to
-`CTEMPO_HOME/mod.log`, the surfaces each session draws on and whether one asked
-for the band, and `ctempo doctor` prints the end of it. For everything outside
-Claude Code, `ctempo menubar` prints the band as a SwiftBar plugin for the macOS
+`PACER_HOME/mod.log`, the surfaces each session draws on and whether one asked
+for the band, and `pacer doctor` prints the end of it. For everything outside
+Claude Code, `pacer menubar` prints the band as a SwiftBar plugin for the macOS
 menu bar: read only, from the store, refreshed every minute; its readings are
 as old as the last Claude Code session's on that Mac, which the title (grey
 after 30 minutes) and the menu say. With `menubar.fetch_usage_min` above 0
-(now `fetch_usage_min`, D-33; `ctempo menubar --fetch 10`, off by default) the menu bar runs
+(now `fetch_usage_min`, D-33; `pacer menubar --fetch 10`, off by default) the menu bar runs
 `claude -p "/usage"`, Claude Code's own usage command, at most that often and
 records the levels it prints (whole percents, resets read in the IANA zone it
 names, so Python 3.9 or later) as readings of a session "usage-cmd": account
-levels whatever ran them, with no credential in ctempo's hands (D-04 still
+levels whatever ran them, with no credential in pacer's hands (D-04 still
 holds: Claude Code makes the request). On the person's Mac it took about 6 s.
 That it spends no quota is inferred (a local command), and is to be watched.
 The menu bar also posts a macOS notification (osascript) for the events
@@ -711,7 +711,7 @@ not arrived: work in claude.ai chats, Cowork, cloud sessions or on another
 computer reaches a machine only through `/usage`. So the fetch of D-32 is no
 longer the menu bar's alone: `fetch_usage_min` (top level now; the old
 `menubar.fetch_usage_min` is still read) also lets a Desktop band, on any
-system, start `ctempo fetch` in the background when one is due (never the
+system, start `pacer fetch` in the background when one is due (never the
 terminal status line, which must stay fast), detached and without a console
 window on Windows, with the session's markers (`CLAUDECODE`,
 `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`) removed so the nested
@@ -720,7 +720,7 @@ across all bands and the menu bar (the store's `usage_cmd_tried_at`), and
 `doctor` shows when it last answered or why not. On the person's Windows
 machine, signed in with Max, `claude -p "/usage"` printed only the session's
 spend until the folder it ran in was trusted (in a trusted one it printed the
-limits): the fetch runs in `CTEMPO_HOME`, which is trusted once by hand, and
+limits): the fetch runs in `PACER_HOME`, which is trusted once by hand, and
 its message says so. Claude Code 2.1.303 also writes the reset as "Oct 19,
 2:59pm" where 2.1.302 wrote "Oct 19 at 4:59pm"; both are read, and a line
 that does not read is named. And after a 5-hour window
@@ -825,7 +825,7 @@ weekdays 5 to 11 am PT), and for chats it is not said; a band for a rule
 that may not apply would mislead. On the Desktop the chart is an SVG image
 with no size, so the card's slot sets it; its marks are mid-tones, as the
 bars' (D-30), since the image follows the system's scheme and not the
-app's. SwiftBar shows pictures, not drawings, and ctempo has no fonts: the
+app's. SwiftBar shows pictures, not drawings, and pacer has no fonts: the
 menu's chart is a PNG (png.Canvas: anti-aliased lines, dashes, rings,
 fills) as wide as the bar's line, its labels a line of Menlo 10 under it,
 each centered under its hour or the middle of its day, kept inside at the
@@ -848,7 +848,7 @@ along the profile up to 4 weeks on; "over a week away" beyond 7 days).
 **D-37. Forecasts with their uncertainty.** Five hours after a weekly reset,
 at 2%, the person's band said "Ease off" and "Runs out about Thu 13:30". The
 lookback (D-15) reached back past the reset into the old week's last day,
-when the quota that would go unused got spent (ctempo itself suggests it),
+when the quota that would go unused got spent (pacer itself suggests it),
 and that burst set the new week's pace. They asked for a forecast whose
 spread is wide far from the reset and narrows toward it. Now:
 
@@ -917,22 +917,22 @@ without the time, which is the "Runs out" row just under it.
 **D-18. install / uninstall.** Dry run by default: prints the interpreter
 probe table, a unified diff of `settings.json`, the plugin commands and the
 files it would write. `--apply` copies `settings.json` to
-`settings.json.ctempo-backup-YYYYmmdd-HHMMSSZ` (UTC), then writes atomically
+`settings.json.pacer-backup-YYYYmmdd-HHMMSSZ` (UTC), then writes atomically
 (tmp + rename, symlinked settings keep the link). Only `statusLine` changes;
 the file's indentation, line endings (CRLF too), trailing newline and mode are
-kept. What was there before is recorded in `~/.claude-tempo/install.json`, one
+kept. What was there before is recorded in `~/.pacer/install.json`, one
 record per absolute settings path, saved *before* the settings file is written
 (a crash later still leaves uninstall what it needs). A statusLine changed
 since the last install becomes the new original, and so does a command the
-user put in ctempo's `--compose` argument, also when there was no statusLine
-before ctempo (then without the `refreshInterval` ctempo added; uninstall
+user put in pacer's `--compose` argument, also when there was no statusLine
+before pacer (then without the `refreshInterval` pacer added; uninstall
 restores it, and a repin or `--replace` records it first, also into a record
 rebuilt after install.json was lost; without a record it wins over a backup,
 at a repin and at uninstall alike, and the `--compose` of a newer backup that
-holds ctempo's command, as the one `--replace` takes, wins over an older
-backup from before ctempo, or stands in for one, then with the statusLine's
-other keys as ctempo ran it); ctempo's own command is never recorded or
-restored as the original (a pre-ctempo backup, where a blank one means there
+holds pacer's command, as the one `--replace` takes, wins over an older
+backup from before pacer, or stands in for one, then with the statusLine's
+other keys as pacer ran it); pacer's own command is never recorded or
+restored as the original (a pre-pacer backup, where a blank one means there
 was no statusLine, or `--compose` is used instead). Backups are created
 exclusively and never overwritten. `uninstall` asks which file when several
 are installed and never creates a missing file. Records are matched by real
@@ -943,18 +943,18 @@ already uninstalled is dropped. If the plugin commands fail during uninstall
 uninstall exits 1 so a rerun retries (the warning says the mod may still be
 installed). `uninstall --no-mod` keeps them too, and the launcher (the kept
 mod reads `runtime.json`); they go with the mod. When install.json has no mod
-record (the data folder was deleted, or another `CTEMPO_HOME`) but the user
-settings file lists ctempo's plugin or its marketplace, uninstall rebuilds the
+record (the data folder was deleted, or another `PACER_HOME`) but the user
+settings file lists pacer's plugin or its marketplace, uninstall rebuilds the
 record from that file and says so, then removes the mod as usual (`--no-mod`
 keeps it); with no snapshot left, that file is tidied by keys (a key that
-holds only ctempo's entry is not the user's). A version-1 mod record names no
+holds only pacer's entry is not the user's). A version-1 mod record names no
 user file: its commands edited the default one, so that file's record is kept
 through a run that leaves the mod, and goes with the mod. When claude is not
 on PATH at install, install prints the plugin commands for the user to run and
 still records the mod (as manual, with the user-file snapshot), so uninstall
-runs the reverse commands. A mod stays manual until ctempo sees the plugin CLI
+runs the reverse commands. A mod stays manual until pacer sees the plugin CLI
 write to the user file: the mod listed there at any install or uninstall, or
-the file changed by a plugin command ctempo ran (commands that time out leave
+the file changed by a plugin command pacer ran (commands that time out leave
 it manual). A later install that finds claude on PATH while a manual mod's
 user file shows no trace of it takes the user-file snapshot again before
 running them, and that snapshot replaces a record kept for the user file.
@@ -987,33 +987,33 @@ move west or at the fall-back hour, and a newer backup then sorted first,
 found in review twice: the second time, an older version's local-time backup
 sorted after a newer Z one). `uninstall` restores the original `statusLine`
 (or removes it), removes `enabledPlugins` / `extraKnownMarketplaces` if they
-were not the user's (absent before, or holding only ctempo's own entry because
-the commands were run by hand; a key that ctempo next finds gone, as after the
+were not the user's (absent before, or holding only pacer's own entry because
+the commands were run by hand; a key that pacer next finds gone, as after the
 user deleted or blanked the file, stops counting as theirs, and so does one
-holding only ctempo's entry for a manual mod whose commands the user ran,
+holding only pacer's entry for a manual mod whose commands the user ran,
 unless the key was empty at the mod's snapshot. A user's own empty key with
 the mod in keeps counting, also after the user added and removed other
 plugins, and also when the user ran the printed commands for a manual mod: the
 plugin CLI leaves `{}` after removing its last plugin, so many files hold one,
 and uninstall used to remove it, found in review 3 times. When the user
 deletes or blanks the user file and then runs the printed commands by hand
-(after ctempo ran them, or for a manual mod whose snapshot held the key
-empty), ctempo cannot tell those keys from the user's own, and they may stay
+(after pacer ran them, or for a manual mod whose snapshot held the key
+empty), pacer cannot tell those keys from the user's own, and they may stay
 empty) and the plugin CLI left them empty, and when the result equals the
 backup (a blank backup counts as `{}`, as on install) it writes the backup's
 bytes, so an untouched file comes back byte for byte (the test suite checks
 four formatting styles and blank files). The mod is installed with
 `claude plugin marketplace add <repo>` and
-`claude plugin install ctempo@claude-tempo` (user scope); `--no-mod` skips it.
-`--bin-dir ~/.local/bin` adds a `ctempo` launcher with the pinned interpreter.
+`claude plugin install pacer@pacer` (user scope); `--no-mod` skips it.
+`--bin-dir ~/.local/bin` adds a `pacer` launcher with the pinned interpreter.
 A later install rewrites it with the new pin without `--bin-dir` (a `--python`
 repin, a moved clone), unless the user deleted it. A launcher written in
 another `--bin-dir` replaces it: the earlier one is removed while it is still
-ctempo's, so uninstall removes the only one there is (found in review). A
+pacer's, so uninstall removes the only one there is (found in review). A
 `--bin-dir` that names the same directory another way (another case on a
 case-insensitive macOS disk, a bind mount) holds the same file, which stays:
 install used to remove the launcher it had just written (found in review). On
-Windows the launcher is `ctempo.cmd`, with an sh `ctempo` beside it for Git
+Windows the launcher is `pacer.cmd`, with an sh `pacer` beside it for Git
 Bash, and settings writes take care of held and read-only files (D-27).
 
 ## Windows
@@ -1027,16 +1027,16 @@ it names an existing bash or sh), `C:\Program Files\Git\bin\bash.exe`, the
 PATH or in its usual installs, then Windows PowerShell 5.1) with `-NoProfile
 -NonInteractive -ExecutionPolicy Bypass -Command`. The statusLine setting has
 no `shell` or `args` field, and the shell changes when Git for Windows comes or
-goes. So `ctempo/winshell.py` repeats that search (`predict_shell`,
+goes. So `pacer/winshell.py` repeats that search (`predict_shell`,
 settings.json `env` over the process environment), and install writes, when it
 can, a command both shells read alike: bare words (ASCII letters, digits and
 `_./:+=-`, non-ASCII letters and digits, a `~` after an ASCII letter or digit),
 which neither shell changes, and words in single quotes with no quote inside,
 which both keep literal, except as the first word. Paths use forward slashes:
 Git Bash drops an unquoted backslash, and Windows reads both. An interpreter or
-ctempo path that would need quotes (a space) is written with its folders' 8.3
+pacer path that would need quotes (a space) is written with its folders' 8.3
 short names when those need none (`C:/PROGRA~1/PYTHON~1/python.exe`; the file
-name is kept, so the command still names ctempo), while `runtime.json`, the
+name is kept, so the command still names pacer), while `runtime.json`, the
 launchers and install's report keep the long paths. When there is no such form
 (a volume without short names, or a short form that still needs quotes), the
 command is written for the predicted shell: single quotes for bash, or `&
@@ -1048,8 +1048,8 @@ the shell Claude Code would pick now and warns when the command was written for
 the other one; a command both shells read alike never warns. A Git Bash
 terminal puts its own `git` first on PATH, so the prediction there can differ
 from what Claude Code finds when started from the Desktop app or PowerShell:
-install and doctor run there say so, and point to `ctempo doctor` from
-PowerShell rather than to a reinstall. Every Python command ctempo writes (the
+install and doctor run there say so, and point to `pacer doctor` from
+PowerShell rather than to a reinstall. Every Python command pacer writes (the
 statusLine, `runtime.json`'s `args`, the launchers) adds `-X utf8` on Windows:
 a pipe gets the ANSI code page there, and `-I` ignores `PYTHONUTF8` and
 `PYTHONIOENCODING`.
@@ -1062,7 +1062,7 @@ so a `"` inside, or a backslash ending such an argument, arrives altered (pwsh
 path in the text before the first whitespace, when a `/` or `\` comes before it
 and the text does not start with `~`: a first word that starts with `/` (also
 after a leading quote or `$(`), or holds a `=` or a colon other than a drive's
-(`FOO=/x`, `ab:/c`). `/bin/bash ~/.claude/statusline.sh` reached ctempo as
+(`FOO=/x`, `ab:/c`). `/bin/bash ~/.claude/statusline.sh` reached pacer as
 `C:/Program Files/Git/usr/bin/bash ...` and broke at the space. Such a command
 (`winshell.needs_encoding`) is written as `--compose-b64 b<token>`, the
 URL-safe base64 of its UTF-8 without padding: only letters, digits, `_` and
@@ -1076,21 +1076,21 @@ encoded one and why, `doctor` shows it decoded, and a repin, `--replace`,
 uninstall's restore and the backup scan read it decoded (a repin of the same
 command changes nothing). A malformed token means no composed command (the
 config's `compose.command` applies if set), never an error, and with both flags
-the last one wins, in install as in `ctempo statusline`: `compose_of` reads the
+the last one wins, in install as in `pacer statusline`: `compose_of` reads the
 words after `statusline` with the statusline's own parser, so `doctor`, a repin
 and uninstall keep the command that runs. Install read the first one, so after
 a hand edit that added a flag, a repin wrote the old command back in place of
 the running one (found in review). A user may put `--compose '<command>'` back
 by hand; the next install encodes it again if need be. An older install's plain
-form that is at risk gets a `doctor` warning until `ctempo install --apply`
+form that is at risk gets a `doctor` warning until `pacer install --apply`
 rewrites it.
 
-The Composer (D-17) runs the old command in the shell that started ctempo, read
+The Composer (D-17) runs the old command in the shell that started pacer, read
 from the parent process's image through kernel32 (`winshell.parent_shell`),
 since Claude Code ran the statusLine there. Repeating Claude Code's search went
 wrong inside Git Bash, whose PATH puts its own `git` first: with Git installed
 outside Program Files, a bash statusLine ran in PowerShell. Git Bash's
-`bin\bash.exe` runs `usr\bin\bash.exe`, the parent ctempo sees, so that one
+`bin\bash.exe` runs `usr\bin\bash.exe`, the parent pacer sees, so that one
 maps back to `bin\bash.exe` when it exists. Any other parent (a
 `CLAUDE_CODE_SHELL_PREFIX` wrapper, or a venv's `python.exe` launcher, which
 install no longer pins: D-27) falls back to `predict_shell`. As Claude Code
@@ -1119,27 +1119,27 @@ and behind a Store alias, `py.exe` or another launcher that real `python.exe`
 is pinned, so no render pays for the extra process. On Windows it reports the
 base interpreter (`sys._base_executable`), so a venv's `python.exe`, a launcher
 that starts its base `python.exe` as a child process, is pinned as that base:
-ctempo runs `-I -S`, so the venv adds nothing but the process, and that process
+pacer runs `-I -S`, so the venv adds nothing but the process, and that process
 was the parent `winshell.parent_shell` saw instead of the shell (found in
 review). install's list says `via <path>` for each such candidate. macOS and
 Linux pin a venv's interpreter as given. A Store Python, which writes under
 AppData to a private copy, is used only when nothing else passes.
 
-Launchers: `--bin-dir` writes `ctempo.cmd`, which cmd.exe and PowerShell find
-through PATHEXT, and an extensionless sh `ctempo` (LF, UTF-8, forward slashes,
+Launchers: `--bin-dir` writes `pacer.cmd`, which cmd.exe and PowerShell find
+through PATHEXT, and an extensionless sh `pacer` (LF, UTF-8, forward slashes,
 `exec` of the pinned interpreter), as npm's cmd-shim does: Git Bash, where
 Claude Code's Bash tool runs, looks a command up by its very name, never with
-`.cmd`, so `ctempo` was "command not found" there. install.json records it as
-`sh_launcher`. It follows `ctempo.cmd` (D-18): it is written beside it, moved
-and removed with it, and a file of that name that is not ctempo's is never
+`.cmd`, so `pacer` was "command not found" there. install.json records it as
+`sh_launcher`. It follows `pacer.cmd` (D-18): it is written beside it, moved
+and removed with it, and a file of that name that is not pacer's is never
 written over or removed, nor recorded. Each launcher follows the pin on its
 own: one the user deleted stays deleted until a `--bin-dir`, however many
 repins come first (install.json keeps the sh launcher's record for that; the
 2nd repin used to write it back), and one the user kept after deleting
-`ctempo.cmd` (or putting a file of their own there) is still ctempo's, so a
-repin rewrites it where it is rather than leave Git Bash's `ctempo` running an
-interpreter that may be gone (both found in review). The `ctempo` an older
-version wrote beside `ctempo.cmd` is rewritten as the sh launcher. `ctempo.cmd`
+`pacer.cmd` (or putting a file of their own there) is still pacer's, so a
+repin rewrites it where it is rather than leave Git Bash's `pacer` running an
+interpreter that may be gone (both found in review). The `pacer` an older
+version wrote beside `pacer.cmd` is rewritten as the sh launcher. `pacer.cmd`
 is CRLF, in the console code page, with `%` doubled; its last line is `(goto)
 2>nul & "<python>" -I -S -X utf8 "<entry>" %*`. cmd.exe reads a batch file a
 line at a time and opens it again after each command, so an install or
@@ -1170,7 +1170,7 @@ read-only, and a backup copies the mode, as on every OS. A UTF-8 BOM in
 settings.json (Windows PowerShell 5.1 and old Notepad write one) is kept, and
 install.json, the backups and `runtime.json` are read with one.
 
-**D-28. Windows: `CTEMPO_HOME`.** The CLI (`config.windows_home`) and the mod
+**D-28. Windows: `PACER_HOME`.** The CLI (`config.windows_home`) and the mod
 (`resolveHome`) read it alike. `~` is USERPROFILE (else HOMEDRIVE and
 HOMEPATH), as Python reads it, never HOME, which Git Bash sets and PowerShell
 does not. `C:\x`, `C:/x`, `\\server\share\x` and `//server/share/x` are
@@ -1178,16 +1178,16 @@ absolute, and Git Bash's `/c/x` and `/c` are `C:/x` and `C:\`. A path rooted
 with a backslash and no drive (`\x`) takes the home's drive, as `ntpath.join`
 does, and anything else is taken from the home directory; the result is
 normalized. `%VAR%` is not expanded, as Claude Code does not expand it either.
-Any other path that starts with a single `/` (`/srv/ctempo`) is refused, with
+Any other path that starts with a single `/` (`/srv/pacer`) is refused, with
 the same message in both, whose example is the same path on the home's drive
-(`D:/srv/ctempo` for a profile on `D:`), the folder older versions used: Git
+(`D:/srv/pacer` for a profile on `D:`), the folder older versions used: Git
 Bash, which runs the terminal statusLine, rewrites such a value to a folder
-under its own install (`C:/Program Files/Git/srv/ctempo`) before python.exe
+under its own install (`C:/Program Files/Git/srv/pacer`) before python.exe
 sees it, while PowerShell passes it as given and the mod read it on the home's
 drive, so the line and the band used different folders (and the first one,
 under Program Files, is one a user cannot create). The statusline still prints
 its bare line and logs nothing (the log lives in the home), the other commands
-print the reason and exit 1, `doctor` fails its `CTEMPO_HOME` row, and install
+print the reason and exit 1, `doctor` fails its `PACER_HOME` row, and install
 and uninstall refuse before writing anything. Under Git Bash the statusLine's
 Python only sees the rewritten folder, so install and doctor also check the raw
 value in the settings env. `C:x` (relative to that drive's current folder,
@@ -1205,24 +1205,24 @@ switches a stream that is not UTF-8 to UTF-8 (a console already is) and turns
 on the console's VT processing for colors. `config.json` is read as bytes, so
 JSON's own detection takes UTF-8 with or without a BOM and UTF-16 or UTF-32
 with one (Windows PowerShell 5.1's `>` and `Out-File` write UTF-16); a file
-that does not parse is still ignored as a whole, and `ctempo config show` says
+that does not parse is still ignored as a whole, and `pacer config show` says
 why. Windows' C runtime reads `TZ` whenever it is set, in its own form only
 (`EST5EDT`, `UTC0`): an inherited IANA name (a Cygwin login shell exports
 `TZ=Europe/Berlin`) read as zone "Eur" at offset 0 with US daylight saving, and
-every local time ctempo showed was off. `bin/ctempo` and `python -m ctempo`
+every local time pacer showed was off. `bin/pacer` and `python -m pacer`
 drop such a `TZ` before anything reads local time and have the C runtime read
 the zone again (`ucrtbase._tzset`), so times follow the Windows time zone; a
 `TZ` in the C runtime's form is still honored. Transcripts deeper than 260
 characters were skipped without a word when long paths are not enabled (the
 Windows default), so the bootstrap walks from an extended-length root
-(`\\?\C:\...`); files and folders it cannot open are counted, and `ctempo
+(`\\?\C:\...`); files and folders it cannot open are counted, and `pacer
 bootstrap` says how many. `errors.log` rotates as on POSIX, but a rename that
 fails while another program holds the log without delete sharing no longer
 drops the entry being written; a later error rotates it.
 
 ## The scavenger hook
 
-**D-20. `ctempo check`.** Exit 0 and `"ok": true` when spare quota can be
+**D-20. `pacer check`.** Exit 0 and `"ok": true` when spare quota can be
 harvested now, 1 otherwise, JSON on stdout either way. A 5h window is
 harvestable when it is in its tail (`--tail 5h=60m`), its projected unused
 below its target (max(0, target - projected), `spare` in the JSON) is at least
@@ -1263,7 +1263,7 @@ exit 1). Data older than `--max-age` (30 min) is a no-go. Age is measured from
 the newest reading that carries information (FRESH, FIRST or ANOMALY), never
 from heartbeats: an open idle session re-renders an old reading every minute,
 while headless runs and claude.ai spend without rendering a statusLine.
-`ctempo now` reports the same age (`data_age_s` in `--json`) with the last
+`pacer now` reports the same age (`data_age_s` in `--json`) with the last
 heartbeat beside it; `doctor` keeps its per-source liveness on all samples,
 since a heartbeat proves the statusLine runs. A scavenger has to refresh the
 data itself (v2).
@@ -1277,11 +1277,11 @@ after 7 days.
 ## Ideas left for v2
 
 - An 80% band on both projections (claumon's empirical Bayes with a Gamma
-  process), with ctempo's profile as the prior mean instead of one global
+  process), with pacer's profile as the prior mean instead of one global
   rate.
 - Optional `/api/oauth/usage` polling for per-model weekly caps and off-device
   usage (D-04), behind an explicit opt-in.
-- The scavenger: a queue of jobs run with `claude -p` when `ctempo check` says
+- The scavenger: a queue of jobs run with `claude -p` when `pacer check` says
   go, which records rate limits from the SDK's usage reports itself.
 - Mean reversion in the weekly projection (recent intensity decaying toward
   the typical week over the remaining days).
@@ -1296,7 +1296,7 @@ above) and rejected 1; a third confirmed 7 (the 5h model's quantization, ramp
 and first readings; install retries and aliases) and rejected none; a fourth
 confirmed 19 distinct defects (21 reports, one of them found three times: the
 5h fit start, color tiers and line fitting; the weekly lookback, gaps and
-multiplier; `CTEMPO_HOME`, `check` and `report`; install retries, baselines
+multiplier; `PACER_HOME`, `check` and `report`; install retries, baselines
 and the `--compose` argument) and rejected 2; a fifth, over those fixes,
 confirmed 11 distinct defects (14 reports: an unknown 5h burn taken as zero,
 `now` reasons and data age, the profile scale, a weekly window at 0, idle
@@ -1321,7 +1321,7 @@ from `resets_at - 7 d`, a weekly reset moved later counted as a finished week,
 the one-reading undo flipped by a shared session id and leaving another
 session's pending reading behind, reset times shown a minute early, a 5h
 leftover of 0 priced at the assumed exchange rate, fractional targets printed
-as whole numbers, two `ctempo profile` texts, and three install cases: a
+as whole numbers, two `pacer profile` texts, and three install cases: a
 launcher that kept its first pin, backups named in local time, and the user's
 own empty plugin key after other plugins came and went); a ninth confirmed 11
 and rejected 1 (a cap first shown by a new session's first reading learned as
@@ -1329,7 +1329,7 @@ idle, the lookback after a drop week reading the window the drop replaced, a
 drop week's window counted as a typical week, the points-vs-pace table pacing
 a drop week from `resets_at - 7 d` and counting it twice, the prior's
 build-time trust printed for good, a shared session id still flipping the line
-to a dead window, a light user's early reset taken for a moved one, ctempo's
+to a dead window, a light user's early reset taken for a moved one, pacer's
 segment cut off in a composed line, and three install cases: a manual mod's
 empty plugin key, an older version's local-time backup names, and a
 `--bin-dir` alias); a tenth, over those fixes only, confirmed 3 and rejected 1
@@ -1337,7 +1337,7 @@ empty plugin key, an older version's local-time backup names, and a
 undone, an early-rollover week counted as a typical week, and the prior's
 weight printed under `profile.override`); an eleventh, over those 3, confirmed
 2 that were older than them (two bogus later resets in a row from a maxed
-session not undone, and `ctempo profile` and `doctor` asking for a transcript
+session not undone, and `pacer profile` and `doctor` asking for a transcript
 prior that an override leaves unused) and rejected none; a twelfth, over those
 2, confirmed 2 (the chained undo walking across a real early reset, introduced
 by the eleventh pass's fix, and learned hours called "folded in" under mode
@@ -1357,15 +1357,15 @@ mod, CI, and a new user's first install), confirmed 18 distinct defects (26
 reports) and rejected none (D-25 to D-29): a composed command that Windows
 PowerShell 5.1 or Git Bash changed on its way to Python, the Composer
 predicting the shell inside Git Bash, a command written for a single shell
-without a warning, no launcher for Git Bash, `ctempo.cmd` read by cmd.exe after
-python had rewritten or deleted it, a drive-less `CTEMPO_HOME` read as 2
+without a warning, no launcher for Git Bash, `pacer.cmd` read by cmd.exe after
+python had rewritten or deleted it, a drive-less `PACER_HOME` read as 2
 folders, a read-only settings.json, a UTF-16 config.json, a missing interpreter
 named only by cmd.exe in the band, an IANA `TZ`, long transcript paths, a held
 errors.log, 2 tests that could skip or pass by accident, and 3 in the docs,
 which described a Mac install only; a 16th, over those fixes (2 reviewers: the
 code and the docs), confirmed 9 (a deleted Git Bash launcher coming back, a
 venv pin hiding the shell from the Composer, a refusal naming the wrong drive,
-`compose_of` and `ctempo statusline` disagreeing on 2 flags, the CLI taking a
+`compose_of` and `pacer statusline` disagreeing on 2 flags, the CLI taking a
 `C:x` the band refused, and 4 in the docs: hand edits, `&&`, cmd.exe quoting
 and numerals); a 17th, over those, confirmed 2 (doctor reading the first of 2
 compose flags, and a Git Bash launcher left on the old pin with `--bin-dir`);
