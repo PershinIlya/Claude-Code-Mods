@@ -268,6 +268,7 @@ export function chartOf(x: unknown): Chart | null {
     isPoints(c.actual) && c.actual.length > 0 && isPoints(c.forecast) &&
     (c.fan === null || (Array.isArray(c.fan) && c.fan.length === 2 && c.fan.every((p) => isPoints(p) && p.length > 0))) &&
     Array.isArray(c.ghosts) && c.ghosts.every(isPoints) && Array.isArray(c.grid) && c.grid.every(isNum) &&
+    (c.nights === undefined || isPoints(c.nights)) &&
     Array.isArray(c.labels) && c.labels.every((l) => Array.isArray(l) && isNum(l[0]) && isStr(l[1]))
   return ok ? c : null
 }
@@ -425,7 +426,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const CHART_STYLE =
   '<style>.ctc{--t:#8a867c;--a:#d97757;--r:#d0564c;--y:#c08a1e}' +
   '@media(prefers-color-scheme:dark){.ctc{--t:#a3a19a;--r:#e5695e;--y:#e0b252}}' +
-  '.ctc .g{stroke:var(--t);stroke-width:1;opacity:.2}.ctc .lim{stroke:var(--t);stroke-width:.8;stroke-dasharray:2 3;opacity:.6}' +
+  '.ctc .nt{fill:var(--t);opacity:.09}.ctc .g{stroke:var(--t);stroke-width:1;opacity:.2}.ctc .lim{stroke:var(--t);stroke-width:.8;stroke-dasharray:2 3;opacity:.6}' +
   '.ctc .ar{fill:var(--a);opacity:.13}.ctc .ac{fill:none;stroke:var(--a);stroke-width:1.8;stroke-linejoin:round}' +
   '.ctc .dt{fill:var(--a)}.ctc .fn{fill:var(--a);opacity:.1}' +
   '.ctc .fc{fill:none;stroke:var(--a);stroke-width:1.6;stroke-dasharray:4 3;opacity:.75}' +
@@ -441,7 +442,8 @@ export const CHART_H = 76
 // day names, "Wed", run about 5.5 px a character).
 const LABEL_PX = 6
 
-// A window's chart, W px wide (chart.py): what was used (a line over a pale
+// A window's chart, W px wide (chart.py): the week's nights as pale bands,
+// what was used (a line over a pale
 // area, a dot per reading while there are few), the forecast to the reset
 // (dashed, in the pace's color when it needs you: red when it runs out or
 // is blocked, yellow when it may or passes the target), an early 5-hour
@@ -461,6 +463,9 @@ export function chartSvg(c: Chart, W: number, alt: string, tone?: string): strin
     CHART_STYLE,
     `<title>${esc(alt)}</title>`,
   ]
+  for (const [a, b] of c.nights ?? []) {
+    out.push(`<rect class='nt' x='${sx(a)}' y='${pad.t}' width='${r1(sx(b) - sx(a))}' height='${r1(base - pad.t)}'/>`)
+  }
   for (const t of c.grid) out.push(`<line class='g' x1='${sx(t)}' y1='${pad.t}' x2='${sx(t)}' y2='${base}'/>`)
   out.push(`<line class='lim' x1='${pad.l}' y1='${sy(100)}' x2='${W - pad.r}' y2='${sy(100)}'/>`)
   for (const g of c.ghosts) out.push(`<path class='gh' d='${d(g)}'/>`)

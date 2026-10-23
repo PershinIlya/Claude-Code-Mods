@@ -195,6 +195,10 @@ def weekly(store, now, cfg, reading=None, prof=None):
              expire=max(0.0, 100.0 - min(100.0, raw)), unused_at_reset=max(0.0, 100.0 - min(100.0, raw)))
     # For the chart (chart.py): the profile and the walk's percent per share.
     v["_weights"], v["_path_k"] = w, intensity * tgt / total
+    # When it would reach 100 at this intensity, past the reset too, up to 4
+    # weeks on (Details' "Runs out").
+    if used < 100.0 and intensity > 0:
+        v["empty_ts"] = dry or profile.walk_to(w, now, now + 28 * 86400, intensity * tgt / total, 100.0 - used)
     if used >= 100.0:
         v["verdict"] = "maxed"
     elif source == "recent" and actual <= 0:

@@ -359,3 +359,36 @@ class EndedWindow(TempHome):
         v = pace.five_hour(self.st, MON + 6 * H, self.cfg)
         self.assertEqual((v["present"], v["ended_ts"]), (False, r5))
         self.assertEqual(band.window(v, MON + 6 * H)["phrase"]["pre"], "Not started")
+
+
+class RunsOutLater(unittest.TestCase):
+    def setUp(self):
+        utc()
+
+    def rows(self, v):
+        return {r["label"]: r for r in band.details(v, NOW)}
+
+    def test_a_window_that_lasts_says_when_it_would_run_out(self):
+        r = self.rows(v5(empty_ts=NOW + 2 * H + 38 * 60))["Runs out"]  # 17:18
+        self.assertEqual((r["value"], r["tone"]), ("17:18, past the reset", "inactive"))
+        r = self.rows(vw(empty_ts=MON + 5 * D + 6 * H))["Runs out"]
+        self.assertEqual(r["value"], "Sat 06:00, past the reset")
+        self.assertEqual(self.rows(vw(empty_ts=NOW + 9 * D))["Runs out"]["value"], "over a week away")
+        # Idle or without a pace: no time.
+        self.assertNotIn("Runs out", self.rows(v5(verdict="idle", empty_ts=NOW + 9 * H)))
+        self.assertNotIn("Runs out", self.rows(v5(verdict="unknown", empty_ts=NOW + 9 * H)))
+
+
+
+class RunsOutLaterViews(TempHome):
+    def test_the_views_have_it(self):
+        from ctempo import commands
+
+        self.known("s1")
+        r5 = int(MON + 16 * H + 30 * 60)
+        for k, u in enumerate((10, 14, 18, 22)):
+            self.feed(MON + 12 * H + k * 600, five=(u, r5), week=(30 + k, int(MON + 4 * D)))
+        now = MON + 12 * H + 1800
+        a, b, _ = commands.views(self.st, self.cfg, now)
+        self.assertAlmostEqual(a["empty_ts"], now + (100 - a["used"]) / a["rate"] * 3600, delta=1)
+        self.assertGreater(b["empty_ts"], now)

@@ -105,7 +105,7 @@ def compute(raw, cfg, opts, now, line_of=None):
             except sqlite3.OperationalError as e:
                 log_error(e, "snapshot")
         if opts.get("format") == "json":  # the band draws the charts
-            chart.attach(st, v5, vw, now)
+            chart.attach(st, v5, vw, now, cfg)
         if opts["record"] and line_of is not None:
             rl = payload.get("rate_limits") if isinstance(payload, dict) else None
             note_render(st, now, opts["source"], line_of(v5, vw), rl)

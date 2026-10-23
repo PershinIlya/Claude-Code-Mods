@@ -13,6 +13,8 @@ earlier, to see by eye how the model does.
   ghosts    forecasts made earlier in this window (an hour ago for the 5
             hours, a day and 2 days ago for the week), drawn from snapshots
             `snapshot` keeps as the status line and the band run
+  nights    the week's night hours, outside the waking hours (the profile
+            override's, else 8 to 23): [[start, end]], drawn as pale bands
   grid      local hours (5 hours) or the starts of local days (week);
             labels: "17", "Fri", in the order to place them (whole days
             before the week's edge days), each where no earlier one is
@@ -189,7 +191,28 @@ def _ticks(window, t0, t1):
     return grid, labels
 
 
-def build(store, v, now):
+def _nights(t0, t1, wake):
+    """[[start, end]] of the local hours outside the waking hours [h0, h1)
+    in [t0, t1], an hour at a time, so DST days need no care."""
+    h0, h1 = wake
+    out, h = [], int(profile.hour_start(t0))
+    for _ in range(int((t1 - t0) / HOUR) + 3):
+        if h >= t1:
+            break
+        nxt = int(profile.hour_start(h + HOUR + 60))
+        hr = clock.localtime(h).tm_hour
+        awake = h0 <= hr < h1 if h0 < h1 else (hr >= h0 or hr < h1)
+        if not awake:
+            a, b = max(h, int(t0)), min(nxt, int(t1))
+            if out and out[-1][1] == a:
+                out[-1][1] = b
+            elif b > a:
+                out.append([a, b])
+        h = nxt
+    return out
+
+
+def build(store, v, now, wake=(8, 23)):
     """The window's chart, or None without a window to draw."""
     if not v.get("present"):
         return None
@@ -228,14 +251,17 @@ def build(store, v, now):
         "actual": _thin(actual, t0, now),
         "forecast": [[int(t), round(u, 2)] for t, u in _thin(forecast, now, t1, 60)],
         "fan": fan, "ghosts": ghosts, "grid": [int(g) for g in grid], "labels": labels,
+        "nights": _nights(t0, t1, wake) if window == SEVEN_DAY else [],
     }
 
 
-def attach(store, v5, vw, now):
+def attach(store, v5, vw, now, cfg=None):
     """Build both windows' charts into their views (v["chart"])."""
+    ov = ((cfg or {}).get("profile") or {}).get("override") or {}
+    wake = ov.get("wake_hours") or (8, 23)
     for v in (v5, vw):
         try:
-            v["chart"] = build(store, v, now)
+            v["chart"] = build(store, v, now, wake)
         except Exception:  # a chart is never worth the band
             v["chart"] = None
     c = v5.get("chart")

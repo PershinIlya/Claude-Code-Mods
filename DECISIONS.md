@@ -833,7 +833,15 @@ unquoted parameter only to the first space, so tooltips are quoted, with no
 quote or backslash inside (one SwiftBar version ends a quoted value at
 either quote). `"menubar": {"charts": false}` (or the text style) leaves the
 charts out of the menu and skips building them. A chart that fails to build
-is none; the band stays.
+is none; the band stays. The person then asked for day and night on the
+week's chart, since the work happens by day: the hours outside the waking
+hours (`profile.override`'s, else 8 to 23, the override's own default) are
+pale bands behind the lines, found an hour at a time like the days; and for
+when the quota would run out at this pace even when the window lasts:
+"Runs out" now always shows while there is a pace, in color with how long
+early when it comes before the reset (as before), in grey with "past the
+reset" when it does not (the 5 hours at the fitted rate, the week walked
+along the profile up to 4 weeks on; "over a week away" beyond 7 days).
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
 `prompt.*` hooks: the line is for the person, not the model.

@@ -91,6 +91,25 @@ class Ticks(unittest.TestCase):
         self.assertEqual(labels[-1][0], int(RW - 7 * D + 10 * H))
 
 
+class Nights(unittest.TestCase):
+    def test_the_hours_outside_the_waking_hours(self):
+        t0, t1 = RW - 7 * 86400, RW  # Fri 04:00 to Fri 04:00 (UTC)
+        n = chart._nights(t0, t1, (8, 23))
+        self.assertEqual(n[0], [t0, int(t0 + 4 * H)])  # to 08:00
+        self.assertEqual(n[1], [int(t0 + 19 * H), int(t0 + 28 * H)])  # 23:00 to 08:00
+        self.assertEqual(n[-1], [int(t1 - 5 * H), t1])  # 23:00 to the reset
+        self.assertEqual(len(n), 8)
+        # Waking hours across midnight: awake 20:00 to 04:00.
+        self.assertEqual(chart._nights(MON, MON + D, (20, 4)), [[int(MON + 4 * H), int(MON + 20 * H)]])
+
+    def test_with_a_dst_change(self):
+        with zone("America/New_York"):
+            reset = utc_ts(2026, 3, 10, 16)
+            for a, b in chart._nights(reset - 7 * D, reset, (8, 23)):
+                self.assertIn(clock.localtime(a).tm_hour, (23, 12))
+                self.assertIn(clock.localtime(b).tm_hour, (8, 12))
+
+
 class Snapshots(TempHome):
     def v(self, **kw):
         v = dict(window=config.FIVE_HOUR, present=True, window_id=7, used=30.0, rate=12.0, verdict="on_pace")

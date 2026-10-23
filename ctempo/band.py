@@ -213,6 +213,8 @@ def details(v, now):
             soft = _soft(v)
             rows.append(_row("Runs out", "%s%s, %s early" % ("about " if soft else "", at(out, now),
                                                               dur(v["reset_ts"] - out)), "warning" if soft else "error"))
+        elif v.get("empty_ts") and v["verdict"] not in ("idle", "unknown"):
+            rows.append(_row("Runs out", _later(v["empty_ts"], v["reset_ts"], now), "inactive"))
         left = _unused(v)
         if left is not None and floor_pct(left) >= 1 and not out:
             rows.append(_row("Will go unused", "%d%%" % floor_pct(left), "success" if _harvest(v) else "text"))
@@ -224,6 +226,16 @@ def details(v, now):
             ("%s%%/h" % render.rate(rate)) if rate is not None else None)
         rows.append(_row("Rate", (now_ + ", " + fits) if now_ else fits))
     return rows
+
+
+def _later(ts, reset, now):
+    """When a window that lasts to its reset would run out at this pace:
+    "Sat 14:10, past the reset"."""
+    if ts - reset < 60:
+        return "about the reset"
+    if ts - now > 7 * 86400:
+        return "over a week away"
+    return "%s, past the reset" % at(ts, now)
 
 
 def _row(label, value, tone="text"):

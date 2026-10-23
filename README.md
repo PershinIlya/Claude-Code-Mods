@@ -46,12 +46,15 @@ One row per window: its name, a small bar, the percent, and its pace.
   per window, side by side (one under the other in a narrow window): its
   name, its percent large and its pace in color on top, then a row per
   fact, the label on the left and the value on the right: At reset (where
-  it lands at this pace), Runs out (when, and how long before the reset),
+  it lands at this pace), Runs out (when it would reach 100% at this
+  pace: in color with how long before the reset when that comes first, in
+  grey with "past the reset" when the window lasts),
   Will go unused, Resets, Rate (the 5 hours: what you spend an hour and what
   fits); and how old the last reading is. The menu bar's menu shows the
   same rows.
 - **The chart** in each card, under its head, shows the window from its
-  start to its reset: what was used (the line over a pale area, a dot per
+  start to its reset (the week's nights, outside the waking hours of
+  `profile.override`, else 8 to 23, as pale bands): what was used (the line over a pale area, a dot per
   reading while there are few), now (a hairline), the forecast to the reset
   (dashed, in the pace's color when it needs you: red when it runs out or
   the week blocks it, yellow when it may run out or passes your target),
@@ -474,9 +477,9 @@ start, the imports, and each phase of a render.
 ## Tests
 
 ```sh
-python3 -m unittest discover -s tests -t .     # 533 tests, Python 3.8 to 3.13
+python3 -m unittest discover -s tests -t .     # 537 tests, Python 3.8 to 3.13
 claude plugin validate mods/ctempo
-claude plugin test mods/ctempo                 # 72 tests
+claude plugin test mods/ctempo                 # 73 tests
 python3 scripts/ci_integration.py              # end to end, throwaway folders
 ```
 

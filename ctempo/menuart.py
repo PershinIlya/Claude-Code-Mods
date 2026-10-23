@@ -104,6 +104,8 @@ def chart(c, width, height, dark, tone=None):
     Y = lambda u: (PAD_T + (1 - max(0.0, min(100.0, u)) / 100.0) * (height - PAD_T - PAD_B)) * S  # noqa: E731
     pts = lambda series: [(X(t), Y(u)) for t, u in series]  # noqa: E731
     base, top = Y(0), Y(100)
+    for a, b in c.get("nights") or []:  # pale bands behind the rest
+        cv.fill_between(X(a), X(b), lambda x: top, lambda x: base, hex_color(p["t"], 0.1))
     for t in c["grid"]:
         cv.polyline([(X(t), top), (X(t), base)], 1.0, hex_color(p["t"], 0.22))
     cv.polyline([(PAD_L * S, top), ((width - PAD_R) * S, top)], 1.2, hex_color(p["t"], 0.6), dash=(2.5, 4))

@@ -192,6 +192,9 @@ def five_hour(store, now, cfg, reading=None):
             cap_ts = now + (100.0 - used) / rate * 3600.0
         mult = allowed / rate if rate > 0 else None
         v.update(multiplier=mult, projected=min(100.0, raw), projected_raw=raw, cap_ts=cap_ts)
+        # When it would reach 100 at this rate, past the reset too (Details' "Runs out").
+        if used < 100.0 and rate > 0:
+            v["empty_ts"] = now + (100.0 - used) / rate * 3600.0
         v["verdict"] = verdict_for(mult, cfg)
     if used >= 100.0:
         v["verdict"] = "maxed"

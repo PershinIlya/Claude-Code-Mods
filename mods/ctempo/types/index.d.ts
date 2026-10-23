@@ -36,6 +36,8 @@ export type Chart = {
   // An early 5-hour estimate: the lines at its rate 40% lower and higher.
   fan: [[number, number][], [number, number][]] | null
   ghosts: [number, number][][]
+  // The week's night hours, as pale bands (an older CLI has none).
+  nights?: [number, number][]
   grid: number[]
   labels: [number, string][]
 }

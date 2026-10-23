@@ -775,6 +775,8 @@ test('a chart that does not read is none', () => {
   expect(chartOf({ ...CHART, fan: [1] })).toBeNull()
   expect(chartOf({ ...CHART, fan: [[], []] })).toBeNull()
   expect(chartOf({ ...CHART, labels: [[1, 2]] })).toBeNull()
+  expect(chartOf({ ...CHART, nights: [[1, 'x']] })).toBeNull()
+  expect(chartOf({ ...CHART, nights: [[CHART.t0, CHART.t0 + 3600]] })).not.toBeNull()
   expect(chartOf({ ...CHART, fan: [CHART.forecast, CHART.forecast] })).not.toBeNull()
 })
 
@@ -808,6 +810,14 @@ test('the chart draws what was used, the forecast in the pace color, earlier for
   const edge = chartSvg({ ...CHART, labels: [[CHART.t0, '11'], [CHART.t1, '16']] }, 300, 'a')
   expect(edge).toContain("<text x='1' y='74' text-anchor='start'>11<")
   expect(edge).toContain("<text x='299' y='74' text-anchor='end'>16<")
+})
+
+test("the week's nights are pale bands behind the lines", () => {
+  const svg = chartSvg({ ...CHART, nights: [[CHART.t0, CHART.t0 + 1800], [CHART.t0 + 3 * 3600, CHART.t0 + 4 * 3600]] }, 300, 'a')
+  expect(svg.match(/<rect class='nt'/g)?.length).toBe(2)
+  expect(svg).toContain("<rect class='nt' x='1' y='6' width='29.5' height='56'/>")
+  expect(svg.indexOf("class='nt'")).toBeLessThan(svg.indexOf("<line class='g'"))
+  expect(chartSvg(CHART, 300, 'a')).not.toContain("class='nt'") // the 5 hours, or an older CLI
 })
 
 test('a chart label with no room after the one before is left out, as in the menu bar', () => {

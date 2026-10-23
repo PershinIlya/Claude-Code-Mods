@@ -270,7 +270,7 @@ def show(cfg):
                 if bar.get("style", "bars") == "bars" and bar.get("charts", True):
                     from . import chart
 
-                    chart.attach(st, v5, vw, now)
+                    chart.attach(st, v5, vw, now, cfg)
                 checked = st.meta_get("usage_cmd_ok_at") if every else None
                 ws, updated = band.windows(v5, vw, now), band.updated(v5, vw)
                 if cfg.get("menubar", {}).get("notify", True):
