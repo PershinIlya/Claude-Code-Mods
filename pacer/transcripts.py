@@ -6,7 +6,7 @@ json.loads (the line is one JSON object) and dropped on the spot: it is
 never stored, printed or copied.
 
 Each message is weighted by a cost proxy using API price ratios relative
-to fresh input tokens (DECISIONS.md D-14):
+to fresh input tokens (docs/design-decisions.md D-14):
     input + 1.25 * cache_creation + 0.1 * cache_read + 5 * output
 Only the distribution over the hours of the week matters for the prior.
 """

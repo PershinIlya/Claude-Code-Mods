@@ -51,7 +51,7 @@ DEFAULTS = {
         # Off-hours keep this fraction of the mean awake-hour weight, so the
         # expected pace never drops to zero (ccpool uses the same 0.15).
         "floor": 0.15,
-        # Prior strength in observation-equivalents (see DECISIONS.md D-12);
+        # Prior strength in observation-equivalents (see docs/design-decisions.md D-12);
         # a flat prior (no transcripts, no override) gets the weaker one.
         "prior_strength": 1.0,
         "prior_strength_uniform": 0.25,

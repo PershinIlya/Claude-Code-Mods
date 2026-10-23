@@ -44,6 +44,11 @@ def move_home(out=print):
         except OSError as e:
             out("  could not move %s to %s: %s (pacer keeps using the old folder)" % (old, new, e))
             return False
+        if not config.IS_WINDOWS:
+            try:
+                os.chmod(new, 0o700)  # as a new data folder is made (config.private_dir)
+            except OSError:
+                pass
         out("Moved %s to %s (pacer was called ctempo)" % (old, new))
         return True
     return False

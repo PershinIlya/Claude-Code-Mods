@@ -2,8 +2,18 @@
   "name": "pacer",
   "version": "0.1.0",
   "description": "Claude usage pace (5-hour and weekly) above the prompt, drawn from the pacer CLI",
-  "author": { "name": "pacer" },
+  "author": {
+    "name": "Ilia Pershin",
+    "url": "https://github.com/PershinIlya"
+  },
   "license": "MIT",
-  "keywords": ["mods", "usage", "rate-limits", "statusline"],
-  "types": "./types/index.d.ts"
+  "keywords": [
+    "mods",
+    "usage",
+    "rate-limits",
+    "statusline"
+  ],
+  "types": "./types/index.d.ts",
+  "homepage": "https://github.com/PershinIlya/pacer",
+  "repository": "https://github.com/PershinIlya/pacer"
 }

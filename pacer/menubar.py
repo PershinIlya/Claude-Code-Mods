@@ -92,7 +92,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
         img = "image=%s,%s width=%d height=14" % (menuart.bar(w, bar, 14, False, BAR_PAD),
                                                  menuart.bar(w, bar, 14, True, BAR_PAD), bar)
         # No color= on this line: with it, SwiftBar drew the text and dropped
-        # the image (the person's Mac); the menu's own grey is kept.
+        # the image (seen on a Mac); the menu's own grey is kept.
         out.append("%s | %s font=Menlo size=12 trim=false tooltip=%s" % (head(w), img, quoted(w["sentence"])))
         if charts and w.get("chart"):
             out.extend(chart_lines(w, width))
@@ -106,7 +106,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
 # Points per character: Menlo 11 (0.602 em, with a little to spare), the
 # system font at 11 (wider than its average) and Menlo 12 (the windows'
 # lines); the space between an image and its text in a menu.
-MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 7  # the gap as measured on the person's Mac
+MENLO_PT, TEXT_PT, HEAD_PT, IMAGE_GAP_PT = 6.7, 6.2, 7.23, 7  # the gap as measured on a Mac
 BAR_MIN, BAR_MAX, BAR_LEAST = 250, 380, 120
 BAR_PAD = 2  # clear points at the bar's right end: with the image's gap, 9 before the label
 CHART_H = 40  # the chart's height in points; its labels in Menlo 10 (0.602 em a character)

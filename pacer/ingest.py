@@ -1,6 +1,6 @@
 """Turn a statusline (or mod) payload into stored samples.
 
-Rules, in order (see DECISIONS.md D-05..D-09):
+Rules, in order (see docs/design-decisions.md D-05..D-09):
   * sanitize: reject used% outside [0, 105] (the #52326 epoch leak lands in
     used_percentage), clamp to 100, reject resets_at that already passed or
     lies further ahead than the window length plus slack, accept ms epochs.

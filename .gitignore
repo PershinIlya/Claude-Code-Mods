@@ -1,6 +1,23 @@
-reference/
+# Python
 __pycache__/
 *.pyc
-.DS_Store
 *.egg-info/
-.claude-plugin/types/
+.venv/
+
+# Node (the mod's type checks)
+node_modules/
+
+# Claude Code: local settings and worktrees; types a mod generates
+.claude/
+**/.claude-plugin/types/
+
+# pacer data, if PACER_HOME ever points inside the clone
+*.db
+*.db-wal
+*.db-shm
+*.pacer-backup-*
+
+# Local material kept beside the clone
+reference/
+
+.DS_Store

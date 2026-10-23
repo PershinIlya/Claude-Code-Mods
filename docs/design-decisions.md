@@ -1,23 +1,20 @@
-# Decisions
+# Design decisions
 
-Every choice that was not dictated by the brief, with the reason. Numbered so
-code comments can point here.
+Every rule in pacer that is not obvious, with the reason and, often, the case
+that shaped it. Numbered so code comments can point here (`D-37`). pacer was
+called ctempo until its first public release; some entries still say so.
 
 ## Environment and packaging
 
-**D-01. Built in a cloud container, not on the Mac.** The session ran in a
-Linux container (Ubuntu 24.04, Claude Code 2.1.299). There is no access to the
-Mac, its `~/.claude`, its transcripts or its Keychain. So "install for
-real", "live samples" and "bootstrap from my transcripts" were done against
-the container's own `~/.claude` (one live session, this one), and the Mac
-install is a single command. The code has no Linux-only paths: it uses
-`time.localtime`, POSIX `sh` for composition (Git Bash or PowerShell on
-Windows, D-26), and probes `/usr/bin/python3`, `/opt/homebrew/bin/python3` and
-`/usr/local/bin/python3` (macOS locations) first. Windows support came later,
-also without a Windows machine: its branches run on Linux with the one
-platform flag (`config.IS_WINDOWS`) patched, and on real Windows in CI (the
-suite, the mod's tests, and `scripts/ci_integration.py` through Git Bash,
-pwsh, powershell.exe and cmd.exe); D-25 to D-29 hold its choices.
+**D-01. Portable by construction.** pacer was built and tested mostly
+without the machines it runs on. The code has no OS-specific paths outside
+`config.IS_WINDOWS` branches: it uses `time.localtime`, POSIX `sh` for
+composition (Git Bash or PowerShell on Windows, D-26), and probes
+`/usr/bin/python3`, `/opt/homebrew/bin/python3` and `/usr/local/bin/python3`
+(macOS locations) first. Windows branches run on Linux with the one platform
+flag patched, and on real Windows in CI (the suite, the mod's tests, and
+`scripts/ci_integration.py` through Git Bash, pwsh, powershell.exe and
+cmd.exe); D-25 to D-29 hold its choices.
 
 **D-02. Python 3.8+, standard library only, package plus launcher.** The core
 is `pacer/` (importable) and `bin/pacer` (a launcher that puts the repo on
@@ -46,13 +43,10 @@ differ (D-27), and every command adds `-X utf8` (D-25).
 converts it to the statusLine shape (ISO `resetsAt` to epoch seconds) and
 calls the same CLI. One code path, two collectors.
 
-Left out of v1, as asked: polling the undocumented `/api/oauth/usage`. It would
-add (a) per-model weekly caps (`seven_day_opus`, `seven_day_sonnet`, the
-`limits[]` "weekly_scoped" entries), (b) usage from other devices and from
-claude.ai while no Claude Code session is open (the statusline only learns
-about it at the next API response), (c) `extra_usage`. Cost: it needs the
-OAuth token (Keychain item "Claude Code-credentials"), it can be rate limited
-(429), and the endpoint is undocumented.
+pacer never reads credentials. It does not call Anthropic's usage
+endpoints itself: the only levels it sees are the ones Claude Code hands the
+status line or the mod, and, when you turn it on, what Claude Code's own
+`/usage` prints (D-32), a request Claude Code makes with its own login.
 
 **D-05. Store.** SQLite at `~/.pacer/tempo.db` (override with
 `PACER_HOME`; a leading `~` is expanded and a relative path is taken from the
@@ -637,7 +631,7 @@ which also draws the terminal line with text bars (`━` used, `╍` forecast,
 `┈` unused; `#`, `=`, `.` in ascii mode), dropping resets, then calm words,
 then bar width, then "Week" for "Wk" to fit `display.max_width`.
 
-**D-30a. Run-outs at the reset.** On the person's first day the band read
+**D-30a. Run-outs at the reset.** On a user's first day the band read
 "Week 17% Out Fri 04:09": the window average, one working day stretched over
 the week, ran out 50 minutes before Friday's reset. The band now calls a
 run-out within 10 minutes (5 hours) or 6 hours (week) of the reset on pace,
@@ -662,12 +656,12 @@ poll; and the 5-hour percent was nowcast: the last
 level plus the fitted rate times the time since that level was read, capped at
 1 point, shown as "≈37%". A simulation of 2 chats on one store put pacer
 below the native bar 5% of the time in steady work and above it at most 1%.
-On the person's Windows machine it read 15% against the account's 14% when
+On a user's Windows machine it read 15% against the account's 14% when
 work had paused, which read as wrong, so it is gone (D-33). Exact agreement
 needs the usage endpoint, which is left out (D-04).
 
 **D-32. Where the band can show.** A mod draws only where the app attaches a
-surface to the session. Tested on the person's Mac (desktop app 2.42304.0,
+surface to the session. Tested on a user's Mac (desktop app 2.42304.0,
 Claude Code 2.1.302): a local session in the Code tab draws (`desktop`), and so
 does the terminal; a cloud session viewed in the same app loads the mod, and
 the mod reads the rate limits, but `$.session.surfaces()` is empty and
@@ -684,7 +678,7 @@ after 30 minutes) and the menu say. With `menubar.fetch_usage_min` above 0
 records the levels it prints (whole percents, resets read in the IANA zone it
 names, so Python 3.9 or later) as readings of a session "usage-cmd": account
 levels whatever ran them, with no credential in pacer's hands (D-04 still
-holds: Claude Code makes the request). On the person's Mac it took about 6 s.
+holds: Claude Code makes the request). On a user's Mac it took about 6 s.
 That it spends no quota is inferred (a local command), and is to be watched.
 The menu bar also posts a macOS notification (osascript) for the events
 worth acting on, once per window instance and kind: runs out (red, not the
@@ -692,7 +686,7 @@ milder "may"), reached, will go unused; never from readings over 30 minutes
 old. Push to a phone (ntfy, as ccpace does) is left out: the numbers would pass
 through a third-party service.
 
-**D-33. Multipliers back, and readings from everywhere.** The person's
+**D-33. Multipliers back, and readings from everywhere.** A user's
 feedback after a day on Windows: the band had become only percents, and the
 multipliers ("how much faster I can go, how much slower I must go") were the
 most useful part. Now the grey "Can go 2.7x faster" shows at every width but
@@ -717,7 +711,7 @@ window on Windows, with the session's markers (`CLAUDECODE`,
 `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`) removed so the nested
 `claude` neither refuses nor joins the session; one attempt per interval
 across all bands and the menu bar (the store's `usage_cmd_tried_at`), and
-`doctor` shows when it last answered or why not. On the person's Windows
+`doctor` shows when it last answered or why not. On a user's Windows
 machine, signed in with Max, `claude -p "/usage"` printed only the session's
 spend until the folder it ran in was trusted (in a trusted one it printed the
 limits): the fetch runs in `PACER_HOME`, which is trusted once by hand, and
@@ -750,7 +744,7 @@ when it starts, so the first try showed no change until a restart; the
 label is short, as the title has it, "5h 83%" and "Wk 46%" (in Menlo, so
 each line's bar is as long as its label leaves and both end alike), and the
 bar keeps 2 points clear before it, 9 with the image's own gap (7, measured
-on the person's Mac); the label keeps the menu's own grey: with a color= on
+on a user's Mac); the label keeps the menu's own grey: with a color= on
 that line SwiftBar drew the text and dropped the bar; macOS leaves about 10 points after the text of every line, so
 the line ends that much short of the separators); the button is always there, "⋯" below 56
 cells or when 2 windows need you with the small bars (gone only at 40 cells
@@ -772,7 +766,7 @@ on hours-old readings (grey now) and the text style lost its green; an ended
 5 hours said it opens with the next message while the week blocked it; and
 stale words in the docs.
 
-**D-35. Details as cards.** The person found Details' table hard to read
+**D-35. Details as cards.** A user found Details' table hard to read
 on Windows: rows ran together and it was not clear which label a number
 belonged to. 3 designs, drawn from the mod's own elements (Box borders and
 padding, Text sizes) in Chromium: a card per window, plain sentences with
@@ -784,7 +778,7 @@ number stays with its row; side by side from 72 cells, one under the other
 below, no word cut from 44 to 115 cells. Used and Pace are the card's head,
 not rows. "Next window" became "Opens", short enough for a narrow card.
 
-**D-36. Charts.** The person asked for a chart beside the bars: the history
+**D-36. Charts.** A user asked for a chart beside the bars: the history
 of the window, the forecast to its reset, and a way to see by eye how good
 the model is. From 3 mockups they chose a chart in each Details card and one
 under each bar in the menu bar's menu (chart.py builds it once for both):
@@ -835,7 +829,7 @@ unquoted parameter only to the first space, so tooltips are quoted, with no
 quote or backslash inside (one SwiftBar version ends a quoted value at
 either quote). `"menubar": {"charts": false}` (or the text style) leaves the
 charts out of the menu and skips building them. A chart that fails to build
-is none; the band stays. The person then asked for day and night on the
+is none; the band stays. A user then asked for day and night on the
 week's chart, since the work happens by day: the hours outside the waking
 hours (`profile.override`'s, else 8 to 23, the override's own default) are
 pale bands behind the lines, found an hour at a time like the days; and for
@@ -846,7 +840,7 @@ reset" when it does not (the 5 hours at the fitted rate, the week walked
 along the profile up to 4 weeks on; "over a week away" beyond 7 days).
 
 **D-37. Forecasts with their uncertainty.** Five hours after a weekly reset,
-at 2%, the person's band said "Ease off" and "Runs out about Thu 13:30". The
+at 2%, a user's band said "Ease off" and "Runs out about Thu 13:30". The
 lookback (D-15) reached back past the reset into the old week's last day,
 when the quota that would go unused got spent (pacer itself suggests it),
 and that burst set the new week's pace. They asked for a forecast whose
@@ -857,8 +851,10 @@ spread is wide far from the reset and narrows toward it. Now:
   capped-hours rule and its pick among drop windows are gone with it.
 - Intensity = (spent in the lookback + K × target × prior) / (target ×
   (the lookback's profile share + K)), K = 0.1 of a week: the evidence
-  pulled toward the prior, your typical week (M / target), or 1 (the target)
-  before a whole week was seen. It is the mean of a gamma prior on the
+  pulled toward the prior: what closed weeks reached (the typical week), or
+  the profile's scale once most of the week's 168 hours were observed (the
+  scale before that stretches the busy hours over the whole week: on day one
+  it read 3.5 times the target), else 1 (the target). It is the mean of a gamma prior on the
   spend rate updated by what this week spent: right after a reset the prior
   leads, and its pull fades as the week brings evidence (to 30 to 40% with a
   full 24 awake hours of it). A cut lookback with no step yet (D-15) uses
@@ -876,8 +872,8 @@ spread is wide far from the reset and narrows toward it. Now:
   "may". An early estimate (the 5 hours on fewer readings than a fit needs,
   the week while the prior weighs more than the evidence) warns only of what
   holds at its low edge: a run-out it escapes there is `shaky`, with no
-  "Runs out" and no color (Details shows the time in grey, "early
-  estimate"), and "slow down" becomes "on pace" unless the multiplier at
+  "Runs out" and no color (Details notes "maybe 100% …" on the Resets row),
+  and so is a run-out of an idle week, which only the prior predicts, and "slow down" becomes "on pace" unless the multiplier at
   the low edge is under the threshold too. 2% in the first hour of a week,
   with nothing known, now reads "On pace" where it read "Ease off".
 
@@ -910,7 +906,7 @@ more can be spent, tinted at 9%. The menu bar's picture has the same mark
 without the time, which is the "Runs out" row just under it.
 
 **D-24. No hooks into Claude's context.** v1 adds no settings hooks and no
-`prompt.*` hooks: the line is for the person, not the model.
+`prompt.*` hooks: the line is for a user, not the model.
 
 ## Install
 
@@ -1274,110 +1270,13 @@ data itself (v2).
 than that are deleted once a day by the statusline; per-session reader rows
 after 7 days.
 
-## Ideas left for v2
+## Ideas for later
 
 - An 80% band on both projections (claumon's empirical Bayes with a Gamma
   process), with pacer's profile as the prior mean instead of one global
   rate.
-- Optional `/api/oauth/usage` polling for per-model weekly caps and off-device
-  usage (D-04), behind an explicit opt-in.
 - The scavenger: a queue of jobs run with `claude -p` when `pacer check` says
   go, which records rate limits from the SDK's usage reports itself.
 - Mean reversion in the weekly projection (recent intensity decaying toward
   the typical week over the remaining days).
 - A `report` breakdown by project (from transcript token counts).
-
-## Review
-
-An adversarial review (6 reviewers, each finding checked by a skeptic who
-tried to refute it) confirmed 23 defects and rejected 11. A second pass over
-the fixes confirmed 10 more (mostly install edge cases, and the 5h model
-above) and rejected 1; a third confirmed 7 (the 5h model's quantization, ramp
-and first readings; install retries and aliases) and rejected none; a fourth
-confirmed 19 distinct defects (21 reports, one of them found three times: the
-5h fit start, color tiers and line fitting; the weekly lookback, gaps and
-multiplier; `PACER_HOME`, `check` and `report`; install retries, baselines
-and the `--compose` argument) and rejected 2; a fifth, over those fixes,
-confirmed 11 distinct defects (14 reports: an unknown 5h burn taken as zero,
-`now` reasons and data age, the profile scale, a weekly window at 0, idle
-above a target, and five install edge cases) and rejected 1; a sixth confirmed
-9 (10 reports: an unknown 5h leftover compared as a number at `min_free` 0,
-two `check`/`now` texts, and six install sequences) and rejected 3, a
-model-based fuzzer over install and uninstall (tests/test_install_fuzz.py)
-found 3 more classes, and the fixers' own notes 5 more (a leftover of 0
-counted as spare, a nan duration, a user file that is not valid JSON in two
-places, backups sorted as strings); a seventh confirmed 9 (10 reports: spare
-quota measured against 100 instead of the target, a bogus later reset that a
-maxed or idle session never undid, concurrent first opens racing the switch to
-WAL, the composer waiting for EOF behind a background job, 0% shown when a
-write failed at a rollover, and four install cases) and rejected 1, the
-fuzzer, extended with a `runtime.json` check after every step, a deleted data
-folder, `--compose` edits and the plugin commands run by hand, found 2 more,
-and a fixer's notes 1 more (the user's own empty plugin key removed by
-uninstall); an eighth confirmed 15 and rejected none (a capped previous week
-counted as expected spend in the weekly lookback, the old window's tail before
-a reset never learned, a transcript prior that never faded, a drop reset paced
-from `resets_at - 7 d`, a weekly reset moved later counted as a finished week,
-the one-reading undo flipped by a shared session id and leaving another
-session's pending reading behind, reset times shown a minute early, a 5h
-leftover of 0 priced at the assumed exchange rate, fractional targets printed
-as whole numbers, two `pacer profile` texts, and three install cases: a
-launcher that kept its first pin, backups named in local time, and the user's
-own empty plugin key after other plugins came and went); a ninth confirmed 11
-and rejected 1 (a cap first shown by a new session's first reading learned as
-idle, the lookback after a drop week reading the window the drop replaced, a
-drop week's window counted as a typical week, the points-vs-pace table pacing
-a drop week from `resets_at - 7 d` and counting it twice, the prior's
-build-time trust printed for good, a shared session id still flipping the line
-to a dead window, a light user's early reset taken for a moved one, pacer's
-segment cut off in a composed line, and three install cases: a manual mod's
-empty plugin key, an older version's local-time backup names, and a
-`--bin-dir` alias); a tenth, over those fixes only, confirmed 3 and rejected 1
-(a maxed session's bogus reset that began after its last reading no longer
-undone, an early-rollover week counted as a typical week, and the prior's
-weight printed under `profile.override`); an eleventh, over those 3, confirmed
-2 that were older than them (two bogus later resets in a row from a maxed
-session not undone, and `pacer profile` and `doctor` asking for a transcript
-prior that an override leaves unused) and rejected none; a twelfth, over those
-2, confirmed 2 (the chained undo walking across a real early reset, introduced
-by the eleventh pass's fix, and learned hours called "folded in" under mode
-`replace`) and rejected none; a thirteenth, a model-based fuzzer over reset
-detection (traces of true windows and Claude Code processes, shared session
-ids included, replayed through the statusline path, 14,000 sequences) whose
-findings verifiers checked, confirmed 5 and rejected none (2 idle processes on
-1 session id faking a drop reset, raising the window a drop opened back to the
-old level, rolling back a reset moved earlier, and undoing a reset moved later
-or an early reset, and a reset moved earlier that a maxed or idle session
-never got taken); a 14th, over those rules, confirmed 5 and rejected
-none: the withdrawal deleting a real pending drop (for a busy process with an
-idle twin, and for the statusline and mod of one session) is fixed, and 3 more
-cases for processes sharing a session id are documented limits (D-06); a
-15th, on Windows (6 reviewers: the shells, the installer, the runtime, the
-mod, CI, and a new user's first install), confirmed 18 distinct defects (26
-reports) and rejected none (D-25 to D-29): a composed command that Windows
-PowerShell 5.1 or Git Bash changed on its way to Python, the Composer
-predicting the shell inside Git Bash, a command written for a single shell
-without a warning, no launcher for Git Bash, `pacer.cmd` read by cmd.exe after
-python had rewritten or deleted it, a drive-less `PACER_HOME` read as 2
-folders, a read-only settings.json, a UTF-16 config.json, a missing interpreter
-named only by cmd.exe in the band, an IANA `TZ`, long transcript paths, a held
-errors.log, 2 tests that could skip or pass by accident, and 3 in the docs,
-which described a Mac install only; a 16th, over those fixes (2 reviewers: the
-code and the docs), confirmed 9 (a deleted Git Bash launcher coming back, a
-venv pin hiding the shell from the Composer, a refusal naming the wrong drive,
-`compose_of` and `pacer statusline` disagreeing on 2 flags, the CLI taking a
-`C:x` the band refused, and 4 in the docs: hand edits, `&&`, cmd.exe quoting
-and numerals); a 17th, over those, confirmed 2 (doctor reading the first of 2
-compose flags, and a Git Bash launcher left on the old pin with `--bin-dir`);
-an 18th, over the band (D-30, D-31; a code reviewer and a visual one that drew
-the real CLI output in Chromium, light and dark), confirmed 10 and rejected 3
-(the stamp touched for rejected readings, a target warning lost while idle,
-"0% will go unused", a 5-hour forecast under a maxed week, both narrow
-phrases cut mid-word, a long one cut beside Details, the waiting row's gap,
-an undrawn milder run-out, Details shifting the row, a lone waiting window
-with no word; plus the white frame behind interactive bars, rejected for want
-of the real host and fixed anyway by drawing images). 178 are fixed, each
-with a regression test
-that was checked to fail on the code before its fix (the 3 in the docs share a
-single test: the README's Windows section must say what the code does). Details
-in the commit messages from "Fix review findings" on.

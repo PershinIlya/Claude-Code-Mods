@@ -1,3 +1,5 @@
+* text=auto
+
 # Git for Windows checks text files out with CRLF (core.autocrlf=true). A
 # file run through its #! line breaks with a CR there ("python3\r: not
 # found" in Git Bash), so the launcher, the Python sources and any shell

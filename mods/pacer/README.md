@@ -2,8 +2,8 @@
 
 Draws pacer's band above the prompt, for the Claude Desktop Code tab where a
 custom statusLine does not render: one row with a small bar, the percent and,
-only when it matters, a few words per window; Details (`d`) adds a sentence per
-window. All the math and all the words are in the Python CLI (`../../pacer`);
+its pace in a few words per window; Details (`d`) adds a card per window with
+a chart and a few numbers. All the math and all the words are in the Python CLI (`../../pacer`);
 this mod only:
 
 1. when a reading moved (a `session.measure` whose `rateLimits` changed, or its

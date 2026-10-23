@@ -1,7 +1,10 @@
 {
   "name": "pacer",
   "description": "Local marketplace for the pacer usage pace mod",
-  "owner": { "name": "pacer" },
+  "owner": {
+    "name": "Ilia Pershin",
+    "url": "https://github.com/PershinIlya"
+  },
   "plugins": [
     {
       "name": "pacer",

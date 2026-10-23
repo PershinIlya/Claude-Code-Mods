@@ -108,7 +108,7 @@ def fetch(now=None, run=None):
         return False, "claude -p /usage failed: %s" % e
     readings = parse(text, now)
     if rc == 0 and not readings and COST.search(text or ""):
-        # /usage showed the session's spend. Seen on the person's Windows machine,
+        # /usage showed the session's spend. Seen on a Windows machine,
         # signed in with Max: claude -p asks for the plan's limits only in a folder
         # it trusts, and this runs in PACER_HOME. Or an API-key login.
         return False, ("claude -p /usage shows spend, not plan limits: Claude Code shows them only in a folder "

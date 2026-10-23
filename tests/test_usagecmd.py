@@ -12,7 +12,7 @@ from pacer import config, menubar, usagecmd
 
 from .helpers import TempHome, _zone_info
 
-# The person's own output (Claude Code 2.1.302, Asia/Dubai, UTC+4).
+# Claude Code 2.1.302's output (Asia/Dubai, UTC+4, no DST).
 OUTPUT = """You are currently using your subscription to power your Claude Code usage
 
 Current session: 11% used · resets Oct 17 at 6:20pm (Asia/Dubai)

@@ -436,7 +436,7 @@ class ProfileScale(TempHome):
 
 class RunAsFolder(TempHome):
     """`py pacer ...` from the clone runs the package folder as a script
-    (the person typed it on Windows): it works as bin/pacer does, with no
+    (a user typed it on Windows): it works as bin/pacer does, with no
     warning, and the folder's config.py and profile.py never shadow the
     standard library's."""
 

@@ -14,7 +14,7 @@ as a shrinkage estimate r(h) = (n(h) m(h) + k M p(h)) / (n(h) + k), where
 n(h) is the decayed observation weight, m(h) the observed mean, k the prior
 strength and M the weekly total implied by the observations. Then a floor
 keeps off-hours at `floor` times the typical awake-hour rate, and the
-result is normalized. DECISIONS.md D-10..D-15 explain each choice.
+result is normalized. docs/design-decisions.md D-10..D-15 explain each choice.
 """
 
 import json

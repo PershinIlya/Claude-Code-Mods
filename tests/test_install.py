@@ -2655,15 +2655,15 @@ class WindowsShellNotes(Sandbox):
 
 
 class WindowsReadme(unittest.TestCase):
-    """Review 15 (journey#21, regress-ci#19, journey#24, journey#25): the README had a Mac
-    install only, whose commands fail in Windows PowerShell 5.1, cmd.exe and Git Bash. Its
-    Windows section must say what the code does there."""
+    """Review 15 (journey#21, regress-ci#19, journey#24, journey#25): the docs had a Mac
+    install only, whose commands fail in Windows PowerShell 5.1, cmd.exe and Git Bash. The
+    Windows section (docs/install.md) must say what the code does there."""
 
     def section(self):
-        with open(os.path.join(install.repo_root(), "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(install.repo_root(), "docs", "install.md"), encoding="utf-8") as f:
             text = f.read()
         start = text.find("\n## Install on Windows\n")
-        self.assertGreater(start, 0, "README.md has no Windows install section")
+        self.assertGreater(start, 0, "docs/install.md has no Windows install section")
         return text[start:text.find("\n## ", start + 1)]
 
     def test_the_example_command_is_the_one_install_writes(self):
@@ -2710,7 +2710,7 @@ class WindowsReadme(unittest.TestCase):
             want, _ = install.plan_statusline({"type": "command", "command": hand}, PY, ENTRY, shell="bash")
         self.assertEqual(want["command"], FWD + " --compose-b64 " + winshell.encoded('node "C:/Users/John Smith/sl.js"'))
         self.assertIn('(`"%USERPROFILE%\\.local\\bin"`), since a profile folder may hold a space', sec)
-        with open(os.path.join(install.repo_root(), "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(install.repo_root(), "CONTRIBUTING.md"), encoding="utf-8") as f:
             block, note = re.search(r"\n## Tests\n\n```sh\n(.*?)```\n\n(.*?)\n\n", f.read(), re.S).groups()
         self.assertNotIn("&&", block)
         self.assertIn("in cmd.exe drop the `#` comments", note)
