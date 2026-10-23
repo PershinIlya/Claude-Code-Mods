@@ -121,11 +121,12 @@ def which(name, path=None):
 
     entries = (os.environ.get("PATH", "") if path is None else path).split(os.pathsep)
     try:
-        here = os.path.normcase(os.path.abspath(os.getcwd()))
+        here = os.path.normcase(os.path.realpath(os.getcwd()))
     except OSError:
         here = None
+    # Real paths: on macOS /var is a link to /private/var, and getcwd names the latter.
     keep = [e for e in entries if e.strip().strip('"') not in ("", ".")
-            and os.path.normcase(os.path.abspath(e.strip().strip('"'))) != here]
+            and os.path.normcase(os.path.realpath(e.strip().strip('"'))) != here]
     if IS_WINDOWS:
         os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")  # Python 3.12+ honors it
     found = shutil.which(name, path=os.pathsep.join(keep))

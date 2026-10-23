@@ -19,7 +19,7 @@ class Which(unittest.TestCase):
     def test_the_current_folder_is_never_searched(self):
         # Windows searches the current folder before PATH: a cloned repo's
         # py.bat or claude.cmd would run. Empty and "." PATH entries go too.
-        d = tempfile.mkdtemp(prefix="pacer-which-")
+        d = tempfile.mkdtemp(prefix="pacer-which-")  # on macOS under /var, a link to /private/var
         old = os.getcwd()
         try:
             exe = os.path.join(d, "pacer-probe")
