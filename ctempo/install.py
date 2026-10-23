@@ -30,6 +30,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 from . import __version__, config, statusline, winshell
@@ -194,8 +195,10 @@ def atomic_write(path, data):
     if isinstance(data, str):
         data = data.encode("utf-8")
     mode = stat.S_IMODE(os.stat(real).st_mode) if os.path.exists(real) else (0o666 & ~_umask())
-    tmp = "%s.ctempo.%d.tmp" % (real, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A new name opened exclusively (mkstemp: O_EXCL, 0600), never a link
+    # someone left at a name they could guess.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real) or ".", prefix=os.path.basename(real) + ".ctempo.",
+                               suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
@@ -384,7 +387,7 @@ def candidates():
         "/opt/homebrew/bin/python3",
         "/usr/local/bin/python3",
         sys.executable,
-        shutil.which("python3"),
+        config.which("python3"),
     ]:
         if p and p not in seen and os.path.exists(p):
             seen.add(p)
@@ -412,7 +415,7 @@ def windows_candidates(env=None):
         if base:  # the last one is the Python install manager's runtimes
             found = glob.glob(os.path.join(base, *pattern + ("python.exe",)))
             out += sorted(found, key=lambda p: _version_key(os.path.basename(os.path.dirname(p))), reverse=True)
-    return out + [sys.executable, shutil.which("python"), shutil.which("python3")]
+    return out + [sys.executable, config.which("python"), config.which("python3")]
 
 
 def _registry_pythons():
@@ -472,7 +475,7 @@ def _reg_value(winreg, key, name):
 
 def _py_launcher_pythons(env):
     """The interpreters `py -0p` lists (the old py launcher and the install manager both keep that form)."""
-    py = shutil.which("py")
+    py = config.which("py")
     if not py:
         return []
     try:
@@ -664,17 +667,25 @@ def claude_bin():
     if config.IS_WINDOWS:
         # PATHEXT order in each PATH folder, as cmd.exe finds it: claude.exe (native, WinGet)
         # or claude.cmd (npm). npm's extensionless sh shim is nothing CreateProcess can start.
-        found = shutil.which("claude")
+        found = config.which("claude")
         if found and os.path.splitext(found)[1].lower() in (".exe", ".cmd", ".bat"):
             return found
-        return shutil.which("claude.exe") or shutil.which("claude.cmd")
-    return shutil.which("claude")
+        return config.which("claude.exe") or config.which("claude.cmd")
+    return config.which("claude")
+
+
+# cmd.exe reads a .cmd's arguments again: these in a path would run as commands.
+CMD_UNSAFE = set('&|<>^%!"')
 
 
 def run_claude(args, env=None, cwd=None):
     exe = claude_bin()
     if not exe:
         return 127, "", "claude not found on PATH"
+    if os.path.splitext(exe)[1].lower() in (".cmd", ".bat") and any(CMD_UNSAFE & set(a) for a in args):
+        return 2, "", ("claude is %s, and cmd.exe would read one of & | < > ^ %% ! \" in %s as a command: "
+                       "move the folder to a path without them, or install the native claude.exe"
+                       % (os.path.basename(exe), " ".join(args)))
     try:
         return _run([exe] + args, timeout=CLAUDE_TIMEOUT, env=env, cwd=cwd)
     except subprocess.TimeoutExpired:
@@ -867,11 +878,20 @@ def find_record(state, spath):
 
 
 def save_state(state):
-    os.makedirs(config.home(), exist_ok=True)
-    tmp = state_path() + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-    _replace(tmp, state_path())
+    """install.json, readable by the user alone: its records hold the
+    statusLine commands found in settings.json, which may carry tokens."""
+    config.private_dir(config.home())
+    fd, tmp = tempfile.mkstemp(dir=config.home(), prefix="install.json.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        _replace(tmp, state_path())
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def installed_records(state):
@@ -1122,7 +1142,7 @@ def install(args, out=print):
     rc = 0
     try:
         state.update(python=python, entry=entry)
-        os.makedirs(config.home(), exist_ok=True)
+        config.private_dir(config.home())
         with open(config.runtime_path(), "w", encoding="utf-8") as f:
             json.dump(runtime_info(python, entry), f, indent=2)
         config.write_defaults()

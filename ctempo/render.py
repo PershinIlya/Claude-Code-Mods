@@ -114,7 +114,7 @@ def five_hour_parts(v, s):
     else:
         approx = "~" if v.get("rate_source") != "lsq" else ""
         parts.append((approx + s["x"] + mult(v["multiplier"]) + _glyph(verdict, s), False))
-        if v.get("cap_ts"):
+        if v.get("cap_ts") and not v.get("shaky"):  # an early estimate's guess is no "dry" (D-37)
             parts.append(("dry " + hm(v["cap_ts"]), False))
         else:
             parts.append((s["to"] + pct(v["projected"]), True))
@@ -138,7 +138,7 @@ def weekly_parts(v, s):
         parts.append((s["to"] + pct(v["projected"]), True))
     else:
         parts.append((s["x"] + mult(v["multiplier"]) + _glyph(verdict, s), False))
-        if v.get("dry_ts"):
+        if v.get("dry_ts") and not v.get("shaky"):  # an early estimate's guess is no "dry" (D-37)
             parts.append(("dry~" + dhm(v["dry_ts"]), False))
         else:
             parts.append((s["to"] + pct(v["projected"]), True))

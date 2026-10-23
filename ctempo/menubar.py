@@ -74,7 +74,7 @@ def lines(ws, updated, now, cfg, checked=None, note=None):
     if times:
         foot.append("%s | size=11 color=%s" % (", ".join(times), DIM))
     if note:
-        foot.append("%s | size=11 color=%s" % (note, TONE["warning"]))
+        foot.append("%s | size=11 color=%s" % (clean(note), TONE["warning"]))
     if stale and not waiting and checked is None:
         foot.append("Readings come from Claude Code sessions on this Mac | size=11 color=%s" % DIM)
     out = [title, "---"]
@@ -130,11 +130,18 @@ def bar_width(lines):
     return int(min(BAR_MAX, math.ceil(widest)))
 
 
+def clean(text):
+    """Text from data (a /usage error, an exception) as one SwiftBar line: no
+    " | " to start parameters (a bash= one runs on a click), no line breaks
+    to start lines."""
+    return " ".join(str(text).replace("|", "/").split())
+
+
 def quoted(text):
     """A parameter value with spaces, as SwiftBar reads it: in double quotes
     (unquoted, it ends at the first space). Its versions end a quoted value
     at either quote and keep a backslash, so none is left inside."""
-    text = text.replace("|", "/").replace("\\", "/").replace('"', "\u201d").replace("'", "\u2019")
+    text = clean(text).replace("\\", "/").replace('"', "\u201d").replace("'", "\u2019")
     return '"%s"' % text
 
 
@@ -172,10 +179,10 @@ def detail_lines(w):
     numbers dim, so the pace and what needs you stand out."""
     rows = w.get("details") or []
     if not rows:
-        return ["%s | size=11 color=%s" % (w["sentence"].replace("|", "/"), DIM)]
+        return ["%s | size=11 color=%s" % (clean(w["sentence"]), DIM)]
     width = max([LABEL_W] + [len(r["label"]) + 2 for r in rows])  # one column for both windows
     return ["%s%s | font=Menlo size=11 trim=false color=%s" % (
-        r["label"].ljust(width), (r["value"] + (" · " + r["note"] if r.get("note") else "")).replace("|", "/"),
+        r["label"].ljust(width), clean(r["value"] + (" · " + r["note"] if r.get("note") else "")),
         TONE.get(r["tone"], DIM)) for r in rows]
 
 
@@ -230,7 +237,7 @@ def text_lines(ws, updated, now, cfg, checked=None, note=None):
     if checked is not None:
         out.append("Checked with /usage %s | size=11 color=%s" % (age(now - checked)[8:], DIM))
     if note:
-        out.append("%s | size=11 color=%s" % (note, TONE["warning"]))
+        out.append("%s | size=11 color=%s" % (clean(note), TONE["warning"]))
     if stale and not waiting and checked is None:
         out.append("Readings come from Claude Code sessions on this Mac | size=11 color=%s" % DIM)
     out.append("Refresh | refresh=true")
@@ -281,7 +288,7 @@ def show(cfg):
                 st.close()
         out = lines(ws, updated, now, cfg, checked, note)
     except Exception as e:  # the menu bar shows why instead of nothing
-        out = ["ctempo ! | color=%s" % TONE["warning"], "---", "ctempo: %s | size=12" % str(e)[:200],
+        out = ["ctempo ! | color=%s" % TONE["warning"], "---", "ctempo: %s | size=12" % clean(e)[:200],
                "Refresh | refresh=true"]
     sys.stdout.write("\n".join(out) + "\n")
     return 0

@@ -250,7 +250,11 @@ def _later(ts, reset, now):
         return "maybe 100%% %s" % at(ts, now)
     if ts - reset < 60 or ts - now > 7 * 86400:
         return None
-    return "100%% %s" % at(ts, now)
+    # Past the reset: with its day unless it is today, "next" when that day
+    # also comes before the reset (a week on).
+    same_day = clock.localtime(ts)[:3] == clock.localtime(now)[:3]
+    when = render.hm(ts) if same_day else render.dhm(ts)
+    return "100%% %s%s" % ("next " if ts - now >= 6 * 86400 else "", when)
 
 
 def _row(label, value, tone="text", **note):
@@ -357,6 +361,14 @@ def windows(v5, vw, now):
         a.update(phrase=None, details=[_row("Used", "0%"), _row("Pace", "blocked by the week", "error"),
                                        _row("Opens", "after " + render.dhm(vw["reset_ts"]))],
                  sentence="5-hour: no window open. Blocked by the weekly limit until %s." % render.dhm(vw["reset_ts"]))
+    if vw.get("present") and vw["verdict"] == "maxed" and v5.get("present") and v5["verdict"] == "maxed":
+        # Both at their limit: the 5 hours come back only with the week.
+        back = render.dhm(vw["reset_ts"])
+        a.update(phrase=_p("Back ", back, "", "error", True, narrow_pre="Back "),
+                 details=[_row("Used", "100%"), _row("Limit", "reached", "error"),
+                          _row("Resets", at(v5["reset_ts"], now), note="blocked by the week to " + back,
+                               note_tone="inactive")],
+                 sentence="5-hour: limit reached. Blocked by the weekly limit until %s." % back)
     if vw.get("present") and vw["verdict"] == "maxed" and v5.get("present") and v5["verdict"] != "maxed":
         # The week's limit blocks the 5 hours too: no forecast, no "faster".
         a.update(kind="idle", pct=floor_pct(v5["used"]), used=round(v5["used"], 2), projected=None,

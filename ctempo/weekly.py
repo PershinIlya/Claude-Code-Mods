@@ -153,7 +153,10 @@ def weekly(store, now, cfg, reading=None, prof=None):
     kind = "recent"
     if cut and actual <= 0:
         actual, share, kind = (used, elapsed, "window") if used > 0 else (0.0, 0.0, "none")
-    prior, prior_source = (info["weekly_total"] / tgt, "typical") if info["weekly_total"] else (1.0, "assumed")
+    # The prior: what closed weeks reached (typical_week), never the profile's
+    # scale M, which stretches the busy hours over all 168; else the target.
+    typical = info.get("typical")
+    prior, prior_source = (typical / tgt, "typical") if typical else (1.0, "assumed")
     intensity = (actual + PRIOR_SHARE * tgt * prior) / (tgt * (share + PRIOR_SHARE))
     weight = share / (share + PRIOR_SHARE)  # how much this week's own spend counts
     source = kind if weight >= 0.5 else prior_source
@@ -184,6 +187,8 @@ def weekly(store, now, cfg, reading=None, prof=None):
         v["verdict"] = "maxed"
     elif share >= MIN_EXPECTED_SHARE and actual <= 0:
         v["verdict"] = "idle"
+        # A run-out from the prior alone, while nothing is spent, is no warning.
+        v["shaky"] = bool(dry)
     else:
         v["verdict"] = verdict_for(mult, cfg)
         early(v, source in ("typical", "assumed"), cfg)

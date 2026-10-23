@@ -79,7 +79,7 @@ class Store:
             raise FileNotFoundError(self.path)
         d = os.path.dirname(self.path)
         if d:
-            os.makedirs(d, exist_ok=True)
+            config.private_dir(d)
         self.timeout_ms = timeout_ms
         self.keeps_wal = False
         self.db = sqlite3.connect(self.path, timeout=timeout_ms / 1000.0, isolation_level=None)

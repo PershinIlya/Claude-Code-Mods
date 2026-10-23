@@ -24,7 +24,7 @@ def log_error(exc, where="statusline"):
         from . import clock
 
         path = config.log_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        config.private_dir(os.path.dirname(path))
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX:
             try:
                 os.replace(path, path + ".1")

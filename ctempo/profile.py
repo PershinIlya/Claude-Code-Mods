@@ -29,6 +29,7 @@ HOUR = 3600.0
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 PROFILE_KEY = "profile"
 LOW_CONFIDENCE = 0.25  # weight of an hour learned from a long gap between readings
+TYPICAL_SEEN = 112  # hours of the week observed before the profile's scale stands for a typical week
 AWAKE_RATIO = 0.25  # an hour is awake when its rate is at least this share of typical
 
 
@@ -200,7 +201,14 @@ class Profile:
         awake = [x >= AWAKE_RATIO * typical for x in r] if typical > 0 else [True] * BINS
         r = [max(x, floor) for x in r]
         w = normalize(r)
-        info = {"source": src, "weekly_total": M, "awake_hours": sum(awake)}
+        # typical: what a week comes to, for the weekly forecast's prior (D-37):
+        # the closed weeks' own peak (typical_week); else M once most of the
+        # week's hours were observed (before that, M is the busy hours' rate
+        # stretched over all 168); else None.
+        hl = float(cfg["profile"]["half_life_days"]) * 86400
+        seen = sum(1 for m, _ in self.observed(now, hl) if m is not None)
+        typical = weekly_total or (M if seen >= TYPICAL_SEEN else None)
+        info = {"source": src, "weekly_total": M, "awake_hours": sum(awake), "typical": typical}
         return w, awake, info
 
 

@@ -105,6 +105,38 @@ DEFAULTS = {
 }
 
 
+def private_dir(d):
+    """Make the folder `d` (and its parents) as ctempo's own: only the user
+    reads a new one (its records hold earlier statusLine commands, session
+    ids). An existing folder is left as it is."""
+    if d:
+        os.makedirs(d, mode=0o700, exist_ok=True)
+
+
+def which(name, path=None):
+    """shutil.which without the current folder: Windows searches it first
+    (before PATH, whatever PATH says), so a cloned repo's py.bat or
+    claude.cmd would run instead. Empty and "." PATH entries go too."""
+    import shutil
+
+    entries = (os.environ.get("PATH", "") if path is None else path).split(os.pathsep)
+    try:
+        here = os.path.normcase(os.path.abspath(os.getcwd()))
+    except OSError:
+        here = None
+    keep = [e for e in entries if e.strip().strip('"') not in ("", ".")
+            and os.path.normcase(os.path.abspath(e.strip().strip('"'))) != here]
+    if IS_WINDOWS:
+        os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")  # Python 3.12+ honors it
+    found = shutil.which(name, path=os.pathsep.join(keep))
+    if found and IS_WINDOWS and here:
+        import ntpath
+
+        if ntpath.normcase(ntpath.dirname(found)) == ntpath.normcase(os.getcwd()):
+            return None
+    return found
+
+
 def home():
     value = os.environ.get("CTEMPO_HOME")
     if IS_WINDOWS:
@@ -358,7 +390,7 @@ def set_value(keys, value, path=None, drop=()):
             d = d.get(k) if isinstance(d, dict) else None
         if isinstance(d, dict):
             d.pop(gone[-1], None)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    private_dir(os.path.dirname(path))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(user, f, indent=2)
         f.write("\n")
@@ -369,7 +401,7 @@ def write_defaults(path=None):
     """Write the default config if none exists. Returns the path."""
     path = path or config_path()
     if not os.path.exists(path):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        private_dir(os.path.dirname(path))
         with open(path, "w", encoding="utf-8") as f:
             json.dump(DEFAULTS, f, indent=2)
             f.write("\n")

@@ -17,7 +17,6 @@ which becomes a statusLine-shaped payload from session "usage-cmd".
 import datetime
 import os
 import re
-import shutil
 import subprocess
 import time
 
@@ -27,7 +26,8 @@ SESSION_ID = "usage-cmd"
 SOURCE = "usage"
 TIMEOUT_S = 45
 LINE = re.compile(r"^\s*Current (session|week \(all models\)):\s*([0-9]+(?:\.[0-9]+)?)% used"
-                  r"(?:\s*\S+\s*resets\s+(.+?)\s*\(([^()]+)\))?\s*$")
+                  r"(?:\s+\S+\s+resets\s+(\S[^()]*?)\s*\(([^()]+)\))?\s*$")
+LONGEST = 300  # longer lines are not /usage's: never fed to the pattern
 # What /usage prints instead of the plan's limits (fetch).
 COST = re.compile(r"^\s*Total cost:\s*\$", re.M)
 # "Oct 17 at 6:20pm" (2.1.302), "Oct 19, 2:59pm" (2.1.303), or the time alone.
@@ -66,7 +66,7 @@ def parse(text, now):
     """{window: (used, resets_at)} from `/usage` output."""
     out = {}
     for line in text.splitlines():
-        m = LINE.match(line)
+        m = LINE.match(line) if len(line) <= LONGEST else None
         if not m or not m.group(3):
             continue
         reset = reset_epoch(m.group(3), m.group(4), now)
@@ -86,7 +86,7 @@ def claude_bin():
     if os.environ.get("APPDATA"):  # npm's global folder on Windows
         extra.append(os.path.join(os.environ["APPDATA"], "npm"))
     path = os.pathsep.join([os.environ.get("PATH", "")] + extra)
-    return shutil.which("claude", path=path)
+    return config.which("claude", path=path)
 
 
 def fetch(now=None, run=None):
