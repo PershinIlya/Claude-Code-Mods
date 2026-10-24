@@ -4,6 +4,13 @@ What the band, its Details, the charts, the macOS menu bar and the terminal
 line say, and how to keep them fresh. [How it works](how-it-works.md) has the
 math behind each number.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="images/band-dark.png">
+    <img alt="pacer's band above the prompt in the Claude Desktop Code tab, Details open: a chart and a few numbers per window" src="images/band-light.png" width="760">
+  </picture>
+</p>
+
 ## The band
 
 One row per window: its name, a small bar, the percent, and its pace.

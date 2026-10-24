@@ -1,7 +1,7 @@
 {
   "name": "pacer",
   "version": "0.1.0",
-  "description": "Claude usage pace (5-hour and weekly) above the prompt, drawn from the pacer CLI",
+  "description": "Know if your Claude Code usage will last until the reset: the 5-hour and weekly pace above the prompt",
   "author": {
     "name": "Ilia Pershin",
     "url": "https://github.com/PershinIlya"

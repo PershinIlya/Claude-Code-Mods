@@ -1,6 +1,6 @@
 {
   "name": "pacer",
-  "description": "Local marketplace for the pacer usage pace mod",
+  "description": "pacer for Claude Code: the usage pace mod",
   "owner": {
     "name": "Ilia Pershin",
     "url": "https://github.com/PershinIlya"
@@ -9,7 +9,7 @@
     {
       "name": "pacer",
       "source": "./mods/pacer",
-      "description": "Claude usage pace (5-hour and weekly) above the prompt, drawn from the pacer CLI"
+      "description": "Know if your Claude Code usage will last until the reset: the 5-hour and weekly pace above the prompt"
     }
   ]
 }

@@ -1,4 +1,4 @@
-# pacer
+# pacer for Claude Code
 
 **Know if your Claude usage will last until the reset.** pacer is a small
 local monitor for Claude's two usage limits, the rolling 5-hour window and
@@ -8,8 +8,8 @@ the reset.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/band-dark.png">
-    <img alt="pacer's band above the prompt in the Claude Desktop Code tab, Details open: a chart and a few numbers per window" src="docs/images/band-light.png" width="760">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/band-demo-dark.gif">
+    <img alt="pacer's band above the prompt in the Claude Desktop Code tab: the pace changes from 2.1x faster to on pace to 1.9x slower, then Details opens with a chart and a few numbers per window" src="docs/images/band-demo-light.gif" width="760">
   </picture>
 </p>
 
